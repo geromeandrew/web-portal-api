@@ -22,6 +22,7 @@ services:
   migrate:
     build: .
     image: web-portal-api:local
+    pull_policy: build
     environment: &api_environment
       NODE_ENV: production
       PORT: 3001
@@ -43,6 +44,7 @@ services:
   api:
     build: .
     image: web-portal-api:local
+    pull_policy: build
     environment: *api_environment
     depends_on:
       migrate:
