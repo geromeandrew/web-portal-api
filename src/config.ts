@@ -3,10 +3,8 @@ import { z } from "zod";
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(3001),
-  DATABASE_URL: z.string().url().optional(),
-  POSTGRES_DB: z.string().min(1).optional(),
-  POSTGRES_USER: z.string().min(1).optional(),
-  POSTGRES_PASSWORD: z.string().min(1).optional(),
+  DATABASE_URL: z.string().url(),
+  DATABASE_SCHEMA: z.string().regex(/^[a-z_][a-z0-9_]*$/, "must be a lowercase PostgreSQL identifier").default("web_portal"),
   JWT_SECRET: z.string().min(32),
   JWT_EXPIRES_IN: z.string().default("8h"),
   ADMIN_EMAIL: z.string().email(),
@@ -23,17 +21,9 @@ export function loadConfig(env = process.env): Config {
   if (!parsed.success) {
     throw new Error(`Invalid API configuration: ${parsed.error.issues.map((issue) => issue.path.join(".") + " " + issue.message).join(", ")}`);
   }
-  const databaseUrl = parsed.data.DATABASE_URL ?? buildDatabaseUrl(parsed.data);
-  if (!databaseUrl) throw new Error("Invalid API configuration: DATABASE_URL or POSTGRES_DB, POSTGRES_USER, and POSTGRES_PASSWORD are required.");
   return {
     ...parsed.data,
-    DATABASE_URL: databaseUrl,
     LAMBDA_UPLOAD_URL: parsed.data.LAMBDA_UPLOAD_URL.replace(/\/$/, ""),
     allowedMimeTypes: parsed.data.ALLOWED_MIME_TYPES.split(",").map((value) => value.trim()).filter(Boolean),
   };
-}
-
-function buildDatabaseUrl(env: { POSTGRES_DB?: string; POSTGRES_USER?: string; POSTGRES_PASSWORD?: string }) {
-  if (!env.POSTGRES_DB || !env.POSTGRES_USER || !env.POSTGRES_PASSWORD) return undefined;
-  return `postgresql://${encodeURIComponent(env.POSTGRES_USER)}:${encodeURIComponent(env.POSTGRES_PASSWORD)}@127.0.0.1:5432/${encodeURIComponent(env.POSTGRES_DB)}`;
 }

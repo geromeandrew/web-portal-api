@@ -6,6 +6,7 @@ RUN pnpm install --frozen-lockfile
 
 FROM dependencies AS build
 COPY tsconfig.json ./
+COPY certs ./certs
 COPY src ./src
 RUN pnpm build
 
@@ -15,6 +16,7 @@ ENV NODE_ENV=production
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --prod --frozen-lockfile && pnpm store prune
+COPY --from=build /app/certs ./certs
 COPY --from=build /app/dist ./dist
 USER node
 EXPOSE 3001

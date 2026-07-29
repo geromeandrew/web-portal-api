@@ -7,34 +7,32 @@ Node 22 + TypeScript + Express API for the Web Portal. It owns PostgreSQL migrat
 Copy the matching environment template to `.env`; do not commit it.
 
 - `.env.development.example` is for local Node development.
-- `.env.production.example` is for EC2 Docker deployment.
+- `.env.production.example` is for Docker deployment.
 
-For the production split, preserve the existing `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `JWT_SECRET`, administrator settings, Lambda URL, and upload policy from the former combined deployment. The default `POSTGRES_DATA_VOLUME` is `web-portal_postgres_data`, preserving the old Compose volume.
+Every environment connects to Amazon RDS through `DATABASE_URL` and uses the `web_portal` schema by default. URI-encode the password when constructing the URL; do not commit `.env`. The API verifies the RDS TLS certificate using the bundled AWS us-east-1 CA.
 
 ## Local development
 
-Create the shared network once, then start PostgreSQL and the API stack:
+Create the shared network once, then configure RDS and start the API:
 
 ```bash
 docker network create web-portal-shared
 pnpm install
-pnpm env:local -- --force
-docker compose up db -d
+cp .env.development.example .env
 pnpm db:migrate
 pnpm dev
 ```
 
-`pnpm env:local` requires `LAMBDA_UPLOAD_URL` to be set in the shell. The database is mapped only to `127.0.0.1:5432` for local Node development.
+Set the real RDS URL, JWT, administrator, Lambda, and upload-policy values in `.env` before starting the service.
 
 ## EC2 deployment
 
-1. Back up the existing database.
-2. Create `web-portal-shared` if it does not exist.
-3. Copy the existing production values into `.env`, setting `POSTGRES_DATA_VOLUME=web-portal_postgres_data`.
-4. Stop the former combined stack without `-v`.
-5. Run `docker compose up --build -d` here, wait for `api` health, then deploy the sibling `web-portal` frontend repository.
+1. Create `web-portal-shared` if it does not exist.
+2. Copy the production template to `.env` and set the real RDS URL and application secrets.
+3. Run `docker compose up --build -d` here; the migration service creates the fresh `web_portal` schema before the API starts.
+4. Wait for API health, then deploy the sibling `web-portal` frontend repository.
 
-The API has no host port. The frontend Nginx proxy reaches it through the private `web-portal-shared` Docker network.
+The API has no host port. The frontend Nginx proxy reaches it through the private `web-portal-shared` Docker network. The former local PostgreSQL Docker volume is not deleted by this change.
 
 ## Commands
 
@@ -44,3 +42,7 @@ pnpm build
 pnpm db:migrate
 docker compose config
 ```
+
+## API documentation
+
+Swagger UI is available at `/api/docs/` and the OpenAPI document is available at `/api/openapi.json` in every environment. The documentation itself is public, while protected operations require a JWT bearer token. Use `POST /api/auth/login` to obtain an access token, then select **Authorize** in Swagger UI and enter the token.

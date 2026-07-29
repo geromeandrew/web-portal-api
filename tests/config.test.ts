@@ -16,9 +16,13 @@ describe("loadConfig", () => {
     expect(config.allowedMimeTypes).toEqual(["application/pdf", "image/png"]);
   });
 
-  it("builds a local database URL from PostgreSQL settings", () => {
+  it("uses the dedicated Portal schema by default", () => {
+    expect(loadConfig(base).DATABASE_SCHEMA).toBe("web_portal");
+  });
+
+  it("requires a database URL and a safe schema identifier", () => {
     const { DATABASE_URL: _databaseUrl, ...withoutUrl } = base;
-    const config = loadConfig({ ...withoutUrl, POSTGRES_DB: "web_portal", POSTGRES_USER: "portal", POSTGRES_PASSWORD: "password" });
-    expect(config.DATABASE_URL).toBe("postgresql://portal:password@127.0.0.1:5432/web_portal");
+    expect(() => loadConfig(withoutUrl)).toThrow("DATABASE_URL");
+    expect(() => loadConfig({ ...base, DATABASE_SCHEMA: "web-portal" })).toThrow("DATABASE_SCHEMA");
   });
 });

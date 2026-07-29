@@ -4,8 +4,10 @@ import { migrations } from "./migrations.js";
 
 const config = loadConfig();
 const pool = createPool(config);
+const quoteIdentifier = (identifier: string) => `"${identifier.replace(/"/g, '""')}"`;
 
 try {
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(config.DATABASE_SCHEMA)}`);
   await pool.query("CREATE TABLE IF NOT EXISTS schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())");
   for (const migration of migrations) {
     const result = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [migration.id]);

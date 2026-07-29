@@ -3,11 +3,13 @@ import express, { type Express } from "express";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import type { Pool } from "pg";
+import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { createAuthMiddleware, hashPassword, requireBootstrapAdmin, signAccessToken, verifyPassword } from "./auth.js";
 import { withTransaction } from "./db.js";
 import { AppError, errorHandler, notFound } from "./errors.js";
+import { openApiDocument } from "./openapi.js";
 import { audit, ensureWorkspace, getState, setState } from "./workspace.js";
 
 const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -51,6 +53,13 @@ export function createApp(pool: Pool, config: Config): Express {
 
   app.disable("x-powered-by");
   app.use(express.json({ limit: "128kb" }));
+
+  app.get("/", (_request, response) => response.redirect("/api/docs/"));
+  app.get("/api/openapi.json", (_request, response) => response.json(openApiDocument));
+  app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openApiDocument, {
+    customSiteTitle: "Web Portal API Documentation",
+    swaggerOptions: { persistAuthorization: false },
+  }));
 
   app.get("/api/healthz", async (_request, response) => {
     await pool.query("SELECT 1");
