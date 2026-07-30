@@ -10,6 +10,8 @@ const envSchema = z.object({
   ADMIN_EMAIL: z.string().email(),
   ADMIN_PASSWORD: z.string().min(12),
   LAMBDA_UPLOAD_URL: z.string().url(),
+  S3_BUCKET: z.string().min(3),
+  AWS_REGION: z.string().min(1),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(4_500_000),
   ALLOWED_MIME_TYPES: z.string().default("application/pdf,image/jpeg,image/png,image/webp,text/plain,application/zip,application/msword,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
 });

@@ -7,6 +7,8 @@ const base = {
   ADMIN_EMAIL: "admin@example.com",
   ADMIN_PASSWORD: "a-secure-bootstrap-password",
   LAMBDA_UPLOAD_URL: "https://example.lambda-url.ap-southeast-1.on.aws",
+  S3_BUCKET: "billing-cycle-files",
+  AWS_REGION: "ap-southeast-1",
 };
 
 describe("loadConfig", () => {

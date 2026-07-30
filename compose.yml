@@ -15,6 +15,8 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
       LAMBDA_UPLOAD_URL: ${LAMBDA_UPLOAD_URL:?Set LAMBDA_UPLOAD_URL in .env}
+      S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET in .env}
+      AWS_REGION: ${AWS_REGION:?Set AWS_REGION in .env}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-4500000}
       ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES:?Set ALLOWED_MIME_TYPES in .env}
     command: ["node", "dist/migrate.js"]
@@ -25,7 +27,10 @@ services:
     build: .
     image: web-portal-api:local
     pull_policy: build
-    environment: *api_environment
+    environment:
+      <<: *api_environment
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID in .env}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY in .env}
     depends_on:
       migrate:
         condition: service_completed_successfully

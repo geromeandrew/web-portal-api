@@ -23,7 +23,7 @@ pnpm db:migrate
 pnpm dev
 ```
 
-Set the real RDS URL, JWT, administrator, Lambda, and upload-policy values in `.env` before starting the service.
+Set the real RDS URL, JWT, administrator, Lambda, S3 bucket/region, IAM user access key, and upload-policy values in `.env` before starting the service. The Billing Cycle browser reads `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from the API container only; attach least-privilege `s3:ListBucket` access on `S3_BUCKET` and `s3:GetObject` access on `S3_BUCKET/*` to that IAM user. Do not add AWS access keys to the frontend or commit them to `.env`.
 
 ## EC2 deployment
 

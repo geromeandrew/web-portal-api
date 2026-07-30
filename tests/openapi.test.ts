@@ -16,6 +16,8 @@ const config: Config = {
   ADMIN_EMAIL: "admin@example.com",
   ADMIN_PASSWORD: "a-secure-bootstrap-password",
   LAMBDA_UPLOAD_URL: "https://example.lambda-url.ap-southeast-1.on.aws",
+  S3_BUCKET: "billing-cycle-files",
+  AWS_REGION: "ap-southeast-1",
   MAX_UPLOAD_BYTES: 4_500_000,
   ALLOWED_MIME_TYPES: "application/pdf",
   allowedMimeTypes: ["application/pdf"],
@@ -25,9 +27,10 @@ describe("OpenAPI documentation", () => {
   it("is a valid OpenAPI document covering every API route", async () => {
     await expect(SwaggerParser.validate(openApiDocument)).resolves.toBeDefined();
     const operationCount = Object.values(openApiDocument.paths).reduce((total, path) => total + Object.keys(path).filter((key) => ["get", "post", "put", "patch", "delete"].includes(key)).length, 0);
-    expect(operationCount).toBe(21);
+    expect(operationCount).toBe(24);
     expect(openApiDocument.paths["/api/uploads"]?.post?.requestBody).toBeDefined();
     expect(openApiDocument.paths["/api/workflows/prepaid/report.csv"]?.get?.responses["200"].content?.["text/csv"]).toBeDefined();
+    expect(openApiDocument.paths["/api/billing-cycle/files"]?.get?.parameters).toHaveLength(3);
     expect(openApiDocument.paths["/api/auth/login"]?.post?.security).toEqual([]);
     expect(openApiDocument.paths["/api/uploads"]?.get?.security).toBeUndefined();
   });

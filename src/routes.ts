@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import express, { type Express } from "express";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import type { Pool } from "pg";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
+import { billingCycleStatuses, createBillingCycleStorage, type BillingCycleStorage } from "./billingCycleStorage.js";
 import type { Config } from "./config.js";
 import { createAuthMiddleware, hashPassword, requireBootstrapAdmin, signAccessToken, verifyPassword } from "./auth.js";
 import { withTransaction } from "./db.js";
@@ -16,6 +19,10 @@ const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 const workflows = ["prepaid", "memo", "aprm"] as const;
 const uploadSchema = z.object({ workflow: z.enum(workflows), slot: z.string().min(1).max(160).optional() });
 const passwordSchema = z.string().min(12).max(256);
+const billingCycleStatusSchema = z.enum(billingCycleStatuses);
+const pipelineNameSchema = z.string().min(1).max(512).refine((value) => !value.includes("/") && !value.includes("\0") && value !== "." && value !== "..", "must be a single S3 folder name");
+const billingCycleListSchema = z.object({ pipeline_name: pipelineNameSchema, status: billingCycleStatusSchema, cursor: z.string().min(1).max(2048).optional() });
+const billingCycleContentSchema = z.object({ pipeline_name: pipelineNameSchema, status: billingCycleStatusSchema, key: z.string().min(1).max(1024) });
 
 type UploadRow = { id: string; workflow: "prepaid" | "memo" | "aprm"; slot: string | null; original_name: string; object_key: string; size: number; content_type: string; created_at: Date };
 type UserRow = { id: string; email: string; password_hash: string; is_bootstrap_admin: boolean; is_active: boolean; must_change_password: boolean; token_version: number; created_at: Date };
@@ -37,6 +44,14 @@ function toCsv(headers: string[], rows: string[][]) {
   return [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
 }
 
+function billingCycleStorageError(error: unknown) {
+  if (error instanceof Error && error.message === "Requested key is outside the selected Billing Cycle folder.") return new AppError(404, "BILLING_CYCLE_FILE_NOT_FOUND", "The requested file is not available in the selected folder.");
+  const name = error && typeof error === "object" && "name" in error ? String(error.name) : "";
+  if (name === "NoSuchKey" || name === "NotFound") return new AppError(404, "BILLING_CYCLE_FILE_NOT_FOUND", "The requested file was not found in S3.");
+  if (name === "AccessDenied") return new AppError(502, "BILLING_CYCLE_STORAGE_DENIED", "The Billing Cycle storage service denied access to this file.");
+  return error;
+}
+
 export async function ensureBootstrapAdmin(pool: Pool, config: Config) {
   const email = config.ADMIN_EMAIL.trim().toLowerCase();
   const existing = await pool.query<UserRow>("SELECT * FROM users WHERE email = $1", [email]);
@@ -46,7 +61,7 @@ export async function ensureBootstrapAdmin(pool: Pool, config: Config) {
   console.log(`Created bootstrap administrator ${email}.`);
 }
 
-export function createApp(pool: Pool, config: Config): Express {
+export function createApp(pool: Pool, config: Config, billingCycleStorage: BillingCycleStorage = createBillingCycleStorage(config)): Express {
   const app = express();
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.MAX_UPLOAD_BYTES, files: 1 } });
   const authenticate = createAuthMiddleware(pool, config);
@@ -247,6 +262,41 @@ export function createApp(pool: Pool, config: Config): Express {
     const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
     const report = await getState<{ csv: string }>(pool, workspaceId, "prepaid", "report");
     response.attachment("prepaid-reclass-report.csv").type("text/csv").send(report.csv);
+  });
+
+  app.get("/api/billing-cycle/pipelines", authenticate, async (_request, response) => {
+    try {
+      response.json({ pipelines: await billingCycleStorage.listPipelines() });
+    } catch (error) {
+      throw billingCycleStorageError(error);
+    }
+  });
+
+  app.get("/api/billing-cycle/files", authenticate, async (request, response) => {
+    const input = billingCycleListSchema.parse(request.query);
+    try {
+      response.json(await billingCycleStorage.listFiles(input.pipeline_name, input.status, input.cursor));
+    } catch (error) {
+      throw billingCycleStorageError(error);
+    }
+  });
+
+  app.get("/api/billing-cycle/files/content", authenticate, async (request, response) => {
+    const input = billingCycleContentSchema.parse(request.query);
+    try {
+      const file = await billingCycleStorage.getFile(input.pipeline_name, input.status, input.key);
+      if (!file.Body || typeof (file.Body as Readable).pipe !== "function") throw new AppError(502, "BILLING_CYCLE_STORAGE_INVALID", "The Billing Cycle storage service returned an invalid file response.");
+      const filename = input.key.split("/").at(-1) ?? "file";
+      response.status(200).set({
+        "Cache-Control": "private, no-store",
+        "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        "Content-Type": file.ContentType ?? "application/octet-stream",
+      });
+      if (file.ContentLength !== undefined) response.set("Content-Length", String(file.ContentLength));
+      await pipeline(file.Body as Readable, response);
+    } catch (error) {
+      throw billingCycleStorageError(error);
+    }
   });
 
   app.get("/api/workflows/memo/state", authenticate, async (request, response) => {

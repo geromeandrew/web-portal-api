@@ -22,6 +22,7 @@ export const openApiDocument: OpenAPIV3.Document = {
     { name: "Uploads" },
     { name: "Prepaid" },
     { name: "Memo" },
+    { name: "Billing Cycle" },
   ],
   paths: {
     "/api/healthz": {
@@ -77,6 +78,15 @@ export const openApiDocument: OpenAPIV3.Document = {
     "/api/workflows/prepaid/report.csv": {
       get: { tags: ["Prepaid"], summary: "Download the Prepaid report as CSV", responses: { "200": { description: "CSV report attachment.", headers: { "Content-Disposition": { schema: { type: "string" }, description: "Attachment filename." } }, content: { "text/csv": csv } }, "401": errorResponse } },
     },
+    "/api/billing-cycle/pipelines": {
+      get: { tags: ["Billing Cycle"], summary: "List Billing Cycle pipeline folders", responses: { "200": { description: "First-level S3 folders that can be selected as pipelines.", content: { "application/json": json({ type: "object", required: ["pipelines"], properties: { pipelines: { type: "array", items: { type: "string" } } } }) } }, "401": errorResponse, "502": errorResponse } },
+    },
+    "/api/billing-cycle/files": {
+      get: { tags: ["Billing Cycle"], summary: "List files for a Billing Cycle pipeline and status", parameters: [{ name: "pipeline_name", in: "query", required: true, schema: { type: "string" } }, { name: "status", in: "query", required: true, schema: { type: "string", enum: ["inbound", "outbound", "processed", "error"] } }, { name: "cursor", in: "query", schema: { type: "string", description: "Opaque S3 continuation token from the previous page." } }], responses: { "200": { description: "A page of files under the selected S3 prefix.", content: { "application/json": json({ $ref: "#/components/schemas/BillingCycleFileList" }) } }, "400": errorResponse, "401": errorResponse, "502": errorResponse } },
+    },
+    "/api/billing-cycle/files/content": {
+      get: { tags: ["Billing Cycle"], summary: "Stream a selected Billing Cycle file for viewing", parameters: [{ name: "pipeline_name", in: "query", required: true, schema: { type: "string" } }, { name: "status", in: "query", required: true, schema: { type: "string", enum: ["inbound", "outbound", "processed", "error"] } }, { name: "key", in: "query", required: true, schema: { type: "string", description: "S3 object key returned by the files endpoint." } }], responses: { "200": { description: "File stream with the object's original content type.", headers: { "Content-Disposition": { schema: { type: "string" } } }, content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } } }, "400": errorResponse, "401": errorResponse, "404": errorResponse, "502": errorResponse } },
+    },
     "/api/workflows/memo/state": {
       get: { tags: ["Memo"], summary: "Get Memo workflow state", responses: { "200": { description: "Memo errors and uploads.", content: { "application/json": json({ $ref: "#/components/schemas/MemoState" }) } }, "401": errorResponse } },
     },
@@ -101,6 +111,8 @@ export const openApiDocument: OpenAPIV3.Document = {
       PrepaidState: { type: "object", required: ["egLayout", "sgLayout", "allocation", "jv", "report", "sourceFiles", "uploads"], properties: { egLayout: { $ref: "#/components/schemas/Layout" }, sgLayout: { $ref: "#/components/schemas/Layout" }, allocation: { allOf: [{ $ref: "#/components/schemas/TableData" }, { type: "object", properties: { lastValidation: { nullable: true, allOf: [{ $ref: "#/components/schemas/Validation" }] } } }] }, jv: { $ref: "#/components/schemas/TableData" }, report: { type: "object", required: ["name", "csv"], properties: { name: { type: "string" }, csv: { type: "string" } } }, sourceFiles: { type: "object", required: ["expected"], properties: { expected: { type: "array", items: { type: "string" } } } }, uploads: { type: "array", items: { $ref: "#/components/schemas/Upload" } } } },
       WorkflowRun: { type: "object", required: ["id", "status", "completedAt"], properties: { id: { type: "string", format: "uuid" }, status: { type: "string", example: "completed" }, completedAt: { type: "string", format: "date-time" } } },
       Validation: { type: "object", required: ["status", "validatedAt"], properties: { status: { type: "string", example: "valid" }, validatedAt: { type: "string", format: "date-time" } } },
+      BillingCycleFile: { type: "object", required: ["key", "name", "size", "lastModified"], properties: { key: { type: "string" }, name: { type: "string" }, size: { type: "integer", format: "int64" }, lastModified: { type: "string", format: "date-time", nullable: true } } },
+      BillingCycleFileList: { type: "object", required: ["files"], properties: { files: { type: "array", items: { $ref: "#/components/schemas/BillingCycleFile" } }, nextCursor: { type: "string", nullable: true } } },
       MemoState: { type: "object", required: ["errors", "uploads"], properties: { errors: { type: "object", required: ["headers", "rows"], properties: { headers: { type: "array", items: { type: "string" } }, rows: { type: "array", items: { type: "array", items: { type: "string" } } } } }, uploads: { type: "array", items: { $ref: "#/components/schemas/Upload" } } } },
     },
   },
