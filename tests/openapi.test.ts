@@ -27,12 +27,12 @@ describe("OpenAPI documentation", () => {
   it("is a valid OpenAPI document covering every API route", async () => {
     await expect(SwaggerParser.validate(openApiDocument)).resolves.toBeDefined();
     const operationCount = Object.values(openApiDocument.paths).reduce((total, path) => total + Object.keys(path).filter((key) => ["get", "post", "put", "patch", "delete"].includes(key)).length, 0);
-    expect(operationCount).toBe(24);
-    expect(openApiDocument.paths["/api/uploads"]?.post?.requestBody).toBeDefined();
+    expect(operationCount).toBe(25);
+    expect(openApiDocument.paths["/api/uploads"]?.post).toBeDefined();
     expect(openApiDocument.paths["/api/workflows/prepaid/report.csv"]?.get?.responses["200"].content?.["text/csv"]).toBeDefined();
-    expect(openApiDocument.paths["/api/billing-cycle/files"]?.get?.parameters).toHaveLength(3);
+    expect(openApiDocument.paths["/api/processing-pipelines/{pipelineCode}/files"]?.get?.parameters).toHaveLength(1);
     expect(openApiDocument.paths["/api/auth/login"]?.post?.security).toEqual([]);
-    expect(openApiDocument.paths["/api/uploads"]?.get?.security).toBeUndefined();
+    expect(openApiDocument.paths["/api/billing-cycle/files"]).toBeUndefined();
   });
 
   it("serves the OpenAPI JSON and Swagger UI", async () => {

@@ -1,23 +1,26 @@
 import { loadConfig } from "./config.js";
 import { createPool } from "./db.js";
 import { createApp, ensureBootstrapAdmin } from "./routes.js";
+import { createLogger } from "./platform/logger.js";
 
 const config = loadConfig();
 const pool = createPool(config);
+const logger = createLogger();
 
 try {
   await pool.query("SELECT 1");
-  await ensureBootstrapAdmin(pool, config);
+  const bootstrapAdmin = await ensureBootstrapAdmin(pool, config);
+  if (bootstrapAdmin) logger.info("auth.bootstrap_admin_created", { email: bootstrapAdmin.email });
   const app = createApp(pool, config);
-  const server = app.listen(config.PORT, "0.0.0.0", () => console.log(`API listening on port ${config.PORT}`));
+  const server = app.listen(config.PORT, "0.0.0.0", () => logger.info("api.listening", { port: config.PORT }));
   const close = async () => {
-    server.close();
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await pool.end();
   };
   process.on("SIGTERM", () => void close());
   process.on("SIGINT", () => void close());
 } catch (error) {
-  console.error("API startup failed", error);
+  logger.error("api.startup_failed", { error: error instanceof Error ? error.message : String(error) });
   await pool.end();
   process.exitCode = 1;
 }
