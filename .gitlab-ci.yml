@@ -58,6 +58,7 @@ deploy_production:
     - chmod 700 ~/.ssh
     - cp "$SSH_KNOWN_HOSTS" ~/.ssh/known_hosts
     - chmod 644 ~/.ssh/known_hosts
+    - chmod 400 "$SSH_PRIVATE_KEY"
     - eval "$(ssh-agent -s)"
     - ssh-add "$SSH_PRIVATE_KEY"
   script:
@@ -74,4 +75,3 @@ deploy_production:
       docker image prune -f"
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      when: manual
