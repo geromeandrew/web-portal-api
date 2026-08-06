@@ -1,6 +1,7 @@
 import type { ProcessingPipelineStage } from "./processingPipelineStorage.js";
 
 export type ProcessingPipelineFileRequirement = {
+  id?: number;
   pipelineCode: string;
   stage: ProcessingPipelineStage;
   fileName: string;

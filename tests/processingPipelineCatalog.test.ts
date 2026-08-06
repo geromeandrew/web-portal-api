@@ -11,4 +11,8 @@ describe("Processing Pipeline catalogue", () => {
     const glob = processingPipelineSeedRequirements.find((item) => item.match === "glob")!;
     expect(matchesProcessingPipelineRequirement(glob, glob.fileName.replace("*", "20260731"))).toBe(true);
   });
+  it("keeps the production pipeline and filename mappings", () => {
+    expect(processingPipelineSeedRequirements).toContainEqual(expect.objectContaining({ pipelineCode: "bss_billcycle_glob", fileName: "308. Billed Adjustments Monthly Summary Report_G_01.XLSX" }));
+    expect(processingPipelineSeedRequirements).toContainEqual(expect.objectContaining({ pipelineCode: "prepaid_reclass", fileName: "318. Billed Charges Summary Report_G_BC27.xlsx" }));
+  });
 });

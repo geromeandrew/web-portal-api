@@ -27,12 +27,29 @@ describe("OpenAPI documentation", () => {
   it("is a valid OpenAPI document covering every API route", async () => {
     await expect(SwaggerParser.validate(openApiDocument)).resolves.toBeDefined();
     const operationCount = Object.values(openApiDocument.paths).reduce((total, path) => total + Object.keys(path).filter((key) => ["get", "post", "put", "patch", "delete"].includes(key)).length, 0);
-    expect(operationCount).toBe(25);
+    expect(operationCount).toBe(27);
     expect(openApiDocument.paths["/api/uploads"]?.post).toBeDefined();
     expect(openApiDocument.paths["/api/workflows/prepaid/report.csv"]?.get?.responses["200"].content?.["text/csv"]).toBeDefined();
-    expect(openApiDocument.paths["/api/processing-pipelines/{pipelineCode}/files"]?.get?.parameters).toHaveLength(1);
+    expect(openApiDocument.paths["/api/processing-pipelines/{pipelineCode}/files"]?.get?.parameters).toHaveLength(2);
     expect(openApiDocument.paths["/api/auth/login"]?.post?.security).toEqual([]);
+    expect(openApiDocument.paths["/api/auth/login"]?.post?.requestBody).toBeDefined();
+    expect(openApiDocument.paths["/api/processing-pipelines"]?.get?.parameters).toBeUndefined();
     expect(openApiDocument.paths["/api/billing-cycle/files"]).toBeUndefined();
+    for (const path of Object.values(openApiDocument.paths)) {
+      if (!path || "$ref" in path) continue;
+      for (const operation of [path.get, path.post, path.put, path.patch, path.delete]) {
+        if (operation) expect(operation.tags).toHaveLength(1);
+      }
+    }
+    for (const [pathName, path] of Object.entries(openApiDocument.paths)) {
+      if (!path || "$ref" in path) continue;
+      const names = [...pathName.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+      for (const operation of [path.get, path.post, path.put, path.patch, path.delete]) {
+        if (!operation) continue;
+        const parameters = operation.parameters ?? [];
+        for (const name of names) expect(parameters.some((parameter) => "$ref" in parameter ? false : parameter.in === "path" && parameter.name === name && parameter.required)).toBe(true);
+      }
+    }
   });
 
   it("serves the OpenAPI JSON and Swagger UI", async () => {

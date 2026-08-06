@@ -6,7 +6,7 @@ import type { AppDependencies } from "../../../app/dependencies.js";
 import { createAuthMiddleware, requireBootstrapAdmin } from "../../../auth.js";
 import { processingPipelineStages } from "../../../processingPipelineStorage.js";
 import { matchesProcessingPipelineRequirement } from "../../../processingPipelineCatalog.js";
-import { getProcessingPipelineCatalog, getProcessingPipelineRequirements } from "../../../processingPipelineRepository.js";
+import { getPipelineDetail, getProcessingPipelineCatalog, getProcessingPipelineRequirements } from "../../../processingPipelineRepository.js";
 import { AppError } from "../../../errors.js";
 import { audit, ensureWorkspace } from "../../../workspace.js";
 
@@ -35,14 +35,29 @@ function jobError(error: unknown) {
   if (name === "AccessDeniedException" || name === "UnauthorizedException") return new AppError(502, "PIPELINE_JOB_ACCESS_DENIED", "The portal is not permitted to access the mapped processing job.");
   return new AppError(502, "PIPELINE_JOB_UNAVAILABLE", "The processing job service could not process the request. Please try again.");
 }
+function attachConfiguration(files: Awaited<ReturnType<AppDependencies["processingPipelineStorage"]["listExpectedFiles"]>>, requirements: Awaited<ReturnType<typeof getProcessingPipelineRequirements>>, bucket: string) {
+  return files.map((file) => {
+    const requirement = requirements.find((candidate) => candidate.fileName === file.expectedFileName);
+    if (!requirement) return file;
+    return { ...file, configuration: { acquisitionMethod: requirement.acquisitionMethod, sourceConnectionName: requirement.sourceConnectionName, remoteSftpHost: requirement.remoteSftpHost, remoteSftpSourceDirectory: requirement.remoteSftpSourceDirectory, scheduleDescription: requirement.scheduleDescription, sourceFilePullRenameRules: requirement.sourceFilePullRenameRules, s3Destination: `s3://${bucket}/${requirement.s3KeyPrefix}`, legacyPackageName: requirement.legacyPackageName, databaseSchemaDestination: requirement.databaseSchemaDestination, tableDestinations: requirement.tableDestinations, jobMappings: requirement.jobMappings } };
+  });
+}
 
 export function createProcessingPipelinesRouter({ pool, config, processingPipelineStorage, glueJobRunner, logger }: AppDependencies, singleFile: RequestHandler) {
   const router = express.Router();
   router.use(createAuthMiddleware(pool, config));
+  // Keep the UI's primary catalogue request intentionally small and stable.
   router.get("/", async (_request, response) => response.json(await getProcessingPipelineCatalog(pool)));
+  router.get("/:pipelineCode", async (request, response) => {
+    const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode); const detail = await getPipelineDetail(pool, pipelineCode);
+    if (!detail) throw new AppError(404, "PIPELINE_NOT_FOUND", "The requested processing pipeline was not found."); response.json(detail);
+  });
+  router.get("/:pipelineCode/requirements", async (request, response) => {
+    const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode); const { stage } = fileQuerySchema.parse(request.query); response.json({ requirements: await getProcessingPipelineRequirements(pool, pipelineCode, stage) });
+  });
   router.get("/:pipelineCode/files", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode); const { stage } = fileQuerySchema.parse(request.query);
-    try { const requirements = await getProcessingPipelineRequirements(pool, pipelineCode, stage); response.json(requirements.length ? { configured: true, files: await processingPipelineStorage.listExpectedFiles(pipelineCode, stage, requirements) } : { configured: false, files: [] }); } catch (error) { throw storageError(error); }
+    try { const requirements = await getProcessingPipelineRequirements(pool, pipelineCode, stage); const files = requirements.length ? await processingPipelineStorage.listExpectedFiles(pipelineCode, stage, requirements) : []; response.json(requirements.length ? { configured: true, files: attachConfiguration(files, requirements, config.S3_BUCKET) } : { configured: false, files: [] }); } catch (error) { throw storageError(error); }
   });
   router.get("/:pipelineCode/files/content", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode); const { stage, key } = contentQuerySchema.parse(request.query);

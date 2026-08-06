@@ -27,6 +27,8 @@ services:
     build: .
     image: web-portal-api:local
     pull_policy: build
+    ports:
+      - "3001:3001"
     environment:
       <<: *api_environment
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID in .env}
