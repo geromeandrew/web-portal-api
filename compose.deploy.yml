@@ -1,0 +1,51 @@
+name: web-portal-api
+
+# Production deployment file. It deliberately pulls the immutable image named by
+# API_IMAGE and reads all application settings from the existing local .env file.
+# Do not add secrets to this file or commit the .env file.
+services:
+  migrate:
+    image: ${API_IMAGE:?Set API_IMAGE}
+    environment: &api_environment
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-web_portal}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      LAMBDA_UPLOAD_URL: ${LAMBDA_UPLOAD_URL:?Set LAMBDA_UPLOAD_URL in .env}
+      S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET in .env}
+      AWS_REGION: ${AWS_REGION:?Set AWS_REGION in .env}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID in .env}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY in .env}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-4500000}
+      ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES:?Set ALLOWED_MIME_TYPES in .env}
+    command: ["node", "dist/migrate.js"]
+    networks: [portal]
+    restart: "no"
+
+  api:
+    image: ${API_IMAGE:?Set API_IMAGE}
+    environment:
+      <<: *api_environment
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks:
+      portal:
+        aliases: [web-portal-api]
+    restart: unless-stopped
+
+networks:
+  portal:
+    name: web-portal-shared
+    external: true
