@@ -28,6 +28,8 @@ services:
 
   api:
     image: ${API_IMAGE:?Set API_IMAGE}
+    ports:
+      - "3301:3001"
     environment:
       <<: *api_environment
     healthcheck:
