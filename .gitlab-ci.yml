@@ -62,6 +62,7 @@ deploy_production:
     - eval "$(ssh-agent -s)"
     - ssh-add "$SSH_PRIVATE_KEY"
   script:
+    - scp -P "$SSH_PORT" compose.deploy.yml "$SSH_USER@$SSH_HOST:/home/ubuntu/apps/web-portal-api/compose.deploy.yml"
     - >
       printf '%s' "$REGISTRY_PASSWORD" |
       ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST"
