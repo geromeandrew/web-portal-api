@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import type { Config } from "../config.js";
 import type { ProcessingPipelineStorage } from "../processingPipelineStorage.js";
-import type { GlueJobRunner } from "../glueJobRunner.js";
+import type { StepFunctionsRunner } from "../stepFunctionsRunner.js";
 import type { Logger } from "../platform/logger.js";
 
 /**
@@ -14,6 +14,6 @@ export type AppDependencies = {
   pool: Pool;
   config: Config;
   processingPipelineStorage: ProcessingPipelineStorage;
-  glueJobRunner: GlueJobRunner;
+  stepFunctionsRunner: StepFunctionsRunner;
   logger: Logger;
 };
