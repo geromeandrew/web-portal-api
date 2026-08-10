@@ -22,6 +22,11 @@ describe("loadConfig", () => {
     expect(loadConfig(base).DATABASE_SCHEMA).toBe("web_portal");
   });
 
+  it("hides non-essential Swagger endpoints by default and can restore them", () => {
+    expect(loadConfig(base).OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS).toBe(false);
+    expect(loadConfig({ ...base, OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: "true" }).OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS).toBe(true);
+  });
+
   it("requires a database URL and a safe schema identifier", () => {
     const { DATABASE_URL: _databaseUrl, ...withoutUrl } = base;
     expect(() => loadConfig(withoutUrl)).toThrow("DATABASE_URL");

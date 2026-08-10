@@ -14,6 +14,7 @@ const envSchema = z.object({
   AWS_REGION: z.string().min(1),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(4_500_000),
   ALLOWED_MIME_TYPES: z.string().default("application/pdf,image/jpeg,image/png,image/webp,text/plain,application/zip,application/msword,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+  OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
 });
 
 export type Config = z.infer<typeof envSchema> & { allowedMimeTypes: string[] };

@@ -37,8 +37,9 @@ const jsonBody = (schema: OpenAPIV3.SchemaObject, description?: string): OpenAPI
 const uuidPath: OpenAPIV3.ParameterObject = { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } };
 const regionPath: OpenAPIV3.ParameterObject = { name: "region", in: "path", required: true, schema: { type: "string", enum: ["eg", "sg"] } };
 const pipelineCodePath: OpenAPIV3.ParameterObject = { name: "pipelineCode", in: "path", required: true, schema: { type: "string", example: "prepaid_reclass" } };
-const jobRunIdPath: OpenAPIV3.ParameterObject = { name: "jobRunId", in: "path", required: true, schema: { type: "string", example: "jr_123456789" } };
+const runIdPath: OpenAPIV3.ParameterObject = { name: "runId", in: "path", required: true, schema: { type: "string", format: "uuid" } };
 const expectedFileName: OpenAPIV3.ParameterObject = { name: "expectedFileName", in: "query", required: true, schema: { type: "string" } };
+const batchCycle: OpenAPIV3.ParameterObject = { name: "batchCycle", in: "query", required: true, schema: { type: "string", pattern: "^\\d{2}$", example: "01" } };
 const changePasswordBody = jsonBody({ type: "object", required: ["currentPassword", "newPassword"], properties: { currentPassword: { type: "string", format: "password" }, newPassword: { type: "string", format: "password", minLength: 12 } } });
 const createUserBody = jsonBody({ type: "object", required: ["email", "temporaryPassword"], properties: { email: { type: "string", format: "email" }, temporaryPassword: { type: "string", format: "password", minLength: 12 } } });
 const updateUserBody = jsonBody({ type: "object", properties: { isActive: { type: "boolean" }, temporaryPassword: { type: "string", format: "password", minLength: 12 } }, minProperties: 1 });
@@ -47,7 +48,7 @@ const workflowUploadBody: OpenAPIV3.RequestBodyObject = { required: true, conten
 const pipelineUploadBody: OpenAPIV3.RequestBodyObject = { required: true, content: { "multipart/form-data": { schema: { type: "object", required: ["stage", "expectedFileName", "file"], properties: { stage: { type: "string", enum: ["inbound", "outbound", "processed", "error"] }, expectedFileName: { type: "string" }, replace: { type: "string", enum: ["true", "false"], default: "false" }, file: { type: "string", format: "binary" } } } } } };
 const startRunBody: OpenAPIV3.RequestBodyObject = {
   required: true,
-  description: "Required file identity. The API resolves this exact configured filename to its mapped Glue job; it never starts a job for an entire pipeline.",
+  description: "Required file identity. The API resolves this exact configured filename to its mapped Step Functions state machine; it never starts an entire pipeline.",
   content: {
     "application/json": {
       schema: {
@@ -60,15 +61,16 @@ const startRunBody: OpenAPIV3.RequestBodyObject = {
       },
       examples: {
         selectedFile: {
-          summary: "Run the Glue job mapped to one uploaded Bayan bill-cycle file",
+          summary: "Run the Step Functions state machine mapped to one uploaded Bayan bill-cycle file",
           value: { stage: "inbound", expectedFileName: "308. Billed Adjustments Monthly Summary Report_B_01.xlsx" },
         },
       },
     },
   },
 };
+const startBatchRunBody = jsonBody({ type: "object", required: ["stage", "batchCycle"], properties: { stage: { type: "string", enum: ["inbound", "outbound", "processed", "error"], example: "inbound" }, batchCycle: { type: "string", pattern: "^\\d{2}$", example: "01" } } }, "Starts the mapped batch state machine only after every member file is available.");
 
-const document: OpenAPIV3.Document = {
+const allOpenApiDocument: OpenAPIV3.Document = {
   openapi: "3.0.3",
   info: { title: "Web Portal API", version: "0.3.0", description: "Portal authentication, workflows, and processing pipelines." },
   servers: [{ url: "/", description: "Current origin" }],
@@ -95,10 +97,13 @@ const document: OpenAPIV3.Document = {
     "/api/processing-pipelines": { get: success("List processing pipelines and stages") },
     "/api/processing-pipelines/{pipelineCode}": { get: { ...success("Get processing pipeline details"), parameters: [pipelineCodePath] } },
     "/api/processing-pipelines/{pipelineCode}/requirements": { get: { ...success("List a pipeline's configured file requirements"), parameters: [pipelineCodePath, stage] } },
+    "/api/processing-pipelines/{pipelineCode}/execution-details": { get: { ...success("Get the resolved Step Functions execution preflight"), description: "Requires `stage` and `expectedFileName`. Returns the exact configured execution input, source-file availability, and live state-machine metadata without exposing the workflow definition.", parameters: [pipelineCodePath, stage, expectedFileName] } },
+    "/api/processing-pipelines/{pipelineCode}/batch-execution-details": { get: { ...success("Get the resolved Step Functions batch execution preflight"), description: "Requires `stage` and `batchCycle`. Returns all required batch source files, the exact batch input, and live state-machine metadata.", parameters: [pipelineCodePath, stage, batchCycle] } },
     "/api/processing-pipelines/{pipelineCode}/files": { get: { ...success("List configured pipeline files"), parameters: [pipelineCodePath, stage] }, post: { ...created("Upload a pipeline file"), parameters: [pipelineCodePath], requestBody: pipelineUploadBody } },
     "/api/processing-pipelines/{pipelineCode}/files/content": { get: { ...success("Stream a pipeline file"), parameters: [pipelineCodePath, stage, { name: "key", in: "query", required: true, schema: { type: "string" } }] } },
-    "/api/processing-pipelines/{pipelineCode}/runs": { post: { ...created("Start the job mapped to one specific pipeline file"), description: "Requires `stage` and `expectedFileName` in the request body. The file must be configured, already uploaded, and have a Glue job mapping.", parameters: [pipelineCodePath], requestBody: startRunBody } },
-    "/api/processing-pipelines/{pipelineCode}/runs/{jobRunId}": { get: { ...success("Get processing job status"), parameters: [pipelineCodePath, jobRunIdPath, stage, expectedFileName] } },
+    "/api/processing-pipelines/{pipelineCode}/runs": { post: { ...created("Start the Step Functions execution mapped to one specific pipeline file"), description: "Requires `stage` and `expectedFileName` in the request body. The file must be configured, already uploaded, and have a Step Functions mapping.", parameters: [pipelineCodePath], requestBody: startRunBody } },
+    "/api/processing-pipelines/{pipelineCode}/batch-runs": { post: { ...created("Start the Step Functions batch execution for one bill cycle"), parameters: [pipelineCodePath], requestBody: startBatchRunBody } },
+    "/api/processing-pipelines/{pipelineCode}/runs/{runId}": { get: { ...success("Get detailed processing execution status"), parameters: [pipelineCodePath, runIdPath] } },
   },
   components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" } } },
   security: [{ bearerAuth: [] }],
@@ -114,11 +119,41 @@ function tagForPath(path: string) {
   return "Processing Pipelines";
 }
 
-for (const [path, pathItem] of Object.entries(document.paths)) {
+for (const [path, pathItem] of Object.entries(allOpenApiDocument.paths)) {
   if (!pathItem || "$ref" in pathItem) continue;
   for (const operation of [pathItem.get, pathItem.post, pathItem.put, pathItem.patch, pathItem.delete]) {
     if (operation) operation.tags = [tagForPath(path)];
   }
 }
 
-export const openApiDocument = document;
+const visibleByDefault = (path: string) =>
+  path === "/api/healthz" ||
+  path.startsWith("/api/auth/") ||
+  path.startsWith("/api/processing-pipelines");
+
+/**
+ * Produces the Swagger document without changing the API routes themselves.
+ * Set OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS=true to restore every endpoint.
+ */
+export function createOpenApiDocument(includeNonEssentialEndpoints = false): OpenAPIV3.Document {
+  const paths = Object.fromEntries(
+    Object.entries(allOpenApiDocument.paths).filter(([path]) =>
+      includeNonEssentialEndpoints || visibleByDefault(path),
+    ),
+  );
+  const visibleTags = new Set<string>();
+  for (const pathItem of Object.values(paths)) {
+    if (!pathItem || "$ref" in pathItem) continue;
+    for (const operation of [pathItem.get, pathItem.post, pathItem.put, pathItem.patch, pathItem.delete]) {
+      operation?.tags?.forEach((tag) => visibleTags.add(tag));
+    }
+  }
+
+  return {
+    ...allOpenApiDocument,
+    tags: allOpenApiDocument.tags?.filter((tag) => visibleTags.has(tag.name)),
+    paths,
+  };
+}
+
+export const openApiDocument = createOpenApiDocument();

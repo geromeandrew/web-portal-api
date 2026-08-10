@@ -3,7 +3,7 @@ import multer from "multer";
 import swaggerUi from "swagger-ui-express";
 import type { AppDependencies } from "./dependencies.js";
 import { errorHandler, notFound } from "../errors.js";
-import { openApiDocument } from "../openapi.js";
+import { createOpenApiDocument } from "../openapi.js";
 import { createAuthRouter } from "../modules/auth/api/router.js";
 import { createUsersRouter } from "../modules/users/api/router.js";
 import { createUploadsRouter } from "../modules/uploads/api/router.js";
@@ -30,7 +30,8 @@ export function createApplication(dependencies: AppDependencies): Express {
   return app;
 }
 
-function registerPublicRoutes(app: Express, { pool }: AppDependencies) {
+function registerPublicRoutes(app: Express, { pool, config }: AppDependencies) {
+  const openApiDocument = createOpenApiDocument(config.OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS);
   app.get("/", (_request, response) => response.redirect("/api/docs/"));
   app.get("/api/openapi.json", (_request, response) =>
     response.json(openApiDocument),
