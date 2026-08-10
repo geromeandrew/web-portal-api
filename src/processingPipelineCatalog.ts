@@ -10,6 +10,32 @@ export type ProcessingPipelineFileRequirement = {
   jobName: string | null;
 };
 
+export const bayanBillCycleSuffixes = ["01", "06", "08", "10", "11", "13", "16", "18", "21", "24", "27"] as const;
+export type BayanBillCycleSuffix = (typeof bayanBillCycleSuffixes)[number];
+
+export const bayanBillCycleStateMachines = {
+  billedAdjustments: { code: "bayan_billcycle_308_preload", name: "isg-esatp-dv-bss_billcycle_bayn_308_preload-state_machine" },
+  billedCharges: { code: "bayan_billcycle_318_preload", name: "isg-esatp-dv-bss_billcycle_bayn_318_preload-state_machine" },
+  billControlPhp: { code: "bayan_billcycle_411_php_preload", name: "isg-esatp-dv-bss_billcycle_bayn_411_PHP_preload-state_machine" },
+  billControlUsd: { code: "bayan_billcycle_411_usd_preload", name: "isg-esatp-dv-bss_billcycle_bayn_411_USD_preload-state_machine" },
+  sapGlbilled: { code: "bayan_billcycle_sapglbilled_preload", name: "isg-esatp-dv-bss_billcycle_bayn_sapglbilled_preload-state_machine" },
+} as const;
+
+export const bayanBillCycleBatchStateMachine = { code: "bayan_billcycle_preload", name: "isg-esatp-dv-bss_billcycle_bayn_preload-state_machine" } as const;
+
+type BayanStateMachineCode = (typeof bayanBillCycleStateMachines)[keyof typeof bayanBillCycleStateMachines]["code"];
+
+export function bayanBillCycleStepFunctionMapping(fileName: string): { stateMachineCode: BayanStateMachineCode; batchCycle: BayanBillCycleSuffix } | null {
+  const batchCycle = fileName.match(/_(\d{2})(?=\.[^.]+$)/)?.[1] as BayanBillCycleSuffix | undefined;
+  if (!batchCycle || !bayanBillCycleSuffixes.includes(batchCycle)) return null;
+  if (fileName.startsWith("308.")) return { stateMachineCode: bayanBillCycleStateMachines.billedAdjustments.code, batchCycle };
+  if (fileName.startsWith("318.")) return { stateMachineCode: bayanBillCycleStateMachines.billedCharges.code, batchCycle };
+  if (fileName.startsWith("411. Bill Control_PHP")) return { stateMachineCode: bayanBillCycleStateMachines.billControlPhp.code, batchCycle };
+  if (fileName.startsWith("411. Bill Control_USD")) return { stateMachineCode: bayanBillCycleStateMachines.billControlUsd.code, batchCycle };
+  if (fileName.startsWith("sap_glbilled")) return { stateMachineCode: bayanBillCycleStateMachines.sapGlbilled.code, batchCycle };
+  return null;
+}
+
 type Definition = readonly [fileName: string, legacySsisPackage: string | null, match?: "glob" | null, etlJobName?: string | null];
 const requirements: ProcessingPipelineFileRequirement[] = [];
 
@@ -25,19 +51,17 @@ add("BSS Bill Cycles - Globe", "bss_billcycle_glob", [
 add("BSS Bill Cycles - Innove", "bss_billcycle_inov", [
   ["308. Billed Adjustments Monthly Summary Report_I_01.XLSX", "MyBss_Innove_308_Billed_Adjustments.dtsx"], ["318. Billed Charges Summary Report_I_01.XLSX", "MyBss_Innove_318_Billed_Charges.dtsx"], ["411. Bill Control_PHP_I_01.XLSX", "MyBss_Innove_411_Bill_Control_PHP.dtsx"], ["411. Bill Control_USD_I_01.xlsx", "MyBss_Innove_411_Bill_Control_USD.dtsx"], ["sap_glbilled_I_01.txt", "MyBss_Innove_sapglbilled.dtsx"],
 ]);
-const bayanBillCycleSuffixes = ["01", "06", "08", "10", "11", "13", "16", "18", "21", "24", "27"] as const;
 const bayanBillCycleFiles = [
-  ["308. Billed Adjustments Monthly Summary Report_B_01.xlsx", "MyBss_Bayan_308_Billed_Adjustments.dtsx", "308-Billed-Adjustments"],
-  ["318. Billed Charges Summary Report_B_01.XLSX", "MyBss_Bayan_318_Billed_Charges.dtsx", "318-Billed-Charges"],
-  ["411. Bill Control_PHP_B_01.xlsx", "MyBss_Bayan_411_Bill_Control_PHP.dtsx", "411-Bill-Control-PHP"],
-  ["411. Bill Control_USD_B_01.xlsx", "MyBss_Bayan_411_Bill_Control_USD.dtsx", "411-Bill-Control-USD"],
-  ["sap_glbilled_b_01.txt", "MyBss_Bayan_sapglbilled.dtsx", "SAP-glbilled"],
+  ["308. Billed Adjustments Monthly Summary Report_B_01.xlsx", "MyBss_Bayan_308_Billed_Adjustments.dtsx"],
+  ["318. Billed Charges Summary Report_B_01.XLSX", "MyBss_Bayan_318_Billed_Charges.dtsx"],
+  ["411. Bill Control_PHP_B_01.xlsx", "MyBss_Bayan_411_Bill_Control_PHP.dtsx"],
+  ["411. Bill Control_USD_B_01.xlsx", "MyBss_Bayan_411_Bill_Control_USD.dtsx"],
+  ["sap_glbilled_b_01.txt", "MyBss_Bayan_sapglbilled.dtsx"],
 ] as const;
-add("BSS Bill Cycles - Bayan", "bss_billcycle_bayn", bayanBillCycleFiles.flatMap(([baseFileName, legacySsisPackage, jobFragment]) => bayanBillCycleSuffixes.map((suffix, index) => [
+add("BSS Bill Cycles - Bayan", "bss_billcycle_bayn", bayanBillCycleFiles.flatMap(([baseFileName, legacySsisPackage]) => bayanBillCycleSuffixes.map((suffix) => [
   baseFileName.replace(/_01(?=\.[^.]+$)/, `_${suffix}`),
   legacySsisPackage,
   null,
-  `MyBSS_Bayan_EOC${String(index + 1).padStart(2, "0")}_P10_${jobFragment}-${suffix}`,
 ] as Definition)));
 add("BSS EOM - Globe", "bss_eom_glob", [
   ["307. Unbilled Adjustments Report_G.xlsx", "MyBss_Globe_307_Unbilled_Adjustments.dtsx"], ["317. Unbilled Charges Summary Report_G.xlsx", "MyBss_Globe_317_Unbilled_Charges_Summary.dtsx"], ["Unearned MSF Summary Report_G.xlsx", "MyBss_Globe_324_Unearned_MSF.dtsx"], ["Unconfirmed Advanced MSF Charges Summary Report - Monthly.xlsx", "MyBss_Globe_Unconfirmed_Advance_MSF.dtsx"], ["sap_airc_G.txt", "MyBss_Globe_sap_airc.dtsx"], ["sap_aiuc_G.txt", "MyBss_Globe_sap_aiuc.dtsx"], ["sap_glunbilled_G.txt", "MyBss_Globe_glunbilled.dtsx"], ["sap_glunbilled_unconf_G.txt", "MyBss_Globe_glunbilled_unconf.dtsx"],

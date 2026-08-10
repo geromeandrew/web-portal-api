@@ -1,4 +1,4 @@
-import { processingPipelineSeedRequirements } from "./processingPipelineCatalog.js";
+import { bayanBillCycleBatchStateMachine, bayanBillCycleStateMachines, bayanBillCycleStepFunctionMapping, bayanBillCycleSuffixes, processingPipelineSeedRequirements } from "./processingPipelineCatalog.js";
 import { processingPipelineDomains, processingPipelineFilePurposes, processingPipelineFilePurpose, processingPipelineMetadata, processingPipelineSourceSystems } from "./migrationSnapshots/processingPipelineCatalogue006.js";
 
 // Historical migrations 002–004 retain their original database identifiers.
@@ -62,6 +62,14 @@ function billingCycleSeedSql() {
 function billingCycleExpectedFileUpsertSql(requirements: readonly typeof billingCycleSeedRequirements[number][]) {
   return requirements.map((row, index) => `INSERT INTO billing_cycle_expected_files (pipeline_id, status_code, file_name, match_type, legacy_ssis_package, etl_job_name, display_order) SELECT id, ${quote(row.status)}, ${quote(row.fileName)}, ${quote(row.match)}, ${quote(row.legacySsisPackage)}, ${quote(row.etlJobName)}, ${index + 1} FROM billing_cycle_pipelines WHERE code = ${quote(row.pipelineCode)} ON CONFLICT (pipeline_id, status_code, file_name) DO UPDATE SET match_type = EXCLUDED.match_type, legacy_ssis_package = EXCLUDED.legacy_ssis_package, etl_job_name = EXCLUDED.etl_job_name, display_order = EXCLUDED.display_order;`).join("\n");
 }
+
+const bayanStepFunctionSeedMappings = processingPipelineSeedRequirements
+  .filter((requirement) => requirement.pipelineCode === "bss_billcycle_bayn" && requirement.stage === "inbound")
+  .flatMap((requirement) => {
+    const mapping = bayanBillCycleStepFunctionMapping(requirement.fileName);
+    return mapping ? [{ requirement, mapping }] : [];
+  });
+const bayanBatchFileDisplayOrder = Object.fromEntries(Object.values(bayanBillCycleStateMachines).map((stateMachine, index) => [stateMachine.code, index + 1]));
 
 export const migrations = [{
   id: "001_initial",
@@ -255,5 +263,96 @@ export const migrations = [{
     ${processingPipelineSeedRequirements.filter((requirement) => requirement.jobName).map((requirement, index) => `INSERT INTO processing_pipeline_file_job_mappings (file_requirement_id, bill_cycle, legacy_file_name, job_name, display_order) SELECT id, ${quote((requirement.fileName.match(/_(\d{2})(?=\.[^.]+$)/)?.[1]) ?? "default")}, ${quote(requirement.fileName)}, ${quote(requirement.jobName)}, ${index + 1} FROM processing_pipeline_file_requirements WHERE pipeline_id = (SELECT id FROM processing_pipelines WHERE code = ${quote(requirement.pipelineCode)}) AND stage_code = ${quote(requirement.stage)} AND file_name = ${quote(requirement.fileName)} ON CONFLICT (file_requirement_id, bill_cycle) DO UPDATE SET legacy_file_name = EXCLUDED.legacy_file_name, job_name = EXCLUDED.job_name, display_order = EXCLUDED.display_order;`).join("\n")}
     CREATE INDEX IF NOT EXISTS processing_pipeline_file_destinations_lookup ON processing_pipeline_file_destinations (file_requirement_id, display_order);
     CREATE INDEX IF NOT EXISTS processing_pipeline_file_job_mappings_lookup ON processing_pipeline_file_job_mappings (file_requirement_id, display_order) WHERE is_active = true;
+  `,
+}, {
+  id: "008_bayan_bill_cycle_step_functions",
+  sql: `
+    CREATE TABLE IF NOT EXISTS processing_pipeline_step_function_state_machines (
+      id bigserial PRIMARY KEY,
+      code text NOT NULL UNIQUE,
+      state_machine_name text NOT NULL UNIQUE,
+      display_order integer NOT NULL,
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS processing_pipeline_file_step_function_mappings (
+      id bigserial PRIMARY KEY,
+      file_requirement_id bigint NOT NULL UNIQUE REFERENCES processing_pipeline_file_requirements(id) ON DELETE CASCADE,
+      state_machine_id bigint NOT NULL REFERENCES processing_pipeline_step_function_state_machines(id) ON DELETE RESTRICT,
+      batch_cycle text NOT NULL CHECK (batch_cycle IN (${bayanBillCycleSuffixes.map(quote).join(", ")})),
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS processing_pipeline_step_function_executions (
+      id uuid PRIMARY KEY,
+      file_step_function_mapping_id bigint NOT NULL REFERENCES processing_pipeline_file_step_function_mappings(id) ON DELETE RESTRICT,
+      execution_arn text NOT NULL UNIQUE,
+      object_key text NOT NULL,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      started_by_user_id uuid NOT NULL REFERENCES users(id),
+      status text NOT NULL,
+      error_message text,
+      started_at timestamptz NOT NULL,
+      completed_at timestamptz,
+      last_observed_at timestamptz NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    ${Object.values(bayanBillCycleStateMachines).map((stateMachine, index) => `INSERT INTO processing_pipeline_step_function_state_machines (code, state_machine_name, display_order) VALUES (${quote(stateMachine.code)}, ${quote(stateMachine.name)}, ${index + 1}) ON CONFLICT (code) DO UPDATE SET state_machine_name = EXCLUDED.state_machine_name, display_order = EXCLUDED.display_order, is_active = true, updated_at = now();`).join("\n")}
+    UPDATE processing_pipeline_file_requirements SET job_name = NULL, updated_at = now() WHERE pipeline_id = (SELECT id FROM processing_pipelines WHERE code = 'bss_billcycle_bayn');
+    DELETE FROM processing_pipeline_file_job_mappings WHERE file_requirement_id IN (SELECT requirement.id FROM processing_pipeline_file_requirements requirement JOIN processing_pipelines pipeline ON pipeline.id = requirement.pipeline_id WHERE pipeline.code = 'bss_billcycle_bayn');
+    ${bayanStepFunctionSeedMappings.map(({ requirement, mapping }) => `INSERT INTO processing_pipeline_file_step_function_mappings (file_requirement_id, state_machine_id, batch_cycle) SELECT requirement.id, state_machine.id, ${quote(mapping.batchCycle)} FROM processing_pipeline_file_requirements requirement JOIN processing_pipelines pipeline ON pipeline.id = requirement.pipeline_id JOIN processing_pipeline_step_function_state_machines state_machine ON state_machine.code = ${quote(mapping.stateMachineCode)} WHERE pipeline.code = ${quote(requirement.pipelineCode)} AND requirement.stage_code = ${quote(requirement.stage)} AND requirement.file_name = ${quote(requirement.fileName)} ON CONFLICT (file_requirement_id) DO UPDATE SET state_machine_id = EXCLUDED.state_machine_id, batch_cycle = EXCLUDED.batch_cycle, is_active = true, updated_at = now();`).join("\n")}
+    CREATE INDEX IF NOT EXISTS processing_pipeline_file_step_function_mappings_lookup ON processing_pipeline_file_step_function_mappings (file_requirement_id) WHERE is_active = true;
+    CREATE INDEX IF NOT EXISTS processing_pipeline_step_function_executions_mapping_started ON processing_pipeline_step_function_executions (file_step_function_mapping_id, started_at DESC);
+  `,
+}, {
+  id: "009_generic_step_function_execution_inputs",
+  sql: `
+    ALTER TABLE processing_pipeline_file_step_function_mappings ALTER COLUMN batch_cycle DROP NOT NULL;
+    ALTER TABLE processing_pipeline_file_step_function_mappings DROP CONSTRAINT IF EXISTS processing_pipeline_file_step_function_mappings_batch_cycle_check;
+    ALTER TABLE processing_pipeline_file_step_function_mappings ADD COLUMN execution_input jsonb NOT NULL DEFAULT '{}'::jsonb;
+    UPDATE processing_pipeline_file_step_function_mappings SET execution_input = jsonb_build_object('batch_cycle', batch_cycle) WHERE batch_cycle IS NOT NULL AND execution_input = '{}'::jsonb;
+    ALTER TABLE processing_pipeline_file_step_function_mappings ADD CONSTRAINT processing_pipeline_file_step_function_mappings_execution_input_object CHECK (jsonb_typeof(execution_input) = 'object');
+  `,
+}, {
+  id: "010_bayan_adhoc_and_batch_step_functions",
+  sql: `
+    UPDATE processing_pipeline_file_step_function_mappings mapping SET execution_input = jsonb_build_object('cycle', mapping.batch_cycle), updated_at = now() FROM processing_pipeline_file_requirements requirement JOIN processing_pipelines pipeline ON pipeline.id = requirement.pipeline_id WHERE requirement.id = mapping.file_requirement_id AND pipeline.code = 'bss_billcycle_bayn' AND mapping.batch_cycle IS NOT NULL;
+    INSERT INTO processing_pipeline_step_function_state_machines (code, state_machine_name, display_order) VALUES (${quote(bayanBillCycleBatchStateMachine.code)}, ${quote(bayanBillCycleBatchStateMachine.name)}, 6) ON CONFLICT (code) DO UPDATE SET state_machine_name = EXCLUDED.state_machine_name, display_order = EXCLUDED.display_order, is_active = true, updated_at = now();
+    CREATE TABLE processing_pipeline_batch_step_function_mappings (
+      id bigserial PRIMARY KEY,
+      pipeline_id bigint NOT NULL REFERENCES processing_pipelines(id) ON DELETE CASCADE,
+      stage_code text NOT NULL REFERENCES processing_pipeline_stages(code),
+      batch_cycle text NOT NULL CHECK (batch_cycle IN (${bayanBillCycleSuffixes.map(quote).join(", ")})),
+      state_machine_id bigint NOT NULL REFERENCES processing_pipeline_step_function_state_machines(id) ON DELETE RESTRICT,
+      execution_input jsonb NOT NULL CHECK (jsonb_typeof(execution_input) = 'object'),
+      is_active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (pipeline_id, stage_code, batch_cycle)
+    );
+    CREATE TABLE processing_pipeline_batch_step_function_mapping_files (
+      batch_mapping_id bigint NOT NULL REFERENCES processing_pipeline_batch_step_function_mappings(id) ON DELETE CASCADE,
+      file_requirement_id bigint NOT NULL UNIQUE REFERENCES processing_pipeline_file_requirements(id) ON DELETE RESTRICT,
+      display_order integer NOT NULL,
+      PRIMARY KEY (batch_mapping_id, file_requirement_id)
+    );
+    ${bayanBillCycleSuffixes.map((cycle, index) => `INSERT INTO processing_pipeline_batch_step_function_mappings (pipeline_id, stage_code, batch_cycle, state_machine_id, execution_input) SELECT pipeline.id, 'inbound', ${quote(cycle)}, state_machine.id, ${quote(`{"batch_cycle":"${cycle}"}`)}::jsonb FROM processing_pipelines pipeline JOIN processing_pipeline_step_function_state_machines state_machine ON state_machine.code = ${quote(bayanBillCycleBatchStateMachine.code)} WHERE pipeline.code = 'bss_billcycle_bayn' ON CONFLICT (pipeline_id, stage_code, batch_cycle) DO UPDATE SET state_machine_id = EXCLUDED.state_machine_id, execution_input = EXCLUDED.execution_input, is_active = true, updated_at = now();`).join("\n")}
+    ${bayanStepFunctionSeedMappings.map(({ requirement, mapping }) => `INSERT INTO processing_pipeline_batch_step_function_mapping_files (batch_mapping_id, file_requirement_id, display_order) SELECT batch_mapping.id, requirement.id, ${bayanBatchFileDisplayOrder[mapping.stateMachineCode]} FROM processing_pipeline_batch_step_function_mappings batch_mapping JOIN processing_pipelines pipeline ON pipeline.id = batch_mapping.pipeline_id JOIN processing_pipeline_file_requirements requirement ON requirement.pipeline_id = pipeline.id AND requirement.stage_code = batch_mapping.stage_code AND requirement.file_name = ${quote(requirement.fileName)} WHERE pipeline.code = ${quote(requirement.pipelineCode)} AND batch_mapping.batch_cycle = ${quote(mapping.batchCycle)} ON CONFLICT (batch_mapping_id, file_requirement_id) DO UPDATE SET display_order = EXCLUDED.display_order;`).join("\n")}
+    ALTER TABLE processing_pipeline_step_function_executions ADD COLUMN batch_step_function_mapping_id bigint REFERENCES processing_pipeline_batch_step_function_mappings(id) ON DELETE RESTRICT;
+    ALTER TABLE processing_pipeline_step_function_executions ALTER COLUMN file_step_function_mapping_id DROP NOT NULL;
+    ALTER TABLE processing_pipeline_step_function_executions ADD COLUMN execution_input jsonb;
+    ALTER TABLE processing_pipeline_step_function_executions ADD COLUMN source_files jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE processing_pipeline_step_function_executions ADD COLUMN error_code text;
+    ALTER TABLE processing_pipeline_step_function_executions ADD COLUMN execution_output text;
+    ALTER TABLE processing_pipeline_step_function_executions ADD COLUMN output_included boolean;
+    UPDATE processing_pipeline_step_function_executions execution SET execution_input = mapping.execution_input, source_files = jsonb_build_array(jsonb_build_object('key', execution.object_key)) FROM processing_pipeline_file_step_function_mappings mapping WHERE execution.file_step_function_mapping_id = mapping.id;
+    ALTER TABLE processing_pipeline_step_function_executions ALTER COLUMN execution_input SET NOT NULL;
+    ALTER TABLE processing_pipeline_step_function_executions ALTER COLUMN object_key DROP NOT NULL;
+    ALTER TABLE processing_pipeline_step_function_executions ADD CONSTRAINT processing_pipeline_step_function_executions_one_target CHECK ((file_step_function_mapping_id IS NOT NULL AND batch_step_function_mapping_id IS NULL) OR (file_step_function_mapping_id IS NULL AND batch_step_function_mapping_id IS NOT NULL));
+    CREATE INDEX processing_pipeline_batch_step_function_mappings_lookup ON processing_pipeline_batch_step_function_mappings (pipeline_id, stage_code, batch_cycle) WHERE is_active = true;
+    CREATE INDEX processing_pipeline_step_function_executions_batch_mapping_started ON processing_pipeline_step_function_executions (batch_step_function_mapping_id, started_at DESC);
   `,
 }];
