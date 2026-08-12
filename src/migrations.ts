@@ -1,4 +1,6 @@
-import { bayanBillCycleBatchStateMachine, bayanBillCycleStateMachines, bayanBillCycleStepFunctionMapping, bayanBillCycleSuffixes, processingPipelineSeedRequirements } from "./processingPipelineCatalog.js";
+import { bayanBillCycleBatchStateMachine, bayanBillCycleStateMachines, bayanBillCycleStepFunctionMapping, bayanBillCycleSuffixes, processingPipelineSeedRequirements } from "./migrationSnapshots/processingPipelineCatalog010.js";
+import { bayanBillCycleBatchStateMachine as refreshedBayanBillCycleBatchStateMachine } from "./processingPipelineCatalog.js";
+import { bayanBillCycleStateMachines as refreshedBayanBillCycleStateMachines, globeBillCycleStateMachines, processingPipelineSeedRequirements as refreshedProcessingPipelineSeedRequirements } from "./migrationSnapshots/processingPipelineCatalogue011.js";
 import { processingPipelineDomains, processingPipelineFilePurposes, processingPipelineFilePurpose, processingPipelineMetadata, processingPipelineSourceSystems } from "./migrationSnapshots/processingPipelineCatalogue006.js";
 
 // Historical migrations 002–004 retain their original database identifiers.
@@ -70,6 +72,31 @@ const bayanStepFunctionSeedMappings = processingPipelineSeedRequirements
     return mapping ? [{ requirement, mapping }] : [];
   });
 const bayanBatchFileDisplayOrder = Object.fromEntries(Object.values(bayanBillCycleStateMachines).map((stateMachine, index) => [stateMachine.code, index + 1]));
+
+const refreshedPipelineCodes = ["bss_billcycle_bayn", "bss_billcycle_glob", "bss_billcycle_inov", "bss_eom_glob", "bss_eom_inov", "bss_eom_bayn", "memo_sst", "iccbs_bayn", "prepaid_reclass"] as const;
+const refreshedRequirements = refreshedProcessingPipelineSeedRequirements.filter((requirement) => refreshedPipelineCodes.includes(requirement.pipelineCode as typeof refreshedPipelineCodes[number]));
+
+function refreshedRequirementUpsertSql(requirement: typeof refreshedRequirements[number], index: number) {
+  const config = spreadsheetConfig(requirement.pipelineCode, requirement.fileName);
+  return `INSERT INTO processing_pipeline_file_requirements (pipeline_id, stage_code, file_name, match_type, legacy_package_name, job_name, display_order, is_active, acquisition_method, source_connection_name, remote_sftp_host, remote_sftp_source_directory, sftp_username, sftp_authentication, schedule_description, source_file_pull_rename_rules, s3_key_prefix, database_schema_destination)
+    SELECT id, ${quote(requirement.stage)}, ${quote(requirement.fileName)}, ${quote(requirement.match)}, ${quote(requirement.legacyPackageName)}, NULL, ${index + 1}, true, ${quote(config.acquisition)}, ${quote(config.connection)}, ${quote(config.host)}, ${quote(config.directory)}, ${quote(config.user)}, ${quote(config.auth)}, ${quote(config.schedule)}, ${quote(config.rules)}, ${quote(config.s3KeyPrefix)}, ${quote(config.schema)} FROM processing_pipelines WHERE code = ${quote(requirement.pipelineCode)}
+    ON CONFLICT (pipeline_id, stage_code, file_name) DO UPDATE SET match_type = EXCLUDED.match_type, legacy_package_name = EXCLUDED.legacy_package_name, job_name = NULL, display_order = EXCLUDED.display_order, is_active = true, acquisition_method = EXCLUDED.acquisition_method, source_connection_name = EXCLUDED.source_connection_name, remote_sftp_host = EXCLUDED.remote_sftp_host, remote_sftp_source_directory = EXCLUDED.remote_sftp_source_directory, sftp_username = EXCLUDED.sftp_username, sftp_authentication = EXCLUDED.sftp_authentication, schedule_description = EXCLUDED.schedule_description, source_file_pull_rename_rules = EXCLUDED.source_file_pull_rename_rules, s3_key_prefix = EXCLUDED.s3_key_prefix, database_schema_destination = EXCLUDED.database_schema_destination, updated_at = now();`;
+}
+
+function deactivateSupersededRequirementsSql(pipelineCode: typeof refreshedPipelineCodes[number]) {
+  const names = refreshedRequirements.filter((requirement) => requirement.pipelineCode === pipelineCode).map((requirement) => quote(requirement.fileName)).join(", ");
+  return `UPDATE processing_pipeline_file_requirements SET is_active = false, updated_at = now() WHERE pipeline_id = (SELECT id FROM processing_pipelines WHERE code = ${quote(pipelineCode)}) AND stage_code = 'inbound' AND file_name NOT IN (${names});`;
+}
+
+function refreshedStepFunctionMapping(fileName: string, pipelineCode: "bss_billcycle_bayn" | "bss_billcycle_glob") {
+  const cycle = fileName.match(/_(\d{2})(?=\.[^.]+$)/)?.[1];
+  if (!cycle) return null;
+  const machines = pipelineCode === "bss_billcycle_bayn" ? refreshedBayanBillCycleStateMachines : globeBillCycleStateMachines;
+  const code = fileName.startsWith("308.") ? machines.billedAdjustments.code : fileName.startsWith("318.") ? machines.billedCharges.code : fileName.startsWith("411. Bill Control_PHP") ? machines.billControlPhp.code : fileName.startsWith("411. Bill Control_USD") && pipelineCode === "bss_billcycle_bayn" ? refreshedBayanBillCycleStateMachines.billControlUsd.code : fileName.startsWith("sap_glbilled") ? machines.sapGlbilled.code : null;
+  return code ? { code, cycle } : null;
+}
+
+const refreshedAdhocMappings = refreshedRequirements.flatMap((requirement) => requirement.pipelineCode === "bss_billcycle_bayn" || requirement.pipelineCode === "bss_billcycle_glob" ? (() => { const mapping = refreshedStepFunctionMapping(requirement.fileName, requirement.pipelineCode); return mapping ? [{ requirement, mapping }] : []; })() : []);
 
 export const migrations = [{
   id: "001_initial",
@@ -354,5 +381,17 @@ export const migrations = [{
     ALTER TABLE processing_pipeline_step_function_executions ADD CONSTRAINT processing_pipeline_step_function_executions_one_target CHECK ((file_step_function_mapping_id IS NOT NULL AND batch_step_function_mapping_id IS NULL) OR (file_step_function_mapping_id IS NULL AND batch_step_function_mapping_id IS NOT NULL));
     CREATE INDEX processing_pipeline_batch_step_function_mappings_lookup ON processing_pipeline_batch_step_function_mappings (pipeline_id, stage_code, batch_cycle) WHERE is_active = true;
     CREATE INDEX processing_pipeline_step_function_executions_batch_mapping_started ON processing_pipeline_step_function_executions (batch_step_function_mapping_id, started_at DESC);
+  `,
+}, {
+  id: "011_processing_pipeline_catalogue_refresh",
+  sql: `
+    ${refreshedPipelineCodes.map(deactivateSupersededRequirementsSql).join("\n")}
+    ${refreshedRequirements.map(refreshedRequirementUpsertSql).join("\n")}
+    ${[...Object.values(refreshedBayanBillCycleStateMachines), ...Object.values(globeBillCycleStateMachines)].map((stateMachine, index) => `INSERT INTO processing_pipeline_step_function_state_machines (code, state_machine_name, display_order) VALUES (${quote(stateMachine.code)}, ${quote(stateMachine.name)}, ${index + 1}) ON CONFLICT (code) DO UPDATE SET state_machine_name = EXCLUDED.state_machine_name, display_order = EXCLUDED.display_order, is_active = true, updated_at = now();`).join("\n")}
+    UPDATE processing_pipeline_file_step_function_mappings mapping SET is_active = false, updated_at = now() FROM processing_pipeline_file_requirements requirement JOIN processing_pipelines pipeline ON pipeline.id = requirement.pipeline_id WHERE requirement.id = mapping.file_requirement_id AND pipeline.code IN ('bss_billcycle_bayn', 'bss_billcycle_glob') AND requirement.is_active = false;
+    ${refreshedAdhocMappings.map(({ requirement, mapping }) => `INSERT INTO processing_pipeline_file_step_function_mappings (file_requirement_id, state_machine_id, batch_cycle, execution_input, is_active) SELECT requirement.id, state_machine.id, ${quote(mapping.cycle)}, ${quote(`{"cycle":"${mapping.cycle}"}`)}::jsonb, true FROM processing_pipeline_file_requirements requirement JOIN processing_pipelines pipeline ON pipeline.id = requirement.pipeline_id JOIN processing_pipeline_step_function_state_machines state_machine ON state_machine.code = ${quote(mapping.code)} WHERE pipeline.code = ${quote(requirement.pipelineCode)} AND requirement.stage_code = ${quote(requirement.stage)} AND requirement.file_name = ${quote(requirement.fileName)} ON CONFLICT (file_requirement_id) DO UPDATE SET state_machine_id = EXCLUDED.state_machine_id, batch_cycle = EXCLUDED.batch_cycle, execution_input = EXCLUDED.execution_input, is_active = true, updated_at = now();`).join("\n")}
+    UPDATE processing_pipeline_batch_step_function_mappings mapping SET state_machine_id = state_machine.id, execution_input = jsonb_build_object('batch_cycle', mapping.batch_cycle), is_active = true, updated_at = now() FROM processing_pipelines pipeline JOIN processing_pipeline_step_function_state_machines state_machine ON state_machine.code = ${quote(refreshedBayanBillCycleBatchStateMachine.code)} WHERE mapping.pipeline_id = pipeline.id AND pipeline.code = 'bss_billcycle_bayn';
+    DELETE FROM processing_pipeline_batch_step_function_mapping_files member USING processing_pipeline_batch_step_function_mappings mapping, processing_pipelines pipeline WHERE member.batch_mapping_id = mapping.id AND mapping.pipeline_id = pipeline.id AND pipeline.code = 'bss_billcycle_bayn';
+    ${refreshedAdhocMappings.filter(({ requirement }) => requirement.pipelineCode === "bss_billcycle_bayn").map(({ requirement, mapping }) => `INSERT INTO processing_pipeline_batch_step_function_mapping_files (batch_mapping_id, file_requirement_id, display_order) SELECT batch_mapping.id, requirement.id, ${({ billedAdjustments: 1, billedCharges: 2, billControlPhp: 3, billControlUsd: 4, sapGlbilled: 5 } as Record<string, number>)[mapping.code.includes("308") ? "billedAdjustments" : mapping.code.includes("318") ? "billedCharges" : mapping.code.includes("411_php") ? "billControlPhp" : mapping.code.includes("411_usd") ? "billControlUsd" : "sapGlbilled"]} FROM processing_pipeline_batch_step_function_mappings batch_mapping JOIN processing_pipelines pipeline ON pipeline.id = batch_mapping.pipeline_id JOIN processing_pipeline_file_requirements requirement ON requirement.pipeline_id = pipeline.id AND requirement.stage_code = batch_mapping.stage_code AND requirement.file_name = ${quote(requirement.fileName)} WHERE pipeline.code = 'bss_billcycle_bayn' AND batch_mapping.batch_cycle = ${quote(mapping.cycle)} ON CONFLICT (batch_mapping_id, file_requirement_id) DO UPDATE SET display_order = EXCLUDED.display_order;`).join("\n")}
   `,
 }];

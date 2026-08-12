@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bayanBillCycleStateMachines, bayanBillCycleStepFunctionMapping, bayanBillCycleSuffixes, matchesProcessingPipelineRequirement, processingPipelineSeedRequirements } from "../src/processingPipelineCatalog.js";
+import { bayanBillCycleStateMachines, bayanBillCycleStepFunctionMapping, bayanBillCycleSuffixes, globeBillCycleStateMachines, matchesProcessingPipelineRequirement, processingPipelineSeedRequirements } from "../src/processingPipelineCatalog.js";
 
 describe("Processing Pipeline catalogue", () => {
   it("contains generic pipeline requirements", () => {
@@ -13,7 +13,7 @@ describe("Processing Pipeline catalogue", () => {
   });
   it("keeps the production pipeline and filename mappings", () => {
     expect(processingPipelineSeedRequirements).toContainEqual(expect.objectContaining({ pipelineCode: "bss_billcycle_glob", fileName: "308. Billed Adjustments Monthly Summary Report_G_01.XLSX" }));
-    expect(processingPipelineSeedRequirements).toContainEqual(expect.objectContaining({ pipelineCode: "prepaid_reclass", fileName: "318. Billed Charges Summary Report_G_BC27.xlsx" }));
+    expect(processingPipelineSeedRequirements).toContainEqual(expect.objectContaining({ pipelineCode: "prepaid_reclass", fileName: "318. Billed Charges Summary Report_G_BC27.XLSX" }));
   });
   it("maps every Bayan bill-cycle file to a state machine and its filename suffix", () => {
     const bayanRequirements = processingPipelineSeedRequirements.filter((item) => item.pipelineCode === "bss_billcycle_bayn");
@@ -24,5 +24,13 @@ describe("Processing Pipeline catalogue", () => {
       expect(mappings).toHaveLength(5);
       expect(mappings.every((mapping) => mapping?.batchCycle === suffix)).toBe(true);
     }
+  });
+  it("uses the refreshed bill-cycle files and Step Functions targets", () => {
+    expect(processingPipelineSeedRequirements.filter((item) => item.pipelineCode === "bss_billcycle_glob")).toHaveLength(44);
+    expect(processingPipelineSeedRequirements.filter((item) => item.pipelineCode === "bss_billcycle_inov")).toHaveLength(55);
+    expect(processingPipelineSeedRequirements.filter((item) => item.pipelineCode === "memo_sst")).toHaveLength(72);
+    expect(processingPipelineSeedRequirements.filter((item) => item.pipelineCode === "iccbs_bayn")).toHaveLength(44);
+    expect(bayanBillCycleStateMachines.billedAdjustments.name).toBe("isg-esatp-dv-bss_billcycle_bayn_preload-state_machine_308");
+    expect(globeBillCycleStateMachines.sapGlbilled.name).toBe("isg-esatp-dv-bss_billcycle_glob_preload-state_machine_SAPgbilled");
   });
 });
