@@ -31,9 +31,9 @@ describe("OpenAPI documentation", () => {
     expect(operationCount).toBe(16);
     expect(openApiDocument.paths["/api/uploads"]).toBeUndefined();
     expect(openApiDocument.paths["/api/workflows/prepaid/report.csv"]).toBeUndefined();
-    expect(openApiDocument.paths["/api/processing-pipelines/{pipelineCode}/files"]?.get?.parameters).toHaveLength(2);
-    expect(openApiDocument.paths["/api/processing-pipelines/{pipelineCode}/execution-details"]?.get?.parameters).toHaveLength(3);
-    expect(openApiDocument.paths["/api/processing-pipelines/{pipelineCode}/batch-execution-details"]?.get?.parameters).toHaveLength(3);
+    expect(openApiDocument.paths["/api/processing-pipelines/{pipelineCode}/files"]?.get?.parameters).toHaveLength(1);
+    expect(openApiDocument.paths["/api/processing-pipelines/{pipelineCode}/execution-details"]?.get?.parameters).toHaveLength(2);
+    expect(openApiDocument.paths["/api/processing-pipelines/{pipelineCode}/batch-execution-details"]?.get?.parameters).toHaveLength(2);
     expect(openApiDocument.paths["/api/auth/login"]?.post?.security).toEqual([]);
     expect(openApiDocument.paths["/api/auth/login"]?.post?.requestBody).toBeDefined();
     expect(openApiDocument.paths["/api/processing-pipelines"]?.get?.parameters).toBeUndefined();

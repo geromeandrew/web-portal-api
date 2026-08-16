@@ -4,7 +4,6 @@ const success = (summary: string): OpenAPIV3.OperationObject => ({ summary, resp
 const created = (summary: string): OpenAPIV3.OperationObject => ({ summary, responses: { "201": { description: "Created." } } });
 const noContent = (summary: string): OpenAPIV3.OperationObject => ({ summary, responses: { "204": { description: "No content." } } });
 const csv = (summary: string): OpenAPIV3.OperationObject => ({ summary, responses: { "200": { description: "CSV download.", content: { "text/csv": { schema: { type: "string", format: "binary" } } } } } });
-const stage: OpenAPIV3.ParameterObject = { name: "stage", in: "query", required: true, schema: { type: "string", enum: ["inbound", "outbound", "processed", "error"] } };
 const catalogueParameters: OpenAPIV3.ParameterObject[] = [
   { name: "domain", in: "query", schema: { type: "string" } }, { name: "system", in: "query", schema: { type: "string" } },
   { name: "filePurpose", in: "query", schema: { type: "string" } }, { name: "stage", in: "query", schema: { type: "string", enum: ["inbound", "outbound", "processed", "error"] } },
@@ -45,30 +44,29 @@ const createUserBody = jsonBody({ type: "object", required: ["email", "temporary
 const updateUserBody = jsonBody({ type: "object", properties: { isActive: { type: "boolean" }, temporaryPassword: { type: "string", format: "password", minLength: 12 } }, minProperties: 1 });
 const freezeLayoutBody = jsonBody({ type: "object", required: ["frozen"], properties: { frozen: { type: "boolean" } } });
 const workflowUploadBody: OpenAPIV3.RequestBodyObject = { required: true, content: { "multipart/form-data": { schema: { type: "object", required: ["workflow", "file"], properties: { workflow: { type: "string", enum: ["prepaid", "memo", "aprm"] }, slot: { type: "string", description: "Required for Prepaid uploads." }, file: { type: "string", format: "binary" } } } } } };
-const pipelineUploadBody: OpenAPIV3.RequestBodyObject = { required: true, content: { "multipart/form-data": { schema: { type: "object", required: ["stage", "expectedFileName", "file"], properties: { stage: { type: "string", enum: ["inbound", "outbound", "processed", "error"] }, expectedFileName: { type: "string" }, replace: { type: "string", enum: ["true", "false"], default: "false" }, file: { type: "string", format: "binary" } } } } } };
+const pipelineUploadBody: OpenAPIV3.RequestBodyObject = { required: true, content: { "multipart/form-data": { schema: { type: "object", required: ["expectedFileName", "file"], properties: { expectedFileName: { type: "string" }, replace: { type: "string", enum: ["true", "false"], default: "false" }, file: { type: "string", format: "binary" } } } } } };
 const startRunBody: OpenAPIV3.RequestBodyObject = {
   required: true,
-  description: "Required file identity. The API resolves this exact configured filename to its mapped Step Functions state machine; it never starts an entire pipeline.",
+    description: "Required file identity. The API resolves this exact configured filename to its mapped Step Functions state machine; it never starts an entire pipeline.",
   content: {
     "application/json": {
       schema: {
         type: "object",
-        required: ["stage", "expectedFileName"],
+        required: ["expectedFileName"],
         properties: {
-          stage: { type: "string", enum: ["inbound", "outbound", "processed", "error"], example: "inbound" },
           expectedFileName: { type: "string", example: "308. Billed Adjustments Monthly Summary Report_B_01.xlsx" },
         },
       },
       examples: {
         selectedFile: {
           summary: "Run the Step Functions state machine mapped to one uploaded Bayan bill-cycle file",
-          value: { stage: "inbound", expectedFileName: "308. Billed Adjustments Monthly Summary Report_B_01.xlsx" },
+          value: { expectedFileName: "308. Billed Adjustments Monthly Summary Report_B_01.xlsx" },
         },
       },
     },
   },
 };
-const startBatchRunBody = jsonBody({ type: "object", required: ["stage", "batchCycle"], properties: { stage: { type: "string", enum: ["inbound", "outbound", "processed", "error"], example: "inbound" }, batchCycle: { type: "string", pattern: "^\\d{2}$", example: "01" } } }, "Starts the mapped batch state machine only after every member file is available.");
+const startBatchRunBody = jsonBody({ type: "object", required: ["batchCycle"], properties: { batchCycle: { type: "string", pattern: "^\\d{2}$", example: "01" } } }, "Starts the mapped batch state machine only after every member file is available.");
 
 const allOpenApiDocument: OpenAPIV3.Document = {
   openapi: "3.0.3",
@@ -94,14 +92,14 @@ const allOpenApiDocument: OpenAPIV3.Document = {
     "/api/workflows/prepaid/report.csv": { get: csv("Download Prepaid report") },
     "/api/workflows/memo/state": { get: success("Get Memo state") },
     "/api/workflows/memo/errors.csv": { get: csv("Download Memo exceptions") },
-    "/api/processing-pipelines": { get: success("List processing pipelines and stages") },
+    "/api/processing-pipelines": { get: success("List processing pipelines") },
     "/api/processing-pipelines/{pipelineCode}": { get: { ...success("Get processing pipeline details"), parameters: [pipelineCodePath] } },
-    "/api/processing-pipelines/{pipelineCode}/requirements": { get: { ...success("List a pipeline's configured file requirements"), parameters: [pipelineCodePath, stage] } },
-    "/api/processing-pipelines/{pipelineCode}/execution-details": { get: { ...success("Get the resolved Step Functions execution preflight"), description: "Requires `stage` and `expectedFileName`. Returns the exact configured execution input, source-file availability, and live state-machine metadata without exposing the workflow definition.", parameters: [pipelineCodePath, stage, expectedFileName] } },
-    "/api/processing-pipelines/{pipelineCode}/batch-execution-details": { get: { ...success("Get the resolved Step Functions batch execution preflight"), description: "Requires `stage` and `batchCycle`. Returns all required batch source files, the exact batch input, and live state-machine metadata.", parameters: [pipelineCodePath, stage, batchCycle] } },
-    "/api/processing-pipelines/{pipelineCode}/files": { get: { ...success("List configured pipeline files"), parameters: [pipelineCodePath, stage] }, post: { ...created("Upload a pipeline file"), parameters: [pipelineCodePath], requestBody: pipelineUploadBody } },
-    "/api/processing-pipelines/{pipelineCode}/files/content": { get: { ...success("Stream a pipeline file"), parameters: [pipelineCodePath, stage, { name: "key", in: "query", required: true, schema: { type: "string" } }] } },
-    "/api/processing-pipelines/{pipelineCode}/runs": { post: { ...created("Start the Step Functions execution mapped to one specific pipeline file"), description: "Requires `stage` and `expectedFileName` in the request body. The file must be configured, already uploaded, and have a Step Functions mapping.", parameters: [pipelineCodePath], requestBody: startRunBody } },
+    "/api/processing-pipelines/{pipelineCode}/requirements": { get: { ...success("List a pipeline's configured file requirements"), parameters: [pipelineCodePath] } },
+    "/api/processing-pipelines/{pipelineCode}/execution-details": { get: { ...success("Get the resolved Step Functions execution preflight"), description: "Requires `expectedFileName`. Returns the exact configured execution input, source-file availability, and live state-machine metadata without exposing the workflow definition.", parameters: [pipelineCodePath, expectedFileName] } },
+    "/api/processing-pipelines/{pipelineCode}/batch-execution-details": { get: { ...success("Get the resolved Step Functions batch execution preflight"), description: "Requires `batchCycle`. Returns all required batch source files, the exact batch input, and live state-machine metadata.", parameters: [pipelineCodePath, batchCycle] } },
+    "/api/processing-pipelines/{pipelineCode}/files": { get: { ...success("List configured pipeline files"), parameters: [pipelineCodePath] }, post: { ...created("Upload a pipeline file"), parameters: [pipelineCodePath], requestBody: pipelineUploadBody } },
+    "/api/processing-pipelines/{pipelineCode}/files/content": { get: { ...success("Stream a pipeline file"), parameters: [pipelineCodePath, { name: "key", in: "query", required: true, schema: { type: "string" } }] } },
+    "/api/processing-pipelines/{pipelineCode}/runs": { post: { ...created("Start the Step Functions execution mapped to one specific pipeline file"), description: "Requires `expectedFileName` in the request body. The file must be configured, already uploaded, and have a Step Functions mapping.", parameters: [pipelineCodePath], requestBody: startRunBody } },
     "/api/processing-pipelines/{pipelineCode}/batch-runs": { post: { ...created("Start the Step Functions batch execution for one bill cycle"), parameters: [pipelineCodePath], requestBody: startBatchRunBody } },
     "/api/processing-pipelines/{pipelineCode}/runs/{runId}": { get: { ...success("Get detailed processing execution status"), parameters: [pipelineCodePath, runIdPath] } },
   },

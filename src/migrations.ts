@@ -394,4 +394,91 @@ export const migrations = [{
     DELETE FROM processing_pipeline_batch_step_function_mapping_files member USING processing_pipeline_batch_step_function_mappings mapping, processing_pipelines pipeline WHERE member.batch_mapping_id = mapping.id AND mapping.pipeline_id = pipeline.id AND pipeline.code = 'bss_billcycle_bayn';
     ${refreshedAdhocMappings.filter(({ requirement }) => requirement.pipelineCode === "bss_billcycle_bayn").map(({ requirement, mapping }) => `INSERT INTO processing_pipeline_batch_step_function_mapping_files (batch_mapping_id, file_requirement_id, display_order) SELECT batch_mapping.id, requirement.id, ${({ billedAdjustments: 1, billedCharges: 2, billControlPhp: 3, billControlUsd: 4, sapGlbilled: 5 } as Record<string, number>)[mapping.code.includes("308") ? "billedAdjustments" : mapping.code.includes("318") ? "billedCharges" : mapping.code.includes("411_php") ? "billControlPhp" : mapping.code.includes("411_usd") ? "billControlUsd" : "sapGlbilled"]} FROM processing_pipeline_batch_step_function_mappings batch_mapping JOIN processing_pipelines pipeline ON pipeline.id = batch_mapping.pipeline_id JOIN processing_pipeline_file_requirements requirement ON requirement.pipeline_id = pipeline.id AND requirement.stage_code = batch_mapping.stage_code AND requirement.file_name = ${quote(requirement.fileName)} WHERE pipeline.code = 'bss_billcycle_bayn' AND batch_mapping.batch_cycle = ${quote(mapping.cycle)} ON CONFLICT (batch_mapping_id, file_requirement_id) DO UPDATE SET display_order = EXCLUDED.display_order;`).join("\n")}
   `,
+}, {
+  id: "012_pipeline_file_scope_and_bayan_b_mapping",
+  sql: `
+    UPDATE processing_pipeline_file_requirements requirement
+      SET is_active = true, s3_key_prefix = pipeline.code || '/', updated_at = now()
+      FROM processing_pipelines pipeline
+      WHERE requirement.pipeline_id = pipeline.id
+        AND pipeline.code = 'bss_billcycle_bayn'
+        AND (requirement.file_name LIKE '%_B_%' OR requirement.file_name LIKE 'sap_glbilled_b_%');
+    UPDATE processing_pipeline_file_step_function_mappings mapping
+      SET is_active = true, updated_at = now()
+      FROM processing_pipeline_file_requirements requirement
+      JOIN processing_pipelines pipeline ON pipeline.id = requirement.pipeline_id
+      WHERE mapping.file_requirement_id = requirement.id
+        AND pipeline.code = 'bss_billcycle_bayn'
+        AND requirement.is_active
+        AND (requirement.file_name LIKE '%_B_%' OR requirement.file_name LIKE 'sap_glbilled_b_%');
+    UPDATE processing_pipeline_file_requirements requirement
+      SET is_active = false, updated_at = now()
+      FROM processing_pipelines pipeline
+      WHERE requirement.pipeline_id = pipeline.id
+        AND pipeline.code = 'bss_billcycle_bayn'
+        AND (requirement.file_name LIKE '%_G_%' OR requirement.file_name LIKE 'sap_glbilled_G_%');
+    UPDATE processing_pipeline_file_step_function_mappings mapping
+      SET is_active = false, updated_at = now()
+      FROM processing_pipeline_file_requirements requirement
+      JOIN processing_pipelines pipeline ON pipeline.id = requirement.pipeline_id
+      WHERE mapping.file_requirement_id = requirement.id
+        AND pipeline.code = 'bss_billcycle_bayn'
+        AND NOT requirement.is_active;
+    UPDATE processing_pipeline_file_requirements requirement
+      SET s3_key_prefix = pipeline.code || '/', updated_at = now()
+      FROM processing_pipelines pipeline
+      WHERE requirement.pipeline_id = pipeline.id AND requirement.is_active;
+
+    DELETE FROM processing_pipeline_batch_step_function_mapping_files member
+      USING processing_pipeline_batch_step_function_mappings batch, processing_pipelines pipeline
+      WHERE member.batch_mapping_id = batch.id AND batch.pipeline_id = pipeline.id AND pipeline.code = 'bss_billcycle_bayn';
+    INSERT INTO processing_pipeline_batch_step_function_mapping_files (batch_mapping_id, file_requirement_id, display_order)
+      SELECT batch.id, requirement.id,
+        CASE state_machine.code
+          WHEN 'bayan_billcycle_308_preload' THEN 1
+          WHEN 'bayan_billcycle_318_preload' THEN 2
+          WHEN 'bayan_billcycle_411_php_preload' THEN 3
+          WHEN 'bayan_billcycle_411_usd_preload' THEN 4
+          ELSE 5
+        END
+      FROM processing_pipeline_batch_step_function_mappings batch
+      JOIN processing_pipelines pipeline ON pipeline.id = batch.pipeline_id
+      JOIN processing_pipeline_file_requirements requirement ON requirement.pipeline_id = pipeline.id AND requirement.is_active
+      JOIN processing_pipeline_file_step_function_mappings mapping ON mapping.file_requirement_id = requirement.id AND mapping.is_active AND mapping.batch_cycle = batch.batch_cycle
+      JOIN processing_pipeline_step_function_state_machines state_machine ON state_machine.id = mapping.state_machine_id
+      WHERE pipeline.code = 'bss_billcycle_bayn';
+
+    DROP INDEX IF EXISTS processing_pipeline_file_requirements_lookup;
+    DROP INDEX IF EXISTS processing_pipeline_requirements_purpose_lookup;
+    ALTER TABLE processing_pipeline_file_requirements DROP CONSTRAINT IF EXISTS billing_cycle_expected_files_status_code_fkey;
+    ALTER TABLE processing_pipeline_file_requirements DROP CONSTRAINT IF EXISTS billing_cycle_expected_files_pipeline_id_status_code_file_n_key;
+    ALTER TABLE processing_pipeline_file_requirements DROP COLUMN stage_code;
+    ALTER TABLE processing_pipeline_file_requirements ADD CONSTRAINT processing_pipeline_file_requirements_pipeline_file_name_key UNIQUE (pipeline_id, file_name);
+    CREATE INDEX processing_pipeline_file_requirements_lookup ON processing_pipeline_file_requirements (pipeline_id, display_order) WHERE is_active = true;
+
+    DROP INDEX IF EXISTS processing_pipeline_batch_step_function_mappings_lookup;
+    ALTER TABLE processing_pipeline_batch_step_function_mappings DROP CONSTRAINT IF EXISTS processing_pipeline_batch_step_function_mapping_stage_code_fkey;
+    ALTER TABLE processing_pipeline_batch_step_function_mappings DROP CONSTRAINT IF EXISTS processing_pipeline_batch_ste_pipeline_id_stage_code_batch__key;
+    ALTER TABLE processing_pipeline_batch_step_function_mappings DROP COLUMN stage_code;
+    ALTER TABLE processing_pipeline_batch_step_function_mappings ADD CONSTRAINT processing_pipeline_batch_step_function_mappings_pipeline_cycle_key UNIQUE (pipeline_id, batch_cycle);
+    CREATE INDEX processing_pipeline_batch_step_function_mappings_lookup ON processing_pipeline_batch_step_function_mappings (pipeline_id, batch_cycle) WHERE is_active = true;
+    DROP TABLE processing_pipeline_stages;
+  `,
+}, {
+  id: "013_uppercase_excel_file_extensions",
+  sql: `
+    UPDATE processing_pipeline_file_requirements inactive
+      SET file_name = inactive.file_name || '.superseded', updated_at = now()
+      WHERE NOT inactive.is_active
+        AND inactive.file_name ~* '\\.xlsx$'
+        AND EXISTS (
+          SELECT 1 FROM processing_pipeline_file_requirements active
+          WHERE active.pipeline_id = inactive.pipeline_id
+            AND active.is_active
+            AND lower(active.file_name) = lower(inactive.file_name)
+        );
+    UPDATE processing_pipeline_file_requirements
+      SET file_name = regexp_replace(file_name, '\\.xlsx$', '.XLSX', 'i'), updated_at = now()
+      WHERE is_active AND file_name ~* '\\.xlsx$';
+  `,
 }];

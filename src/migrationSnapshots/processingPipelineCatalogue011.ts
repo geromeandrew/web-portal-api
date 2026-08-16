@@ -1,5 +1,8 @@
-import type { ProcessingPipelineFileRequirement } from "../processingPipelineCatalog.js";
 import { bayanBillCycleSuffixes, processingPipelineSeedRequirements as baseRequirements } from "./processingPipelineCatalog010.js";
+
+type ProcessingPipelineFileRequirement = {
+  pipelineCode: string; stage: "inbound"; fileName: string; match: "exact" | "glob"; legacyPackageName: string | null; jobName: string | null;
+};
 
 export const bayanBillCycleStateMachines = {
   billedAdjustments: { code: "bayan_billcycle_308_preload", name: "isg-esatp-dv-bss_billcycle_bayn_preload-state_machine_308" },

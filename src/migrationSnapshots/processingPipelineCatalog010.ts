@@ -1,9 +1,7 @@
-import type { ProcessingPipelineStage } from "../processingPipelineStorage.js";
-
 export type ProcessingPipelineFileRequirement = {
   id?: number;
   pipelineCode: string;
-  stage: ProcessingPipelineStage;
+  stage: "inbound";
   fileName: string;
   match: "exact" | "glob";
   legacyPackageName: string | null;
