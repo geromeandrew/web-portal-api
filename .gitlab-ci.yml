@@ -1,0 +1,43 @@
+default:
+    tags:
+        - $PE_RUNNER_TAG
+        
+include:
+    - project: globetelecom/common-toolchains/pipeline-coe/pipeline-modules
+      ref: main
+      file:
+       - Application.gitlab-ci.yml
+
+stages:
+    - test
+    - build_image
+    - scan_image
+    - publish_image
+
+
+build_image:
+    stage: build_image
+    extends: .docker-build:kaniko-updated-vars
+    only:
+        - tags
+    artifacts:
+        paths:
+            - "*.tar"
+
+scan_image:
+    stage: scan_image
+    extends: .app-scan:prisma-image-pe
+    only:
+        - tags
+    needs:
+        - build_image
+
+publish_image:
+    stage: publish_image
+    extends: .docker-publish:jfrog
+    script:
+        - crane auth login -u ${JFROG_USERNAME} -p ${JFROG_PASSWORD} ${PE_JFROG_URL}
+        - mv app_image.tar ${CI_PROJECT_NAME}.tar
+        - crane push ${CI_PROJECT_DIR}/${CI_PROJECT_NAME}.tar "${PE_JFROG_URL}/${PE_JFROG_REPOSITORY}/${CI_PROJECT_NAME}:${CI_COMMIT_TAG}"
+    only:
+        - tags
