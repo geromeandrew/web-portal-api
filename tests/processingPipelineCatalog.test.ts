@@ -66,9 +66,11 @@ describe("Processing Pipeline catalogue", () => {
     );
     expect(bayanRequirements).toHaveLength(55);
     expect(
-      bayanRequirements.every(
-        (item) =>
-          item.fileName.includes("_B_") || item.fileName.includes("_b_"),
+      bayanRequirements.every((item) => item.fileName.includes("_B_")),
+    ).toBe(true);
+    expect(
+      processingPipelineSeedRequirements.every(
+        (item) => !/_[a-z]+_\d{2}\.[^.]+$/.test(item.fileName),
       ),
     ).toBe(true);
     expect(

@@ -196,7 +196,7 @@ const bayanBillCycleFiles = [
   ],
   ["411. Bill Control_PHP_B_01.XLSX", "MyBss_Bayan_411_Bill_Control_PHP.dtsx"],
   ["411. Bill Control_USD_B_01.XLSX", "MyBss_Bayan_411_Bill_Control_USD.dtsx"],
-  ["sap_glbilled_b_01.txt", "MyBss_Bayan_sapglbilled.dtsx"],
+  ["sap_glbilled_B_01.txt", "MyBss_Bayan_sapglbilled.dtsx"],
 ] as const;
 add(
   "BSS Bill Cycles - Bayan",

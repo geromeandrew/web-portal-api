@@ -723,4 +723,63 @@ export const migrations = [
       WHERE is_active AND file_name ~* '\\.xlsx$';
   `,
   },
+  {
+    id: "014_uppercase_bill_cycle_filename_markers",
+    sql: `
+    DO $$
+    DECLARE
+      candidate record;
+      canonical_id bigint;
+      canonical_is_active boolean;
+    BEGIN
+      FOR candidate IN
+        SELECT requirement.id,
+          requirement.pipeline_id,
+          requirement.is_active,
+          regexp_replace(
+            requirement.file_name,
+            '_([a-z]+)_([0-9]{2})([.][^.]+)$',
+            '_' || upper((regexp_match(requirement.file_name, '_([a-z]+)_[0-9]{2}[.][^.]+$'))[1]) || '_\\2\\3'
+          ) AS canonical_name
+        FROM processing_pipeline_file_requirements requirement
+        WHERE requirement.file_name ~ '_[a-z]+_[0-9]{2}[.][^.]+$'
+      LOOP
+        canonical_id := NULL;
+        canonical_is_active := NULL;
+        SELECT requirement.id, requirement.is_active
+          INTO canonical_id, canonical_is_active
+          FROM processing_pipeline_file_requirements requirement
+          WHERE requirement.pipeline_id = candidate.pipeline_id
+            AND requirement.file_name = candidate.canonical_name
+          LIMIT 1;
+
+        IF FOUND AND candidate.is_active AND NOT canonical_is_active THEN
+          UPDATE processing_pipeline_file_step_function_mappings
+            SET is_active = false, updated_at = now()
+            WHERE file_requirement_id = canonical_id;
+          UPDATE processing_pipeline_file_requirements
+            SET file_name = file_name || '.superseded-' || id,
+              updated_at = now()
+            WHERE id = canonical_id;
+        ELSIF FOUND THEN
+          UPDATE processing_pipeline_file_step_function_mappings
+            SET is_active = false, updated_at = now()
+            WHERE file_requirement_id = candidate.id;
+          UPDATE processing_pipeline_file_requirements
+            SET file_name = file_name || '.superseded-' || id,
+              is_active = false,
+              updated_at = now()
+            WHERE id = candidate.id;
+          CONTINUE;
+        END IF;
+
+        UPDATE processing_pipeline_file_requirements
+          SET file_name = candidate.canonical_name,
+            updated_at = now()
+          WHERE id = candidate.id;
+      END LOOP;
+    END
+    $$;
+  `,
+  },
 ];
