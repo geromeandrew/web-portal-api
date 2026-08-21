@@ -31,7 +31,9 @@ export function createApplication(dependencies: AppDependencies): Express {
 }
 
 function registerPublicRoutes(app: Express, { pool, config }: AppDependencies) {
-  const openApiDocument = createOpenApiDocument(config.OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS);
+  const openApiDocument = createOpenApiDocument(
+    config.OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS,
+  );
   app.get("/", (_request, response) => response.redirect("/api/docs/"));
   app.get("/api/openapi.json", (_request, response) =>
     response.json(openApiDocument),

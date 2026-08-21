@@ -25,7 +25,7 @@ pnpm db:migrate
 pnpm dev
 ```
 
-Set the real RDS URL, JWT, administrator, Lambda, S3 bucket/region, IAM user access key, and upload-policy values in `.env` before starting the service. Processing Pipelines reads `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from the API container only; attach least-privilege `s3:ListBucket` access on `S3_BUCKET`, `s3:GetObject` access on `S3_BUCKET/*`, `glue:StartJobRun` plus `glue:GetJobRun` access on mapped processing-job ARNs, and `logs:DescribeLogStreams` plus `logs:GetLogEvents` access on the Glue error log groups (`/aws-glue/jobs/error` and `/aws-glue/jobs/logs-v2`) to that IAM user. Do not add AWS access keys to the frontend or commit them to `.env`.
+Set the real RDS URL, JWT, administrator, Lambda, S3 bucket/region, IAM user access key, and upload-policy values in `.env` before starting the service. Processing Pipelines reads `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from the API container only; attach least-privilege `s3:ListBucket` access on `S3_BUCKET`, `s3:GetObject` access on `S3_BUCKET/*`, `states:StartExecution`, `states:DescribeExecution`, and `states:DescribeStateMachine` access on mapped state-machine ARNs, and `sts:GetCallerIdentity` to that IAM user. Do not add AWS access keys to the frontend or commit them to `.env`.
 
 ## EC2 deployment
 
@@ -45,6 +45,25 @@ pnpm db:migrate
 docker compose config
 ```
 
+## Docker Hub certificate error
+
+If Docker reports that a certificate for another hostname (for example,
+`securelogin.hpe.com`) was returned while pulling `node:22-alpine`, the failure is
+caused by the host network proxy or certificate trust configuration, not this API
+project. Do not disable Docker TLS verification. Ask IT for the corporate proxy root
+certificate and proxy settings, install the certificate into **Local Computer >
+Trusted Root Certification Authorities**, restart Docker Desktop, then verify with:
+
+```bash
+docker pull node:22-alpine
+```
+
+Docker Desktop imports trusted Windows certificate authorities for image pulls. See
+[Docker's Windows certificate guidance](https://docs.docker.com/engine/network/ca-certs/)
+for the secure setup steps.
+
 ## API documentation
 
-Swagger UI is available at `/api/docs/` and the OpenAPI document is available at `/api/openapi.json` in every environment. The documentation itself is public, while protected operations require a JWT bearer token. Use `POST /api/auth/login` to obtain an access token, then select **Authorize** in Swagger UI and enter the token.
+Swagger UI is available at `/api/docs/` and the OpenAPI document is available at `/api/openapi.json` in every environment. By default it shows Health, Authentication, and Processing Pipelines only; this does not disable any routes. Set `OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS=true` and restart the API to restore every endpoint in Swagger. The documentation itself is public, while protected operations require a JWT bearer token. Use `POST /api/auth/login` to obtain an access token, then select **Authorize** in Swagger UI and enter the token.
+
+For a concise endpoint-by-endpoint test walkthrough, see the [Swagger testing guide](docs/SWAGGER_TESTING_GUIDE.md).

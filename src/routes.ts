@@ -1,8 +1,14 @@
 import type { Express } from "express";
 import type { Pool } from "pg";
 import type { Config } from "./config.js";
-import { createProcessingPipelineStorage, type ProcessingPipelineStorage } from "./processingPipelineStorage.js";
-import { createStepFunctionsRunner, type StepFunctionsRunner } from "./stepFunctionsRunner.js";
+import {
+  createProcessingPipelineStorage,
+  type ProcessingPipelineStorage,
+} from "./processingPipelineStorage.js";
+import {
+  createStepFunctionsRunner,
+  type StepFunctionsRunner,
+} from "./stepFunctionsRunner.js";
 import { createApplication } from "./app/createApp.js";
 import { createLogger } from "./platform/logger.js";
 export { ensureBootstrapAdmin } from "./modules/auth/application/bootstrapAdmin.js";
@@ -14,7 +20,9 @@ export { ensureBootstrapAdmin } from "./modules/auth/application/bootstrapAdmin.
 export function createApp(
   pool: Pool,
   config: Config,
-  processingPipelineStorage: ProcessingPipelineStorage = createProcessingPipelineStorage(config),
+  processingPipelineStorage: ProcessingPipelineStorage = createProcessingPipelineStorage(
+    config,
+  ),
   stepFunctionsRunner: StepFunctionsRunner = createStepFunctionsRunner(config),
 ): Express {
   return createApplication({

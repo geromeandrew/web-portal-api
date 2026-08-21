@@ -13,7 +13,11 @@ const base = {
 
 describe("loadConfig", () => {
   it("normalizes the Lambda URL and MIME type list", () => {
-    const config = loadConfig({ ...base, LAMBDA_UPLOAD_URL: `${base.LAMBDA_UPLOAD_URL}/`, ALLOWED_MIME_TYPES: "application/pdf, image/png" });
+    const config = loadConfig({
+      ...base,
+      LAMBDA_UPLOAD_URL: `${base.LAMBDA_UPLOAD_URL}/`,
+      ALLOWED_MIME_TYPES: "application/pdf, image/png",
+    });
     expect(config.LAMBDA_UPLOAD_URL).toBe(base.LAMBDA_UPLOAD_URL);
     expect(config.allowedMimeTypes).toEqual(["application/pdf", "image/png"]);
   });
@@ -23,13 +27,20 @@ describe("loadConfig", () => {
   });
 
   it("hides non-essential Swagger endpoints by default and can restore them", () => {
-    expect(loadConfig(base).OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS).toBe(false);
-    expect(loadConfig({ ...base, OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: "true" }).OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS).toBe(true);
+    expect(loadConfig(base).OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS).toBe(
+      false,
+    );
+    expect(
+      loadConfig({ ...base, OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: "true" })
+        .OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS,
+    ).toBe(true);
   });
 
   it("requires a database URL and a safe schema identifier", () => {
     const { DATABASE_URL: _databaseUrl, ...withoutUrl } = base;
     expect(() => loadConfig(withoutUrl)).toThrow("DATABASE_URL");
-    expect(() => loadConfig({ ...base, DATABASE_SCHEMA: "web-portal" })).toThrow("DATABASE_SCHEMA");
+    expect(() =>
+      loadConfig({ ...base, DATABASE_SCHEMA: "web-portal" }),
+    ).toThrow("DATABASE_SCHEMA");
   });
 });
