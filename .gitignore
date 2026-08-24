@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.development.example
+!.env.production.example
+coverage/
+*.tsbuildinfo
+
+# Local supporting material; application source and tracked documentation remain unaffected.
+docs/
+outputs/
+scripts/
+*.docx
+*.xlsx
