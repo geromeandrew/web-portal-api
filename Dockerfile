@@ -84,6 +84,4 @@ EXPOSE 3000
 #USER node
 
 # Command to start the application
-# CMD ["node", "dist/src/index.js"]
-# CMD ["npm", "run", "start"]
-ENTRYPOINT [ "npm run start"]
+CMD ["npm", "run", "start"]
