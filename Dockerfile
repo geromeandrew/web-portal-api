@@ -18,7 +18,7 @@ FROM ${JFROG_URL}/${JFROG_REPO}/${BASE_IMAGE} as Builder
 ###############
 # Inherit Build Args
 ARG JFROG_USERNAME
-ARG JFROG_PASSWORD
+ARG JFROG_PASSWORD = 
 ARG JFROG_ACCESS_TOKEN
 ARG ARTIFACTORY_URL
 ARG PE_JFROG_ACCESS_TOKEN
@@ -58,11 +58,11 @@ COPY . .
 # 1. Set the registry without inline credentials
 ENV NPM_CONFIG_REGISTRY=https://$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual/
 
-# 2. Generate Base64 auth and write it to .npmrc before running npm install
+# 2. Generate Base64 auth and securely configure NPM without string spacing issues
 RUN AUTH_BASE64=$(echo -n "$JFROG_USERNAME:$JFROG_PASSWORD" | base64) && \
-    echo "registry=https://$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual/" > ~/.npmrc && \
-    echo "//${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth=${AUTH_BASE64}" >> ~/.npmrc && \
-    echo "always-auth=true" >> ~/.npmrc
+    npm config set registry https://${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/ && \
+    npm config set //${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth ${AUTH_BASE64} && \
+    npm config set always-auth true >> ~/.npmrc
 
 # 3. Run install
 RUN npm install --verbose
