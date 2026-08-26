@@ -6,6 +6,7 @@ dist/
 !.env.example
 coverage/
 *.tsbuildinfo
+certs/
 
 # Local supporting material; application source and tracked documentation remain unaffected.
 docs/
