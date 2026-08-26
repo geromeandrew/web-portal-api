@@ -60,11 +60,10 @@ ENV NPM_CONFIG_REGISTRY=https://$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-vir
 
 # 2. Generate Base64 auth and securely configure NPM without string spacing issues
 RUN AUTH_BASE64=$(echo -n "$JFROG_USERNAME:$JFROG_PASSWORD" | base64) && \
-    npm config set registry https://${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/ && \
-    npm config set //${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth ${AUTH_BASE64} && \
-    npm config set always-auth true >> ~/.npmrc
+    npm config set registry=https://${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/ && \
+    npm config set //${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth=${AUTH_BASE64} && \
+    npm config set always-auth=true
 
-# 3. Run install
 RUN npm install --verbose
 
 #ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
