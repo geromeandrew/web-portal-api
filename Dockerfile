@@ -55,8 +55,9 @@ RUN apk update && apk add --no-cache \
 WORKDIR /app
 
 COPY . .
+
 # Step 1: Generate Base64 auth and write directly to .npmrc to avoid CLI parsing errors
-RUN AUTH_BASE64=$(echo -n "$JFROG_USERNAME:$JFROG_PASSWORD" | base64) && \
+RUN AUTH_BASE64=$(printf "%s:%s" "$JFROG_USERNAME" "$JFROG_PASSWORD" | base64 | tr -d '\n') && \
     echo "registry=https://${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/" > ~/.npmrc && \
     echo "//${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth=${AUTH_BASE64}" >> ~/.npmrc && \
     echo "always-auth=true" >> ~/.npmrc
