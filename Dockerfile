@@ -56,14 +56,9 @@ WORKDIR /app
 
 COPY . .
 
-# The CI runner lacks outbound internet access and cannot resolve public JFROG domains.
-RUN sed -i 's#globe\.jfrog\.io#globe.pe.jfrog.io#g' package.json
-
-RUN npm ci --omit=dev --verbose
-
-#ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
-#RUN npm install --verbose
-#RUN npm list
+ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
+RUN npm install --verbose
+RUN npm list
 
 # Set the environment to production
 ENV NODE_ENV=production
