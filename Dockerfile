@@ -1,91 +1,87 @@
-# ==========================================
-# STAGE 1: DEPENDENCIES
-# ==========================================
-ARG JFROG_USERNAME
-ARG JFROG_ACCESS_TOKEN
+
+# # 
+# # hmd-docker-local/docker-ansible
+# #
+# # Built with Alpine Linux
+# ##################
+# # Set Build Args #
+# ##################
 ARG LABEL_MAINTAINER="ceso-isg-platengr@globe.com.ph"
-ARG LABEL_VERSION="v3.0.0"
+ARG LABEL_VERSION="v2.0.1"
 ARG JFROG_URL="globe.pe.jfrog.io"
 ARG JFROG_REPO="hmd-docker-virtual"
-ARG BASE_IMAGE="node:22.14.0-alpine"
+ARG BASE_IMAGE="node:22-alpine"
+FROM ${JFROG_URL}/${JFROG_REPO}/${BASE_IMAGE} as Builder
 
-FROM ${JFROG_URL}/${JFROG_REPO}/${BASE_IMAGE} AS deps
-
+###############
+# Build Setup #
+###############
 # Inherit Build Args
 ARG JFROG_USERNAME
+ARG JFROG_PASSWORD
+ARG ARTIFACTORY_URL
 ARG JFROG_ACCESS_TOKEN
-ARG JFROG_URL
+ARG LABEL_MAINTAINER
+ARG LABEL_VERSION
+ARG PE_JFROG_URL
+ARG PE_JFROG_REPO
+
+# # Setup Docker Labels
+# LABEL maintainer=$LABEL_MAINTAINER
+# LABEL version=$LABEL_VERSION
 
 USER root
 
-# Add JFrog as primary alpine repos.
-# The single '>' overwrites default repos, '>>' appends the community repo.
-RUN echo "https://${JFROG_USERNAME}:${JFROG_ACCESS_TOKEN}@${JFROG_URL}/artifactory/hmd-alpinelinux/v3.21/main" > /etc/apk/repositories && \
-    echo "https://${JFROG_USERNAME}:${JFROG_ACCESS_TOKEN}@${JFROG_URL}/artifactory/hmd-alpinelinux/v3.21/community" >> /etc/apk/repositories
+# clear alpine repos
+RUN cp /dev/null /etc/apk/repositories
+# add JFrog as primary alpine repos
+RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.19/main" >> /etc/apk/repositories
+RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.19/community" >> /etc/apk/repositories
+RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/edge/community" >> /etc/apk/repositories
 
-# Install essential tools
+# RUN mkdir ~/.pip && touch ~/.pip/pip.conf
+# RUN echo -e "\
+# [global] \n\
+# index-url = https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/pypi/hmd-python-virtual/simple" \
+# > ~/.pip/pip.conf
+
+# Set environment variables
+ENV VIRTUAL_ENV=/venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# # Install system dependencies
 RUN apk update && apk add --no-cache \
-    curl \
-    bash 
+     bash
+#     openssh 9.8_p1-r0\
+#     openssl
 
 # Set the working directory
 WORKDIR /app
 
-# Change ownership of the workspace to 'node' before switching
-RUN chown -R node:node /app
+COPY . .
+ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
+RUN npm install --verbose
+RUN npm list
 
-# Switch to the non-privileged 'node' user
-USER node
+# Set the environment to production
+ENV NODE_ENV=production
 
-# Copy manifest files with correct ownership
-COPY --chown=node:node package*.json ./
+#Build the typescript files
+RUN npm run build --verbose
 
-# Dependency Installation
-# Authenticate using the 'node' user's home directory (~)
-RUN echo "registry=https://${JFROG_URL}/artifactory/api/npm/hmd-npm-virtual" > ~/.npmrc && \
-    curl -u ${JFROG_USERNAME}:${JFROG_ACCESS_TOKEN} https://$JFROG_URL/artifactory/api/npm/auth/ | \
-    sed "s,_auth = ,//${JFROG_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth=\",g" | \
-    sed '1 s/$/"/' >> ~/.npmrc
+# Step 2: Create a smaller runtime image
+FROM Builder as Runner
 
-# Install dependencies using Clean Install
-RUN npm ci --loglevel verbose
-
-# Copy the rest of the application code
-COPY --chown=node:node . .
-
-# Clean up credentials from the build stage
-RUN rm -f ~/.npmrc
-
-# ==========================================
-# STAGE 2: PRODUCTION RUNTIME (Token-Free)
-# ==========================================
-FROM ${JFROG_URL}/${JFROG_REPO}/${BASE_IMAGE} AS production
-
-ARG LABEL_MAINTAINER
-ARG LABEL_VERSION
-
-LABEL maintainer=$LABEL_MAINTAINER
-LABEL version=$LABEL_VERSION
-
-# Re-install runtime tools
-USER root
-RUN apk update && apk add --no-cache \
-    curl \
-    bash 
-
+# Set working directory
 WORKDIR /app
 
-# Only copy the built artifacts and dependencies from the previous stage
-COPY --chown=node:node --from=deps /app/package*.json ./
-COPY --chown=node:node --from=deps /app/node_modules ./node_modules
+# Copy only the built files and necessary dependencies from the builder
+COPY --from=Builder /app ./
 
-# Copy application code
-COPY --chown=node:node --from=deps /app/src ./src
+# Expose the port your app runs on
+EXPOSE 3000
 
-# Expose port for this container
-EXPOSE 3001
+#USER node
 
-USER node
-
-# Command to run your application
-CMD ["npm", "start"]
+# Command to start the application
+CMD ["npm", "run", "start"]
