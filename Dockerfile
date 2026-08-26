@@ -64,15 +64,15 @@ RUN AUTH_BASE64=$(printf "%s:%s" "$JFROG_USERNAME" "$JFROG_PASSWORD" | base64 | 
 
 RUN npm install --verbose
 
-#ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
-#RUN npm install --verbose
-#RUN npm list
-
 # Set the environment to production
 ENV NODE_ENV=production
 
 #Build the typescript files
 RUN npm run build --verbose
+
+# Strip credentials out before finalizing this stage
+RUN rm -f ~/.npmrc
+
 
 # Step 2: Create a smaller runtime image
 FROM Builder as Runner
