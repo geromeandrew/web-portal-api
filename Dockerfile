@@ -58,7 +58,7 @@ RUN apk update && apk add --no-cache \
 # Set the working directory
 WORKDIR /app
 
-USER Node 
+USER node 
 
 COPY . .
 
