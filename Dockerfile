@@ -60,7 +60,8 @@ WORKDIR /app
 
 USER node 
 
-COPY . .
+# Copy manifest files with correct ownership
+COPY --chown=node:node package*.json ./
 
 # Dependency Installation
 # Authenticate using the 'node' user's home directory (~)
