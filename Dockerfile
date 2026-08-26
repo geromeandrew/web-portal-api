@@ -19,6 +19,7 @@ FROM ${JFROG_URL}/${JFROG_REPO}/${BASE_IMAGE} as Builder
 # Inherit Build Args
 ARG JFROG_USERNAME
 ARG JFROG_PASSWORD
+ARG JFROG_ACCESS_TOKEN
 ARG ARTIFACTORY_URL
 ARG PE_JFROG_ACCESS_TOKEN
 ARG LABEL_MAINTAINER
@@ -58,30 +59,11 @@ RUN apk update && apk add --no-cache \
 # Set the working directory
 WORKDIR /app
 
-USER node 
+COPY . .
 
-# Copy manifest files with correct ownership
-COPY --chown=node:node package*.json ./
-
-# Dependency Installation
-# Authenticate using the 'node' user's home directory (~)
-RUN echo "registry=https://${JFROG_URL}/artifactory/api/npm/hmd-npm-virtual" > ~/.npmrc && \
-    curl -u ${JFROG_USERNAME}:${JFROG_ACCESS_TOKEN} https://$JFROG_URL/artifactory/api/npm/auth/ | \
-    sed "s,_auth = ,//${JFROG_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth=\",g" | \
-    sed '1 s/$/"/' >> ~/.npmrc
-
-# Install dependencies using Clean Install
-RUN npm ci --loglevel verbose
-
-# Copy the rest of the application code
-COPY --chown=node:node . .
-
-# Clean up credentials from the build stage
-RUN rm -f ~/.npmrc
-
-#ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
-#RUN npm install --verbose
-#RUN npm list
+ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_ACCESS_TOKEN@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
+RUN npm install --verbose
+RUN npm list
 
 # Set the environment to production
 ENV NODE_ENV=production
