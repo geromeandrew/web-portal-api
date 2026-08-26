@@ -57,7 +57,7 @@ WORKDIR /app
 COPY . .
 
 # The CI runner lacks outbound internet access and cannot resolve public JFROG domains.
-RUN sed -i 's#globe\.jfrog\.io#globe.pe.jfrog.io#g' package-lock.json
+RUN sed -i 's#globe\.jfrog\.io#globe.pe.jfrog.io#g' package.json
 
 RUN npm ci --omit=dev --verbose
 
