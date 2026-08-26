@@ -40,11 +40,6 @@ RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/h
 RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.19/community" >> /etc/apk/repositories
 RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/edge/community" >> /etc/apk/repositories
 
-# RUN mkdir ~/.pip && touch ~/.pip/pip.conf
-# RUN echo -e "\
-# [global] \n\
-# index-url = https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/pypi/hmd-python-virtual/simple" \
-# > ~/.pip/pip.conf
 
 # Set environment variables
 ENV VIRTUAL_ENV=/venv
@@ -61,9 +56,14 @@ WORKDIR /app
 
 COPY . .
 
-ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_ACCESS_TOKEN@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
-RUN npm install --verbose
-RUN npm list
+# The CI runner lacks outbound internet access and cannot resolve public JFROG domains.
+RUN sed -i 's#globe\.jfrog\.io#globe.pe.jfrog.io#g' package-lock.json
+
+RUN npm ci --omit=dev --verbose
+
+#ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
+#RUN npm install --verbose
+#RUN npm list
 
 # Set the environment to production
 ENV NODE_ENV=production
