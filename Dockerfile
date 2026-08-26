@@ -17,10 +17,9 @@ FROM ${JFROG_URL}/${JFROG_REPO}/${BASE_IMAGE} as Builder
 # Build Setup #
 ###############
 # Inherit Build Args
-ARG JFROG_USERNAME
-ARG JFROG_PASSWORD
+ARG PE_JFROG_USERNAME
 ARG ARTIFACTORY_URL
-ARG JFROG_ACCESS_TOKEN
+ARG PE_JFROG_ACCESS_TOKEN
 ARG LABEL_MAINTAINER
 ARG LABEL_VERSION
 ARG PE_JFROG_URL
@@ -35,9 +34,9 @@ USER root
 # clear alpine repos
 RUN cp /dev/null /etc/apk/repositories
 # add JFrog as primary alpine repos
-RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.19/main" >> /etc/apk/repositories
-RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.19/community" >> /etc/apk/repositories
-RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/edge/community" >> /etc/apk/repositories
+RUN echo "https://$PE_JFROG_USERNAME:$PE_JFROG_TOKEN@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.19/main" >> /etc/apk/repositories
+RUN echo "https://$PE_JFROG_USERNAME:$PE_JFROG_TOKEN@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.19/community" >> /etc/apk/repositories
+RUN echo "https://$PE_JFROG_USERNAME:$PE_JFROG_TOKEN@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/edge/community" >> /etc/apk/repositories
 
 # RUN mkdir ~/.pip && touch ~/.pip/pip.conf
 # RUN echo -e "\
@@ -59,7 +58,7 @@ RUN apk update && apk add --no-cache \
 WORKDIR /app
 
 COPY . .
-ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
+ENV NPM_CONFIG_REGISTRY=https://$PE_JFROG_USERNAME:$PE_JFROG_TOKEN@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
 RUN npm install --verbose
 RUN npm list
 
@@ -79,7 +78,7 @@ WORKDIR /app
 COPY --from=Builder /app ./
 
 # Expose the port your app runs on
-EXPOSE 3000
+EXPOSE 3001
 
 #USER node
 
