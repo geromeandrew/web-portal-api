@@ -4,7 +4,7 @@ import type { Config } from "./config.js";
 
 export function createPool(config: Config) {
   const certificate = readFileSync(
-    new URL("../certs/rds-us-east-1-rsa2048-g1.pem", import.meta.url),
+    new URL("../certs/rds-ap-southeast-1-rsa2048-g1.pem", import.meta.url),
     "utf8",
   );
   return new Pool({
