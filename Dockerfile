@@ -55,10 +55,21 @@ RUN apk update && apk add --no-cache \
 WORKDIR /app
 
 COPY . .
+# 1. Set the registry without inline credentials
+ENV NPM_CONFIG_REGISTRY=https://$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual/
 
-ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
+# 2. Generate Base64 auth and write it to .npmrc before running npm install
+RUN AUTH_BASE64=$(echo -n "$JFROG_USERNAME:$JFROG_PASSWORD" | base64) && \
+    echo "registry=https://$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual/" > ~/.npmrc && \
+    echo "//${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth=${AUTH_BASE64}" >> ~/.npmrc && \
+    echo "always-auth=true" >> ~/.npmrc
+
+# 3. Run install
 RUN npm install --verbose
-RUN npm list
+
+#ENV NPM_CONFIG_REGISTRY=https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/api/npm/hmd-npm-virtual
+#RUN npm install --verbose
+#RUN npm list
 
 # Set the environment to production
 ENV NODE_ENV=production
