@@ -7,10 +7,10 @@
 # # Set Build Args #
 # ##################
 ARG LABEL_MAINTAINER="ceso-isg-platengr@globe.com.ph"
-ARG LABEL_VERSION="v2.0.1"
+ARG LABEL_VERSION="v3.0.0"
 ARG JFROG_URL="globe.pe.jfrog.io"
 ARG JFROG_REPO="hmd-docker-virtual"
-ARG BASE_IMAGE="node:22-alpine"
+ARG BASE_IMAGE="node:22.14.0-alpine"
 FROM ${JFROG_URL}/${JFROG_REPO}/${BASE_IMAGE} as Builder
 
 ###############
@@ -36,8 +36,8 @@ USER root
 # clear alpine repos
 RUN cp /dev/null /etc/apk/repositories
 # add JFrog as primary alpine repos
-RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.19/main" >> /etc/apk/repositories
-RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.19/community" >> /etc/apk/repositories
+RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.21/main" >> /etc/apk/repositories
+RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.21/community" >> /etc/apk/repositories
 RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/edge/community" >> /etc/apk/repositories
 
 
