@@ -10,6 +10,7 @@ import {
   STSClient,
   type STSClient as STSClientType,
 } from "@aws-sdk/client-sts";
+import { createAwsClientOptions } from "./aws.js";
 import type { Config } from "./config.js";
 
 type StepFunctionsSender = Pick<SFNClientType, "send">;
@@ -154,9 +155,10 @@ export class AwsStepFunctionsRunner implements StepFunctionsRunner {
 }
 
 export function createStepFunctionsRunner(config: Config): StepFunctionsRunner {
+  const clientOptions = createAwsClientOptions(config);
   return new AwsStepFunctionsRunner(
-    new SFNClient({ region: config.AWS_REGION }),
-    new STSClient({ region: config.AWS_REGION }),
+    new SFNClient(clientOptions),
+    new STSClient(clientOptions),
     config.AWS_REGION,
   );
 }

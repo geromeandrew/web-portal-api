@@ -1,9 +1,9 @@
 node_modules/
+.pnpm-store/
 dist/
 .env
 .env.*
-!.env.development.example
-!.env.production.example
+!.env.example
 coverage/
 *.tsbuildinfo
 

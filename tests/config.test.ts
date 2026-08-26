@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createAwsClientOptions } from "../src/aws.js";
 import { loadConfig } from "../src/config.js";
 
 const base = {
@@ -24,6 +25,34 @@ describe("loadConfig", () => {
 
   it("uses the dedicated Portal schema by default", () => {
     expect(loadConfig(base).DATABASE_SCHEMA).toBe("web_portal");
+  });
+
+  it("uses the AWS SDK default credential chain outside local development", () => {
+    const config = loadConfig(base);
+    expect(config.AWS_LOCAL).toBe(false);
+    expect(createAwsClientOptions(config)).toEqual({
+      region: "ap-southeast-1",
+    });
+  });
+
+  it("requires and uses explicit credentials for local AWS access", () => {
+    expect(() => loadConfig({ ...base, AWS_LOCAL: "true" })).toThrow(
+      "AWS_ACCESS_KEY_ID",
+    );
+
+    const config = loadConfig({
+      ...base,
+      AWS_LOCAL: "true",
+      AWS_ACCESS_KEY_ID: "local-access-key",
+      AWS_SECRET_ACCESS_KEY: "local-secret-key",
+    });
+    expect(createAwsClientOptions(config)).toEqual({
+      region: "ap-southeast-1",
+      credentials: {
+        accessKeyId: "local-access-key",
+        secretAccessKey: "local-secret-key",
+      },
+    });
   });
 
   it("hides non-essential Swagger endpoints by default and can restore them", () => {

@@ -1,5 +1,58 @@
 # esatp-coreapi
 
+Node.js API for ESATP processing pipelines, file storage, and Step Functions
+executions.
+
+## Environment setup
+
+### Local development
+
+1. Copy `.env.example` to `.env` and replace every placeholder.
+2. Keep `AWS_LOCAL=true` and provide `AWS_ACCESS_KEY_ID` and
+   `AWS_SECRET_ACCESS_KEY` in `.env`.
+3. Run `pnpm dev`, or run `docker compose up --build` when using the local
+   Compose workflow.
+
+`pnpm dev` loads `.env` through Node's `--env-file=.env` option. Docker
+Compose loads the same file through `env_file`; neither workflow needs the
+`dotenv` package.
+
+### Configuration contract
+
+| Setting | Source | Notes |
+| --- | --- | --- |
+| `NODE_ENV`, `PORT`, `DATABASE_SCHEMA`, `JWT_EXPIRES_IN`, `LAMBDA_UPLOAD_URL`, `S3_BUCKET`, `AWS_REGION`, `MAX_UPLOAD_BYTES`, `ALLOWED_MIME_TYPES`, `OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS` | Deployment configuration | Use the dev or production value for the target environment. |
+| `DATABASE_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Secret store | Never commit these values. |
+| `AWS_LOCAL` | Deployment configuration | `true` only for local development; `false` in EKS. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Local `.env` only | Required only when `AWS_LOCAL=true`; do not configure them in EKS. |
+
+EKS development and production values are managed by the deployment platform;
+they are intentionally not duplicated in repository environment files.
+
+### EKS development and production
+
+For both the API Deployment and database migration Job:
+
+1. Supply ordinary settings through the platform's deployment configuration and
+   secret settings through its approved secret store.
+2. Set `AWS_LOCAL=false` and do not inject `AWS_ACCESS_KEY_ID` or
+   `AWS_SECRET_ACCESS_KEY`.
+3. Associate the workload service account with the environment's AWS IAM role
+   (EKS Pod Identity or IRSA). The AWS SDK resolves this identity through its
+   standard default credential chain.
+
+The role must be scoped to the configured resources and allow the API's AWS
+operations: `s3:ListBucket`, `s3:GetObject`, `s3:PutObject`,
+`states:StartExecution`, `states:DescribeStateMachine`,
+`states:DescribeExecution`, and `sts:GetCallerIdentity`.
+
+### Verification
+
+```powershell
+pnpm.cmd test
+pnpm.cmd build
+```
+
 
 
 ## Getting started

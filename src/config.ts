@@ -17,6 +17,12 @@ const envSchema = z.object({
   LAMBDA_UPLOAD_URL: z.string().url(),
   S3_BUCKET: z.string().min(3),
   AWS_REGION: z.string().min(1),
+  AWS_LOCAL: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(4_500_000),
   ALLOWED_MIME_TYPES: z
     .string()
@@ -27,6 +33,22 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+}).superRefine((config, context) => {
+  if (!config.AWS_LOCAL) return;
+  if (!config.AWS_ACCESS_KEY_ID) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["AWS_ACCESS_KEY_ID"],
+      message: "is required when AWS_LOCAL is true",
+    });
+  }
+  if (!config.AWS_SECRET_ACCESS_KEY) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["AWS_SECRET_ACCESS_KEY"],
+      message: "is required when AWS_LOCAL is true",
+    });
+  }
 });
 
 export type Config = z.infer<typeof envSchema> & { allowedMimeTypes: string[] };
