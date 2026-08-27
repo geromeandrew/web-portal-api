@@ -10,12 +10,13 @@ executions.
 1. Copy `.env.example` to `.env` and replace every placeholder.
 2. Keep `AWS_LOCAL=true` and provide `AWS_ACCESS_KEY_ID` and
    `AWS_SECRET_ACCESS_KEY` in `.env`.
-3. Run `pnpm dev`, or run `docker compose up --build` when using the local
+3. Run `pnpm local`, or run `docker compose up --build` when using the local
    Compose workflow.
 
-`pnpm dev` loads `.env` through Node's `--env-file=.env` option. Docker
-Compose loads the same file through `env_file`; neither workflow needs the
-`dotenv` package.
+`pnpm local` loads `.env` through Node's `--env-file=.env` option. Docker
+Compose loads the same file through its environment configuration; neither
+workflow needs the `dotenv` package. EKS development and production both run
+`pnpm start` without `.env`; EKS injects their environment variables.
 
 ### Configuration contract
 

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch --env-file=.env --import tsx src/index.ts",
+    "local": "node --watch --env-file=.env --import tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "db:migrate": "node --env-file=.env dist/migrate.js",
