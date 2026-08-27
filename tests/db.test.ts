@@ -42,4 +42,18 @@ describe("createPool", () => {
       }),
     );
   });
+
+  it("can create a bootstrap pool without a schema-specific search path", () => {
+    createPool(config, false);
+
+    expect(Pool).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        connectionString: config.DATABASE_URL,
+        ssl: { ca: "RDS CA", rejectUnauthorized: true },
+      }),
+    );
+    expect(Pool).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ options: expect.any(String) }),
+    );
+  });
 });

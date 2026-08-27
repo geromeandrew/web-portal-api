@@ -3,13 +3,18 @@ import { createPool } from "./db.js";
 import { migrations } from "./migrations.js";
 
 const config = loadConfig();
-const pool = createPool(config);
+// Bootstrap without a schema-specific search path: the configured schema may
+// not exist yet, and PostgreSQL rejects that connection option in that case.
+const pool = createPool(config, false);
 const quoteIdentifier = (identifier: string) =>
   `"${identifier.replace(/"/g, '""')}"`;
 
 try {
   await pool.query(
     `CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(config.DATABASE_SCHEMA)}`,
+  );
+  await pool.query(
+    `SET search_path TO ${quoteIdentifier(config.DATABASE_SCHEMA)}, public`,
   );
   await pool.query(
     "CREATE TABLE IF NOT EXISTS schema_migrations (id text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
