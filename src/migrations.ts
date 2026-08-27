@@ -782,4 +782,40 @@ export const migrations = [
     $$;
   `,
   },
+  {
+    id: "015_auth_sessions_and_rate_limits",
+    sql: `
+    CREATE TABLE auth_sessions (
+      id uuid PRIMARY KEY,
+      user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_version integer NOT NULL,
+      expires_at timestamptz NOT NULL,
+      revoked_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX auth_sessions_active_user ON auth_sessions (user_id, expires_at) WHERE revoked_at IS NULL;
+    CREATE TABLE auth_refresh_tokens (
+      id uuid PRIMARY KEY,
+      session_id uuid NOT NULL REFERENCES auth_sessions(id) ON DELETE CASCADE,
+      token_hash text NOT NULL UNIQUE,
+      expires_at timestamptz NOT NULL,
+      consumed_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX auth_refresh_tokens_expiry ON auth_refresh_tokens (expires_at);
+    CREATE TABLE revoked_access_tokens (
+      token_id uuid PRIMARY KEY,
+      expires_at timestamptz NOT NULL
+    );
+    CREATE INDEX revoked_access_tokens_expiry ON revoked_access_tokens (expires_at);
+    CREATE TABLE rate_limit_buckets (
+      scope text NOT NULL,
+      key_hash text NOT NULL,
+      request_count integer NOT NULL CHECK (request_count > 0),
+      expires_at timestamptz NOT NULL,
+      PRIMARY KEY (scope, key_hash)
+    );
+    CREATE INDEX rate_limit_buckets_expiry ON rate_limit_buckets (expires_at);
+  `,
+  },
 ];

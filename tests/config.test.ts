@@ -27,6 +27,13 @@ describe("loadConfig", () => {
     expect(loadConfig(base).DATABASE_SCHEMA).toBe("web_portal");
   });
 
+  it("uses secure session defaults and keeps proxy trust disabled locally", () => {
+    const config = loadConfig(base);
+    expect(config.JWT_EXPIRES_IN).toBe("15m");
+    expect(config.REFRESH_TOKEN_TTL_DAYS).toBe(30);
+    expect(config.TRUST_PROXY_HOPS).toBe(0);
+  });
+
   it("uses the AWS SDK default credential chain outside local development", () => {
     const config = loadConfig(base);
     expect(config.AWS_LOCAL).toBe(false);

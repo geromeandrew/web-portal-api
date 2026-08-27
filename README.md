@@ -21,7 +21,7 @@ Compose loads the same file through `env_file`; neither workflow needs the
 
 | Setting | Source | Notes |
 | --- | --- | --- |
-| `NODE_ENV`, `PORT`, `DATABASE_SCHEMA`, `JWT_EXPIRES_IN`, `LAMBDA_UPLOAD_URL`, `S3_BUCKET`, `AWS_REGION`, `MAX_UPLOAD_BYTES`, `ALLOWED_MIME_TYPES`, `OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS` | Deployment configuration | Use the dev or production value for the target environment. |
+| `NODE_ENV`, `PORT`, `DATABASE_SCHEMA`, `JWT_EXPIRES_IN`, `REFRESH_TOKEN_TTL_DAYS`, `TRUST_PROXY_HOPS`, `LAMBDA_UPLOAD_URL`, `S3_BUCKET`, `AWS_REGION`, `MAX_UPLOAD_BYTES`, `ALLOWED_MIME_TYPES`, `OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS` | Deployment configuration | Use the dev or production value for the target environment. Set `TRUST_PROXY_HOPS=1` only when the API is behind the controlled production proxy. |
 | `DATABASE_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Secret store | Never commit these values. |
 | `AWS_LOCAL` | Deployment configuration | `true` only for local development; `false` in EKS. |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Local `.env` only | Required only when `AWS_LOCAL=true`; do not configure them in EKS. |

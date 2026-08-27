@@ -269,6 +269,14 @@ const allOpenApiDocument: OpenAPIV3.Document = {
         requestBody: loginRequestBody,
       },
     },
+    "/api/auth/refresh": {
+      post: {
+        ...success("Refresh an access token"),
+        security: [],
+        description:
+          "Rotates the HttpOnly refresh cookie and returns a new bearer access token.",
+      },
+    },
     "/api/auth/logout": { post: noContent("Sign out") },
     "/api/auth/me": { get: success("Get current user") },
     "/api/auth/change-password": {

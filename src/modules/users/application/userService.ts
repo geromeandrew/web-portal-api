@@ -62,6 +62,10 @@ export class UserService {
         user.id,
       ],
     );
+    await this.pool.query(
+      "UPDATE auth_sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1",
+      [user.id],
+    );
     return userDto(await this.findRequired(user.id));
   }
 

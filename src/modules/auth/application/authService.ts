@@ -1,16 +1,14 @@
 import type { Pool } from "pg";
 import type { Config } from "../../../config.js";
 import { AppError } from "../../../errors.js";
-import {
-  hashPassword,
-  signAccessToken,
-  verifyPassword,
-} from "../../../auth.js";
+import { hashPassword, verifyPassword } from "../../../auth.js";
+import { SessionService } from "./sessionService.js";
 import { ensureWorkspace } from "../../../workspace.js";
 import { userDto, type UserRow } from "../../shared/api/dtos.js";
 
 export type AuthenticatedUser = {
   accessToken: string;
+  refreshToken: string;
   user: ReturnType<typeof userDto>;
 };
 
@@ -60,7 +58,30 @@ export class AuthService {
       "UPDATE users SET password_hash = $1, must_change_password = false, token_version = token_version + 1, updated_at = now() WHERE id = $2",
       [await hashPassword(newPassword), user.id],
     );
+    await this.sessions.revokeAllForUser(user.id);
     return this.createAuthenticatedUser(await this.findRequiredById(user.id));
+  }
+
+  async refresh(refreshToken: string): Promise<AuthenticatedUser> {
+    const session = await this.sessions.refresh(refreshToken);
+    return {
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      user: userDto(session.user),
+    };
+  }
+
+  async logout(auth: NonNullable<Express.Request["auth"]>) {
+    await this.sessions.revokeCurrent(
+      {
+        sub: auth.userId,
+        email: auth.email,
+        version: 0,
+        sessionId: auth.sessionId,
+        tokenId: auth.tokenId,
+      },
+      auth.tokenExpiresAt,
+    );
   }
 
   private async findByEmail(email: string) {
@@ -85,14 +106,18 @@ export class AuthService {
     return user;
   }
 
-  private createAuthenticatedUser(user: UserRow): AuthenticatedUser {
+  private async createAuthenticatedUser(
+    user: UserRow,
+  ): Promise<AuthenticatedUser> {
+    const session = await this.sessions.create(user);
     return {
-      accessToken: signAccessToken(this.config, {
-        sub: user.id,
-        email: user.email,
-        version: user.token_version,
-      }),
-      user: userDto(user),
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      user: userDto(session.user),
     };
+  }
+
+  private get sessions() {
+    return new SessionService(this.pool, this.config);
   }
 }

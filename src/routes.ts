@@ -11,6 +11,7 @@ import {
 } from "./stepFunctionsRunner.js";
 import { createApplication } from "./app/createApp.js";
 import { createLogger } from "./platform/logger.js";
+import { PostgresRateLimiter } from "./app/security.js";
 export { ensureBootstrapAdmin } from "./modules/auth/application/bootstrapAdmin.js";
 
 /**
@@ -31,5 +32,6 @@ export function createApp(
     processingPipelineStorage,
     stepFunctionsRunner,
     logger: createLogger(),
+    rateLimiter: new PostgresRateLimiter(pool, config),
   });
 }
