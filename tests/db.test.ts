@@ -12,6 +12,7 @@ const config: Config = {
   PORT: 3001,
   DATABASE_URL:
     "postgresql://esatp_sme:password@database.example.com:1769/isgesatpdv",
+  DATABASE_SSL: true,
   DATABASE_SCHEMA: "web_portal",
   JWT_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
   JWT_EXPIRES_IN: "8h",
@@ -54,6 +55,14 @@ describe("createPool", () => {
     );
     expect(Pool).toHaveBeenLastCalledWith(
       expect.not.objectContaining({ options: expect.any(String) }),
+    );
+  });
+
+  it("disables TLS without reading the RDS certificate when configured", () => {
+    createPool({ ...config, DATABASE_SSL: false });
+
+    expect(Pool).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ssl: false }),
     );
   });
 });

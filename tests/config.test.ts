@@ -25,6 +25,13 @@ describe("loadConfig", () => {
 
   it("uses the dedicated Portal schema by default", () => {
     expect(loadConfig(base).DATABASE_SCHEMA).toBe("web_portal");
+    expect(loadConfig(base).DATABASE_SSL).toBe(true);
+  });
+
+  it("supports disabling database TLS for a local PostgreSQL server", () => {
+    expect(loadConfig({ ...base, DATABASE_SSL: "false" }).DATABASE_SSL).toBe(
+      false,
+    );
   });
 
   it("uses secure session defaults and keeps proxy trust disabled locally", () => {

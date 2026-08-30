@@ -7,6 +7,10 @@ const envSchema = z
       .default("development"),
     PORT: z.coerce.number().int().positive().default(3001),
     DATABASE_URL: z.string().url(),
+    DATABASE_SSL: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((value) => value === "true"),
     DATABASE_SCHEMA: z
       .string()
       .regex(/^[a-z_][a-z0-9_]*$/, "must be a lowercase PostgreSQL identifier")
