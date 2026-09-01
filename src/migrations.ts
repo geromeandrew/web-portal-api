@@ -818,4 +818,16 @@ export const migrations = [
     CREATE INDEX rate_limit_buckets_expiry ON rate_limit_buckets (expires_at);
   `,
   },
+  {
+    id: "016_okta_identity",
+    sql: `
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS okta_subject text;
+    ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS users_okta_subject_unique
+      ON users (okta_subject) WHERE okta_subject IS NOT NULL;
+    UPDATE auth_sessions
+      SET revoked_at = COALESCE(revoked_at, now())
+      WHERE revoked_at IS NULL;
+  `,
+  },
 ];

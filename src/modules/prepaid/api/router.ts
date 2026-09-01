@@ -1,12 +1,11 @@
 import express from "express";
 import type { AppDependencies } from "../../../app/dependencies.js";
-import { createAuthMiddleware } from "../../../auth.js";
 import { PrepaidService } from "../application/prepaidService.js";
 import { createPrepaidController } from "./controller.js";
 
-export function createPrepaidRouter({ pool, config }: AppDependencies) {
+export function createPrepaidRouter({ pool, authenticate }: AppDependencies) {
   const router = express.Router();
-  router.use(createAuthMiddleware(pool, config));
+  router.use(authenticate);
 
   const controller = createPrepaidController(new PrepaidService(pool));
   router.get("/state", controller.getState);

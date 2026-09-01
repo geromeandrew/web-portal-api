@@ -4,9 +4,8 @@ import { loadConfig } from "../src/config.js";
 
 const base = {
   DATABASE_URL: "postgresql://portal:password@127.0.0.1:5432/web_portal",
-  JWT_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
-  ADMIN_EMAIL: "admin@example.com",
-  ADMIN_PASSWORD: "a-secure-bootstrap-password",
+  RATE_LIMIT_HMAC_SECRET:
+    "a-very-long-test-secret-that-is-at-least-32-characters",
   LAMBDA_UPLOAD_URL: "https://example.lambda-url.ap-southeast-1.on.aws",
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
@@ -34,11 +33,27 @@ describe("loadConfig", () => {
     );
   });
 
-  it("uses secure session defaults and keeps proxy trust disabled locally", () => {
+  it("uses the provisional Okta defaults and keeps proxy trust disabled locally", () => {
     const config = loadConfig(base);
-    expect(config.JWT_EXPIRES_IN).toBe("15m");
-    expect(config.REFRESH_TOKEN_TTL_DAYS).toBe(30);
+    expect(config.OKTA_ISSUER).toBe("https://globe.okta.com/oauth2/default");
+    expect(config.OKTA_AUDIENCE).toBe("api://default");
+    expect(config.OKTA_CLIENT_ID).toBe("0oa28lk9m5953nLCA0h8");
+    expect(config.RATE_LIMIT_HMAC_SECRET).toBe(base.RATE_LIMIT_HMAC_SECRET);
     expect(config.TRUST_PROXY_HOPS).toBe(0);
+  });
+
+  it("rejects the Okta org issuer for a custom API", () => {
+    expect(() => loadConfig({ ...base, OKTA_ISSUER: "https://globe.okta.com" })).toThrow("OKTA_ISSUER");
+  });
+
+  it("accepts the legacy JWT secret only as a rate-limit migration fallback", () => {
+    const { RATE_LIMIT_HMAC_SECRET: _secret, ...withoutNewName } = base;
+    expect(
+      loadConfig({
+        ...withoutNewName,
+        JWT_SECRET: "a-legacy-secret-that-is-still-at-least-32-characters",
+      }).RATE_LIMIT_HMAC_SECRET,
+    ).toBe("a-legacy-secret-that-is-still-at-least-32-characters");
   });
 
   it("uses the AWS SDK default credential chain outside local development", () => {

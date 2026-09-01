@@ -11,12 +11,11 @@ const config: Config = {
   NODE_ENV: "test",
   PORT: 3001,
   DATABASE_URL: "postgresql://portal:password@127.0.0.1:5432/web_portal",
-  JWT_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
-  JWT_EXPIRES_IN: "8h",
-  REFRESH_TOKEN_TTL_DAYS: 30,
+  OKTA_ISSUER: "https://example.okta.com/oauth2/default",
+  OKTA_AUDIENCE: "api://default",
+  OKTA_CLIENT_ID: "test-client-id",
+  RATE_LIMIT_HMAC_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
   TRUST_PROXY_HOPS: 0,
-  ADMIN_EMAIL: "admin@example.com",
-  ADMIN_PASSWORD: "a-secure-bootstrap-password",
   LAMBDA_UPLOAD_URL: "https://example.lambda-url.ap-southeast-1.on.aws",
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
@@ -39,7 +38,7 @@ describe("OpenAPI documentation", () => {
         ).length,
       0,
     );
-    expect(operationCount).toBe(17);
+    expect(operationCount).toBe(13);
     expect(openApiDocument.paths["/api/uploads"]).toBeUndefined();
     expect(
       openApiDocument.paths["/api/workflows/prepaid/report.csv"],
@@ -58,15 +57,9 @@ describe("OpenAPI documentation", () => {
         "/api/processing-pipelines/{pipelineCode}/batch-execution-details"
       ]?.get?.parameters,
     ).toHaveLength(2);
-    expect(openApiDocument.paths["/api/auth/login"]?.post?.security).toEqual(
-      [],
-    );
-    expect(openApiDocument.paths["/api/auth/refresh"]?.post?.security).toEqual(
-      [],
-    );
-    expect(
-      openApiDocument.paths["/api/auth/login"]?.post?.requestBody,
-    ).toBeDefined();
+    expect(openApiDocument.paths["/api/auth/me"]?.get).toBeDefined();
+    expect(openApiDocument.paths["/api/auth/login"]).toBeUndefined();
+    expect(openApiDocument.paths["/api/auth/refresh"]).toBeUndefined();
     expect(
       openApiDocument.paths["/api/processing-pipelines"]?.get?.parameters,
     ).toBeUndefined();

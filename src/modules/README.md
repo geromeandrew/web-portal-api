@@ -2,8 +2,7 @@
 
 Each folder represents a business capability instead of a technical layer:
 
-- `auth` — sign-in, sign-out, current user, password changes, and bootstrap admin setup.
-- `users` — administrator user management.
+- `auth` — Okta access-token verification, current-user identity, and local workspace linking.
 - `uploads` — portal file upload metadata and Lambda upload integration.
 - `prepaid` and `memo` — workflow state and exports.
 - `processing-pipelines` — configured pipeline files, S3 storage, and Bayan Step Functions executions.

@@ -45,7 +45,7 @@ export class PostgresRateLimiter {
     policy: RateLimitPolicy,
     value: string,
   ): Promise<RateLimitResult> {
-    const key = createHmac("sha256", this.config.JWT_SECRET)
+    const key = createHmac("sha256", this.config.RATE_LIMIT_HMAC_SECRET)
       .update(`${policy.scope}:${value}`)
       .digest("hex");
     const result = await this.pool.query<{

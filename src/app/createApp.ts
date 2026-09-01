@@ -1,12 +1,10 @@
 import express, { type Express, type RequestHandler } from "express";
-import cookieParser from "cookie-parser";
 import multer from "multer";
 import swaggerUi from "swagger-ui-express";
 import type { AppDependencies } from "./dependencies.js";
 import { errorHandler, notFound } from "../errors.js";
 import { createOpenApiDocument } from "../openapi.js";
 import { createAuthRouter } from "../modules/auth/api/router.js";
-import { createUsersRouter } from "../modules/users/api/router.js";
 import { createUploadsRouter } from "../modules/uploads/api/router.js";
 import { createPrepaidRouter } from "../modules/prepaid/api/router.js";
 import { createMemoRouter } from "../modules/memo/api/router.js";
@@ -29,7 +27,6 @@ export function createApplication(dependencies: AppDependencies): Express {
   app.disable("x-powered-by");
   app.set("trust proxy", dependencies.config.TRUST_PROXY_HOPS);
   app.use(createSecurityHeaders(dependencies.config));
-  app.use(cookieParser());
   app.use(express.json({ limit: "128kb" }));
   app.use(
     "/api",
@@ -76,7 +73,6 @@ function registerFeatureRoutes(
   singleFileUpload: RequestHandler,
 ) {
   app.use("/api/auth", createAuthRouter(dependencies));
-  app.use("/api/admin/users", createUsersRouter(dependencies));
   app.use("/api/uploads", createUploadsRouter(dependencies, singleFileUpload));
   app.use("/api/workflows/prepaid", createPrepaidRouter(dependencies));
   app.use("/api/workflows/memo", createMemoRouter(dependencies));

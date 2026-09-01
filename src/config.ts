@@ -15,12 +15,19 @@ const envSchema = z
       .string()
       .regex(/^[a-z_][a-z0-9_]*$/, "must be a lowercase PostgreSQL identifier")
       .default("web_portal"),
-    JWT_SECRET: z.string().min(32),
-    JWT_EXPIRES_IN: z.string().default("15m"),
-    REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(30),
+    OKTA_ISSUER: z
+      .string()
+      .url()
+      .default("https://globe.okta.com/oauth2/default")
+      .transform((value) => value.replace(/\/$/, ""))
+      .refine(
+        (value) => new URL(value).pathname.startsWith("/oauth2/"),
+        "must identify a custom Okta authorization server",
+      ),
+    OKTA_AUDIENCE: z.string().min(1).default("api://default"),
+    OKTA_CLIENT_ID: z.string().min(1).default("0oa28lk9m5953nLCA0h8"),
+    RATE_LIMIT_HMAC_SECRET: z.string().min(32),
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
-    ADMIN_EMAIL: z.string().email(),
-    ADMIN_PASSWORD: z.string().min(12),
     LAMBDA_UPLOAD_URL: z.string().url(),
     S3_BUCKET: z.string().min(3),
     AWS_REGION: z.string().min(1),
@@ -62,7 +69,13 @@ const envSchema = z
 export type Config = z.infer<typeof envSchema> & { allowedMimeTypes: string[] };
 
 export function loadConfig(env = process.env): Config {
-  const parsed = envSchema.safeParse(env);
+  const parsed = envSchema.safeParse({
+    ...env,
+    // Transitional fallback lets an existing ignored local .env keep its
+    // opaque HMAC material while deployments move to the clearer name.
+    RATE_LIMIT_HMAC_SECRET:
+      env.RATE_LIMIT_HMAC_SECRET || env.JWT_SECRET,
+  });
   if (!parsed.success) {
     throw new Error(
       `Invalid API configuration: ${parsed.error.issues.map((issue) => issue.path.join(".") + " " + issue.message).join(", ")}`,
