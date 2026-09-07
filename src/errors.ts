@@ -1,4 +1,5 @@
 import type { ErrorRequestHandler, RequestHandler } from "express";
+import { ZodError } from "zod";
 
 export class AppError extends Error {
   constructor(
@@ -22,6 +23,15 @@ export const errorHandler: ErrorRequestHandler = (
   response,
   _next,
 ) => {
+  if (error instanceof ZodError) {
+    response.status(400).json({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "The request contains invalid data.",
+      },
+    });
+    return;
+  }
   if (error instanceof AppError) {
     response.status(error.status).json({
       error: {

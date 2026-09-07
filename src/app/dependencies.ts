@@ -3,6 +3,8 @@ import type { Config } from "../config.js";
 import type { ProcessingPipelineStorage } from "../processingPipelineStorage.js";
 import type { StepFunctionsRunner } from "../stepFunctionsRunner.js";
 import type { Logger } from "../platform/logger.js";
+import type { PostgresRateLimiter } from "./security.js";
+import type { RequestHandler } from "express";
 
 /**
  * The application receives its outside-world dependencies here.
@@ -16,4 +18,6 @@ export type AppDependencies = {
   processingPipelineStorage: ProcessingPipelineStorage;
   stepFunctionsRunner: StepFunctionsRunner;
   logger: Logger;
+  rateLimiter: PostgresRateLimiter;
+  authenticate: RequestHandler;
 };

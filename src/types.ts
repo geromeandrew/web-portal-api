@@ -3,9 +3,10 @@ declare global {
     interface Request {
       auth?: {
         userId: string;
+        oktaSubject: string;
         email: string;
-        isBootstrapAdmin: boolean;
-        mustChangePassword: boolean;
+        createdAt: Date;
+        tokenExpiresAt: Date;
       };
     }
   }

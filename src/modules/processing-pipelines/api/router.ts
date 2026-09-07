@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import express, { type RequestHandler } from "express";
 import { z } from "zod";
 import type { AppDependencies } from "../../../app/dependencies.js";
-import { createAuthMiddleware, requireBootstrapAdmin } from "../../../auth.js";
 import {
   canonicalizeProcessingPipelineExpectedFileName,
   matchesProcessingPipelineRequirement,
@@ -123,11 +122,12 @@ export function createProcessingPipelinesRouter(
     processingPipelineStorage,
     stepFunctionsRunner,
     logger,
+    authenticate,
   }: AppDependencies,
   singleFile: RequestHandler,
 ) {
   const router = express.Router();
-  router.use(createAuthMiddleware(pool, config));
+  router.use(authenticate);
   const resolveBatchFiles = async (
     pipelineCode: string,
     mapping: PipelineBatchStepFunctionMapping,
@@ -169,7 +169,6 @@ export function createProcessingPipelinesRouter(
   });
   router.get(
     "/:pipelineCode/execution-details",
-    requireBootstrapAdmin,
     async (request, response) => {
       const pipelineCode = pipelineCodeSchema.parse(
         request.params.pipelineCode,
@@ -242,7 +241,6 @@ export function createProcessingPipelinesRouter(
   );
   router.get(
     "/:pipelineCode/batch-execution-details",
-    requireBootstrapAdmin,
     async (request, response) => {
       const pipelineCode = pipelineCodeSchema.parse(
         request.params.pipelineCode,
@@ -491,7 +489,6 @@ export function createProcessingPipelinesRouter(
   });
   router.post(
     "/:pipelineCode/runs",
-    requireBootstrapAdmin,
     async (request, response) => {
       const pipelineCode = pipelineCodeSchema.parse(
         request.params.pipelineCode,
@@ -605,7 +602,6 @@ export function createProcessingPipelinesRouter(
   );
   router.post(
     "/:pipelineCode/batch-runs",
-    requireBootstrapAdmin,
     async (request, response) => {
       const pipelineCode = pipelineCodeSchema.parse(
         request.params.pipelineCode,
@@ -829,7 +825,6 @@ export function createProcessingPipelinesRouter(
   );
   router.get(
     "/:pipelineCode/runs/:runId",
-    requireBootstrapAdmin,
     async (request, response) => {
       const pipelineCode = pipelineCodeSchema.parse(
         request.params.pipelineCode,

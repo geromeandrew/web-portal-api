@@ -11,7 +11,8 @@ import {
 } from "./stepFunctionsRunner.js";
 import { createApplication } from "./app/createApp.js";
 import { createLogger } from "./platform/logger.js";
-export { ensureBootstrapAdmin } from "./modules/auth/application/bootstrapAdmin.js";
+import { PostgresRateLimiter } from "./app/security.js";
+import { createAuthMiddleware } from "./auth.js";
 
 /**
  * Compatibility entry point used by existing tests and scripts.
@@ -31,5 +32,7 @@ export function createApp(
     processingPipelineStorage,
     stepFunctionsRunner,
     logger: createLogger(),
+    rateLimiter: new PostgresRateLimiter(pool, config),
+    authenticate: createAuthMiddleware(pool, config),
   });
 }

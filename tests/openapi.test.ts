@@ -11,10 +11,11 @@ const config: Config = {
   NODE_ENV: "test",
   PORT: 3001,
   DATABASE_URL: "postgresql://portal:password@127.0.0.1:5432/web_portal",
-  JWT_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
-  JWT_EXPIRES_IN: "8h",
-  ADMIN_EMAIL: "admin@example.com",
-  ADMIN_PASSWORD: "a-secure-bootstrap-password",
+  OKTA_ISSUER: "https://example.okta.com/oauth2/default",
+  OKTA_AUDIENCE: "api://default",
+  OKTA_CLIENT_ID: "test-client-id",
+  RATE_LIMIT_HMAC_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
+  TRUST_PROXY_HOPS: 0,
   LAMBDA_UPLOAD_URL: "https://example.lambda-url.ap-southeast-1.on.aws",
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
@@ -37,7 +38,7 @@ describe("OpenAPI documentation", () => {
         ).length,
       0,
     );
-    expect(operationCount).toBe(16);
+    expect(operationCount).toBe(13);
     expect(openApiDocument.paths["/api/uploads"]).toBeUndefined();
     expect(
       openApiDocument.paths["/api/workflows/prepaid/report.csv"],
@@ -56,12 +57,9 @@ describe("OpenAPI documentation", () => {
         "/api/processing-pipelines/{pipelineCode}/batch-execution-details"
       ]?.get?.parameters,
     ).toHaveLength(2);
-    expect(openApiDocument.paths["/api/auth/login"]?.post?.security).toEqual(
-      [],
-    );
-    expect(
-      openApiDocument.paths["/api/auth/login"]?.post?.requestBody,
-    ).toBeDefined();
+    expect(openApiDocument.paths["/api/auth/me"]?.get).toBeDefined();
+    expect(openApiDocument.paths["/api/auth/login"]).toBeUndefined();
+    expect(openApiDocument.paths["/api/auth/refresh"]).toBeUndefined();
     expect(
       openApiDocument.paths["/api/processing-pipelines"]?.get?.parameters,
     ).toBeUndefined();
@@ -117,7 +115,22 @@ describe("OpenAPI documentation", () => {
   });
 
   it("serves the OpenAPI JSON and Swagger UI", async () => {
-    const server = createApp({} as Pool, config).listen(0);
+    const pool = {
+      query: async (query: string) => {
+        if (query.includes("rate_limit_buckets"))
+          return {
+            rows: [
+              {
+                request_count: 1,
+                expires_at: new Date(Date.now() + 60_000),
+              },
+            ],
+            rowCount: 1,
+          };
+        return { rows: [], rowCount: 1 };
+      },
+    } as unknown as Pool;
+    const server = createApp(pool, config).listen(0);
     await once(server, "listening");
     const { port } = server.address() as AddressInfo;
 
@@ -131,6 +144,13 @@ describe("OpenAPI documentation", () => {
         ]);
       expect(rootResponse.status).toBe(302);
       expect(rootResponse.headers.get("location")).toBe("/api/docs/");
+      expect(rootResponse.headers.get("x-frame-options")).toBe("DENY");
+      expect(rootResponse.headers.get("x-xss-protection")).toBe(
+        "1; mode=block",
+      );
+      expect(rootResponse.headers.get("x-content-type-options")).toBe(
+        "nosniff",
+      );
       expect(specResponse.status).toBe(200);
       expect(await specResponse.json()).toEqual(openApiDocument);
       expect(docsResponse.status).toBe(200);

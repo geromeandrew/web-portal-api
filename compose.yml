@@ -8,17 +8,22 @@ services:
     environment: &api_environment
       NODE_ENV: production
       PORT: 3001
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
-      DATABASE_SCHEMA: ${DATABASE_SCHEMA:-web_portal}
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
-      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
-      LAMBDA_UPLOAD_URL: ${LAMBDA_UPLOAD_URL:?Set LAMBDA_UPLOAD_URL in .env}
-      S3_BUCKET: ${S3_BUCKET:?Set S3_BUCKET in .env}
-      AWS_REGION: ${AWS_REGION:?Set AWS_REGION in .env}
-      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-4500000}
-      ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES:?Set ALLOWED_MIME_TYPES in .env}
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA}
+      OKTA_ISSUER: ${OKTA_ISSUER:-https://globemfa.okta.com/oauth2/default}
+      OKTA_AUDIENCE: ${OKTA_AUDIENCE:-api://default}
+      OKTA_CLIENT_ID: ${OKTA_CLIENT_ID:-0oa28lk9m5953nLCA0h8}
+      RATE_LIMIT_HMAC_SECRET: ${RATE_LIMIT_HMAC_SECRET:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      LAMBDA_UPLOAD_URL: ${LAMBDA_UPLOAD_URL}
+      S3_BUCKET: ${S3_BUCKET}
+      AWS_REGION: ${AWS_REGION}
+      AWS_LOCAL: ${AWS_LOCAL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES}
+      ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES}
     command: ["node", "dist/migrate.js"]
     networks: [portal]
     restart: "no"
@@ -31,8 +36,6 @@ services:
       - "3001:3001"
     environment:
       <<: *api_environment
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Set AWS_ACCESS_KEY_ID in .env}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?Set AWS_SECRET_ACCESS_KEY in .env}
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -2,7 +2,7 @@ import type { Server } from "node:http";
 import { loadConfig } from "../config.js";
 import { createPool } from "../db.js";
 import { createLogger } from "../platform/logger.js";
-import { createApp, ensureBootstrapAdmin } from "../routes.js";
+import { createApp } from "../routes.js";
 
 /** Starts the HTTP server and wires process shutdown to database cleanup. */
 export async function startServer(): Promise<Server> {
@@ -12,13 +12,6 @@ export async function startServer(): Promise<Server> {
 
   try {
     await pool.query("SELECT 1");
-    const bootstrapAdmin = await ensureBootstrapAdmin(pool, config);
-    if (bootstrapAdmin) {
-      logger.info("auth.bootstrap_admin_created", {
-        email: bootstrapAdmin.email,
-      });
-    }
-
     const server = await new Promise<Server>((resolve) => {
       const httpServer = createApp(pool, config).listen(
         config.PORT,
