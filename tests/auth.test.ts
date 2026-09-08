@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createAuthMiddleware,
   OktaAuthenticator,
   type AccessTokenVerifier,
 } from "../src/auth.js";
@@ -24,6 +25,12 @@ const existingUser: UserRow = {
   must_change_password: false,
   token_version: 1,
   created_at: new Date("2026-01-02T03:04:05.000Z"),
+};
+
+const temporaryUser: UserRow = {
+  ...existingUser,
+  id: "6c3cecab-9e52-41b5-a2f2-d4da10cba187",
+  email: "juan.miguel.delacruz@globe.com",
 };
 
 function poolWithCandidates(candidates: UserRow[]) {
@@ -76,6 +83,14 @@ async function invoke(
   } as never;
   const error = await new Promise<unknown>((resolve) => {
     void authenticator.middleware(request, {} as never, resolve as never);
+  });
+  return { request: request as Express.Request, error };
+}
+
+async function invokeMiddleware(middleware: Express.RequestHandler) {
+  const request = { header: () => undefined } as never;
+  const error = await new Promise<unknown>((resolve) => {
+    void middleware(request, {} as never, resolve as never);
   });
   return { request: request as Express.Request, error };
 }
@@ -200,5 +215,57 @@ describe("OktaAuthenticator", () => {
       status: 409,
       code: "IDENTITY_CONFLICT",
     });
+  });
+});
+
+describe("temporary local authentication", () => {
+  it("uses the preview identity without requiring or verifying a bearer token", async () => {
+    const queries: Array<{ sql: string; values?: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (sql: string, values?: unknown[]) => {
+        queries.push({ sql, values });
+        if (sql.includes("SELECT * FROM users WHERE lower(email)")) return { rows: [temporaryUser] };
+        if (sql.includes("SELECT id FROM workspaces")) return { rows: [{ id: "workspace-id" }] };
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+    };
+    const pool = { connect: async () => client } as unknown as Pool;
+    const verifier = { verifyAccessToken: vi.fn() } as AccessTokenVerifier;
+
+    const result = await invokeMiddleware(createAuthMiddleware(pool, config, verifier));
+
+    expect(result.error).toBeUndefined();
+    expect(result.request.auth).toMatchObject({
+      userId: temporaryUser.id,
+      email: "juan.miguel.delacruz@globe.com",
+      oktaSubject: "temporary-local-auth-bypass",
+    });
+    expect(verifier.verifyAccessToken).not.toHaveBeenCalled();
+    expect(queries.some(({ sql }) => sql.includes("SELECT * FROM users WHERE lower(email)"))).toBe(true);
+  });
+
+  it("creates the preview user with the legacy password field for older local schemas", async () => {
+    const queries: Array<{ sql: string; values?: unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (sql: string, values?: unknown[]) => {
+        queries.push({ sql, values });
+        if (sql.includes("SELECT * FROM users WHERE lower(email)")) return { rows: [] };
+        if (sql.includes("INSERT INTO users")) return { rows: [temporaryUser] };
+        if (sql.includes("SELECT id FROM workspaces")) return { rows: [{ id: "workspace-id" }] };
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+    };
+    const pool = { connect: async () => client } as unknown as Pool;
+
+    const result = await invokeMiddleware(createAuthMiddleware(pool, config));
+
+    expect(result.error).toBeUndefined();
+    expect(queries.find(({ sql }) => sql.includes("INSERT INTO users"))?.values).toEqual([
+      expect.any(String),
+      "juan.miguel.delacruz@globe.com",
+      "temporary-local-auth-bypass-disabled",
+    ]);
   });
 });

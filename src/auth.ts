@@ -9,6 +9,17 @@ import { AppError } from "./errors.js";
 import type { UserRow } from "./modules/shared/api/dtos.js";
 import { ensureWorkspace } from "./workspace.js";
 
+/**
+ * TEMPORARY LOCAL UI-REVIEW SWITCH.
+ *
+ * Set this to true before restoring normal Okta enforcement or deploying the
+ * API. Keep it false only while the matching local frontend bypass is active.
+ */
+export const ENABLE_OKTA_AUTH = false;
+const temporaryAuthEmail = "juan.miguel.delacruz@globe.com";
+const temporaryAuthSubject = "temporary-local-auth-bypass";
+const temporaryAuthPasswordHash = "temporary-local-auth-bypass-disabled";
+
 type VerifiedAccessToken = {
   claims: {
     sub?: unknown;
@@ -214,10 +225,52 @@ export class OktaAuthenticator {
   }
 }
 
+/**
+ * Supplies a stable local user for temporary UI work without assigning an
+ * Okta subject. A later real Okta login can therefore link the same email.
+ */
+export class TemporaryAuthenticator {
+  constructor(private readonly pool: Pool) {}
+
+  readonly middleware: RequestHandler = async (request, _response, next) => {
+    try {
+      const user = await this.findOrCreateUser();
+      request.auth = {
+        userId: user.id,
+        oktaSubject: temporaryAuthSubject,
+        email: user.email,
+        createdAt: user.created_at,
+        tokenExpiresAt: new Date("2999-12-31T23:59:59.999Z"),
+      };
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  private async findOrCreateUser() {
+    return withTransaction(this.pool, async (client) => {
+      const existing = await client.query<UserRow>(
+        "SELECT * FROM users WHERE lower(email) = $1 FOR UPDATE",
+        [temporaryAuthEmail],
+      );
+      const user = existing.rows[0] ?? (
+        await client.query<UserRow>(
+          "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3) RETURNING *",
+          [randomUUID(), temporaryAuthEmail, temporaryAuthPasswordHash],
+        )
+      ).rows[0];
+      await ensureWorkspace(client, user.id);
+      return user;
+    });
+  }
+}
+
 export function createAuthMiddleware(
   pool: Pool,
   config: Config,
   verifier?: AccessTokenVerifier,
 ) {
+  if (!ENABLE_OKTA_AUTH) return new TemporaryAuthenticator(pool).middleware;
   return new OktaAuthenticator(pool, config, verifier).middleware;
 }

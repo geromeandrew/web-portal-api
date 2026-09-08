@@ -35,7 +35,7 @@ describe("loadConfig", () => {
 
   it("uses the provisional Okta defaults and keeps proxy trust disabled locally", () => {
     const config = loadConfig(base);
-    expect(config.OKTA_ISSUER).toBe("https://globe.okta.com/oauth2/default");
+    expect(config.OKTA_ISSUER).toBe("https://globemfa.okta.com/oauth2/default");
     expect(config.OKTA_AUDIENCE).toBe("api://default");
     expect(config.OKTA_CLIENT_ID).toBe("0oa28lk9m5953nLCA0h8");
     expect(config.RATE_LIMIT_HMAC_SECRET).toBe(base.RATE_LIMIT_HMAC_SECRET);
@@ -43,7 +43,9 @@ describe("loadConfig", () => {
   });
 
   it("rejects the Okta org issuer for a custom API", () => {
-    expect(() => loadConfig({ ...base, OKTA_ISSUER: "https://globe.okta.com" })).toThrow("OKTA_ISSUER");
+    expect(() =>
+      loadConfig({ ...base, OKTA_ISSUER: "https://globe.okta.com" }),
+    ).toThrow("OKTA_ISSUER");
   });
 
   it("accepts the legacy JWT secret only as a rate-limit migration fallback", () => {

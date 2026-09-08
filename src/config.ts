@@ -18,7 +18,7 @@ const envSchema = z
     OKTA_ISSUER: z
       .string()
       .url()
-      .default("https://globe.okta.com/oauth2/default")
+      .default("https://globemfa.okta.com/oauth2/default")
       .transform((value) => value.replace(/\/$/, ""))
       .refine(
         (value) => new URL(value).pathname.startsWith("/oauth2/"),
@@ -71,10 +71,7 @@ export type Config = z.infer<typeof envSchema> & { allowedMimeTypes: string[] };
 export function loadConfig(env = process.env): Config {
   const parsed = envSchema.safeParse({
     ...env,
-    // Transitional fallback lets an existing ignored local .env keep its
-    // opaque HMAC material while deployments move to the clearer name.
-    RATE_LIMIT_HMAC_SECRET:
-      env.RATE_LIMIT_HMAC_SECRET || env.JWT_SECRET,
+    RATE_LIMIT_HMAC_SECRET: env.RATE_LIMIT_HMAC_SECRET || env.JWT_SECRET,
   });
   if (!parsed.success) {
     throw new Error(
