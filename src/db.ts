@@ -12,7 +12,7 @@ export function createPool(config: Config, setSearchPath = true) {
     ssl: config.DATABASE_SSL
       ? {
           ca: readFileSync(
-            new URL("../certs/rds-ap-southeast-1-rsa2048-g1.pem", import.meta.url),
+            new URL("../certs/rds-us-east-1-rsa2048-g1.pem", import.meta.url),
             "utf8",
           ),
           rejectUnauthorized: true,
