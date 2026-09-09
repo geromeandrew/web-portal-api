@@ -64,31 +64,6 @@ const runParameters: OpenAPIV3.ParameterObject[] = [
 const nestedRunParameters = runParameters.filter(
   (parameter) => parameter.name !== "pipelineCode",
 );
-const loginRequestBody: OpenAPIV3.RequestBodyObject = {
-  required: true,
-  description: "Credentials for an active portal user.",
-  content: {
-    "application/json": {
-      schema: {
-        type: "object",
-        required: ["email", "password"],
-        properties: {
-          email: {
-            type: "string",
-            format: "email",
-            example: "admin@portal.local",
-          },
-          password: {
-            type: "string",
-            format: "password",
-            minLength: 1,
-            example: "••••••••••••",
-          },
-        },
-      },
-    },
-  },
-};
 const jsonBody = (
   schema: OpenAPIV3.SchemaObject,
   description?: string,
@@ -133,30 +108,6 @@ const batchCycle: OpenAPIV3.ParameterObject = {
   required: true,
   schema: { type: "string", pattern: "^\\d{2}$", example: "01" },
 };
-const changePasswordBody = jsonBody({
-  type: "object",
-  required: ["currentPassword", "newPassword"],
-  properties: {
-    currentPassword: { type: "string", format: "password" },
-    newPassword: { type: "string", format: "password", minLength: 12 },
-  },
-});
-const createUserBody = jsonBody({
-  type: "object",
-  required: ["email", "temporaryPassword"],
-  properties: {
-    email: { type: "string", format: "email" },
-    temporaryPassword: { type: "string", format: "password", minLength: 12 },
-  },
-});
-const updateUserBody = jsonBody({
-  type: "object",
-  properties: {
-    isActive: { type: "boolean" },
-    temporaryPassword: { type: "string", format: "password", minLength: 12 },
-  },
-  minProperties: 1,
-});
 const freezeLayoutBody = jsonBody({
   type: "object",
   required: ["frozen"],
@@ -252,7 +203,6 @@ const allOpenApiDocument: OpenAPIV3.Document = {
   tags: [
     { name: "Health" },
     { name: "Authentication" },
-    { name: "Administration" },
     { name: "Uploads" },
     { name: "Prepaid" },
     { name: "Memo" },
@@ -262,29 +212,7 @@ const allOpenApiDocument: OpenAPIV3.Document = {
     "/api/healthz": {
       get: { ...success("Check API and database availability"), security: [] },
     },
-    "/api/auth/login": {
-      post: {
-        ...success("Sign in"),
-        security: [],
-        requestBody: loginRequestBody,
-      },
-    },
-    "/api/auth/logout": { post: noContent("Sign out") },
     "/api/auth/me": { get: success("Get current user") },
-    "/api/auth/change-password": {
-      post: { ...success("Change password"), requestBody: changePasswordBody },
-    },
-    "/api/admin/users": {
-      get: success("List users"),
-      post: { ...created("Create user"), requestBody: createUserBody },
-    },
-    "/api/admin/users/{id}": {
-      patch: {
-        ...success("Update user"),
-        parameters: [uuidPath],
-        requestBody: updateUserBody,
-      },
-    },
     "/api/uploads": {
       post: {
         ...created("Upload a workflow file"),
@@ -412,7 +340,12 @@ const allOpenApiDocument: OpenAPIV3.Document = {
   },
   components: {
     securitySchemes: {
-      bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+      bearerAuth: {
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "JWT",
+        description: "Okta OAuth 2.0 access token.",
+      },
     },
   },
   security: [{ bearerAuth: [] }],
@@ -421,7 +354,6 @@ const allOpenApiDocument: OpenAPIV3.Document = {
 function tagForPath(path: string) {
   if (path === "/api/healthz") return "Health";
   if (path.startsWith("/api/auth/")) return "Authentication";
-  if (path.startsWith("/api/admin/")) return "Administration";
   if (path.startsWith("/api/uploads")) return "Uploads";
   if (path.startsWith("/api/workflows/prepaid")) return "Prepaid";
   if (path.startsWith("/api/workflows/memo")) return "Memo";

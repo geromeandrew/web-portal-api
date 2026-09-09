@@ -1,23 +1,90 @@
-FROM node:22-alpine AS dependencies
-WORKDIR /app
-RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
 
-FROM dependencies AS build
-COPY tsconfig.json ./
-COPY certs ./certs
-COPY src ./src
-RUN pnpm build
+# # 
+# # hmd-docker-local/docker-ansible
+# #
+# # Built with Alpine Linux
+# ##################
+# # Set Build Args #
+# ##################
+ARG LABEL_MAINTAINER="ceso-isg-platengr@globe.com.ph"
+ARG LABEL_VERSION="v3.0.0"
+ARG JFROG_URL="globe.pe.jfrog.io"
+ARG JFROG_REPO="hmd-docker-virtual"
+ARG BASE_IMAGE="node:22.14.0-alpine"
+FROM ${JFROG_URL}/${JFROG_REPO}/${BASE_IMAGE} as Builder
 
-FROM node:22-alpine AS runtime
+###############
+# Build Setup #
+###############
+# Inherit Build Args
+ARG JFROG_USERNAME
+ARG JFROG_PASSWORD
+ARG JFROG_ACCESS_TOKEN
+ARG ARTIFACTORY_URL
+ARG PE_JFROG_ACCESS_TOKEN
+ARG LABEL_MAINTAINER
+ARG LABEL_VERSION
+ARG PE_JFROG_URL
+ARG PE_JFROG_REPO
+
+# # Setup Docker Labels
+# LABEL maintainer=$LABEL_MAINTAINER
+# LABEL version=$LABEL_VERSION
+
+USER root
+
+# clear alpine repos
+RUN cp /dev/null /etc/apk/repositories
+# add JFrog as primary alpine repos
+RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.21/main" >> /etc/apk/repositories
+RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/v3.21/community" >> /etc/apk/repositories
+RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/hmd-alpinelinux/edge/community" >> /etc/apk/repositories
+
+
+# Set environment variables
+ENV VIRTUAL_ENV=/venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# # Install system dependencies
+RUN apk update && apk add --no-cache \
+     bash
+#     openssh 9.8_p1-r0\
+#     openssl
+
+# Set the working directory
 WORKDIR /app
+
+COPY . .
+
+# Step 1: Generate Base64 auth and write directly to .npmrc to avoid CLI parsing errors
+RUN AUTH_BASE64=$(printf "%s:%s" "$JFROG_USERNAME" "$JFROG_PASSWORD" | base64 | tr -d '\n') && \
+    echo "registry=https://${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/" > ~/.npmrc && \
+    echo "//${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth=${AUTH_BASE64}" >> ~/.npmrc && \
+    echo "always-auth=true" >> ~/.npmrc
+
+RUN npm install --verbose
+
+# Set the environment to production
 ENV NODE_ENV=production
-RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --prod --frozen-lockfile && pnpm store prune
-COPY --from=build /app/certs ./certs
-COPY --from=build /app/dist ./dist
-USER node
+
+#Build the typescript files
+RUN npm run build --verbose
+
+# Strip credentials out before finalizing this stage
+RUN rm -f ~/.npmrc
+
+
+# Step 2: Create a smaller runtime image
+FROM Builder as Runner
+
+# Set working directory
+WORKDIR /app
+
+# Copy only the built files and necessary dependencies from the builder
+COPY --from=Builder /app ./
+
+# Expose the port your app runs on
 EXPOSE 3001
-CMD ["node", "dist/index.js"]
+
+# Command to start the application
+CMD ["npm", "run", "start"]

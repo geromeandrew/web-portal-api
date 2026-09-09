@@ -5,6 +5,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { createAwsClientOptions } from "./aws.js";
 import type { Config } from "./config.js";
 import {
   matchesProcessingPipelineRequirement,
@@ -183,7 +184,7 @@ export class ProcessingPipelineStorage {
 
 export function createProcessingPipelineStorage(config: Config) {
   return new ProcessingPipelineStorage(
-    new S3Client({ region: config.AWS_REGION }),
+    new S3Client(createAwsClientOptions(config)),
     config.S3_BUCKET,
   );
 }

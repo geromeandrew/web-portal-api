@@ -1,11 +1,12 @@
 node_modules/
+.pnpm-store/
 dist/
 .env
 .env.*
-!.env.development.example
-!.env.production.example
+!.env.example
 coverage/
 *.tsbuildinfo
+certs/
 
 # Local supporting material; application source and tracked documentation remain unaffected.
 docs/

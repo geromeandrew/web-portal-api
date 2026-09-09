@@ -1,69 +1,147 @@
-# Web Portal API
+# esatp-coreapi
 
-Node 22 + TypeScript + Express API for the Web Portal. It owns PostgreSQL migrations, authentication, workflow state, upload metadata, and the integration with the existing Lambda upload endpoint.
+Node.js API for ESATP processing pipelines, file storage, and Step Functions
+executions.
 
-New to this codebase? Read [the architecture guide](docs/ARCHITECTURE.md) before adding an endpoint.
+## Environment setup
 
-## Configuration
+### Local development
 
-Copy the matching environment template to `.env`; do not commit it.
+1. Copy `.env.example` to `.env` and replace every placeholder.
+2. Keep `AWS_LOCAL=true` and provide `AWS_ACCESS_KEY_ID` and
+   `AWS_SECRET_ACCESS_KEY` in `.env`.
+3. Run `pnpm local`, or run `docker compose up --build` when using the local
+   Compose workflow.
 
-- `.env.development.example` is for local Node development.
-- `.env.production.example` is for Docker deployment.
+`pnpm local` loads `.env` through Node's `--env-file=.env` option. Docker
+Compose loads the same file through its environment configuration; neither
+workflow needs the `dotenv` package. EKS development and production both run
+`pnpm start` without `.env`; EKS injects their environment variables.
 
-Every environment connects to Amazon RDS through `DATABASE_URL` and uses the `web_portal` schema by default. URI-encode the password when constructing the URL; do not commit `.env`. The API verifies the RDS TLS certificate using the bundled AWS us-east-1 CA.
+### Configuration contract
 
-## Local development
+| Setting | Source | Notes |
+| --- | --- | --- |
+| `NODE_ENV`, `PORT`, `DATABASE_SCHEMA`, `OKTA_ISSUER`, `OKTA_AUDIENCE`, `OKTA_CLIENT_ID`, `TRUST_PROXY_HOPS`, `LAMBDA_UPLOAD_URL`, `S3_BUCKET`, `AWS_REGION`, `MAX_UPLOAD_BYTES`, `ALLOWED_MIME_TYPES`, `OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS` | Deployment configuration | Use the dev or production value for the target environment. `OKTA_ISSUER` must identify a custom authorization server, such as `/oauth2/default`. Set `TRUST_PROXY_HOPS=1` only when the API is behind the controlled production proxy. |
+| `DATABASE_URL`, `RATE_LIMIT_HMAC_SECRET` | Secret store | Never commit these values. The API validates Okta access tokens through the issuer's JWKS endpoint; it does not use the SPA client secret. |
+| `AWS_LOCAL` | Deployment configuration | `true` only for local development; `false` in EKS. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Local `.env` only | Required only when `AWS_LOCAL=true`; do not configure them in EKS. |
 
-Create the shared network once, then configure RDS and start the API:
+EKS development and production values are managed by the deployment platform;
+they are intentionally not duplicated in repository environment files.
 
-```bash
-docker network create web-portal-shared
-pnpm install
-cp .env.development.example .env
-pnpm db:migrate
-pnpm dev
+### EKS development and production
+
+For both the API Deployment and database migration Job:
+
+1. Supply ordinary settings through the platform's deployment configuration and
+   secret settings through its approved secret store.
+2. Set `AWS_LOCAL=false` and do not inject `AWS_ACCESS_KEY_ID` or
+   `AWS_SECRET_ACCESS_KEY`.
+3. Associate the workload service account with the environment's AWS IAM role
+   (EKS Pod Identity or IRSA). The AWS SDK resolves this identity through its
+   standard default credential chain.
+
+The role must be scoped to the configured resources and allow the API's AWS
+operations: `s3:ListBucket`, `s3:GetObject`, `s3:PutObject`,
+`states:StartExecution`, `states:DescribeStateMachine`,
+`states:DescribeExecution`, and `sts:GetCallerIdentity`.
+
+### Verification
+
+```powershell
+pnpm.cmd test
+pnpm.cmd build
 ```
 
-Set the real RDS URL, JWT, administrator, Lambda, S3 bucket/region, IAM user access key, and upload-policy values in `.env` before starting the service. Processing Pipelines reads `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from the API container only; attach least-privilege `s3:ListBucket` access on `S3_BUCKET`, `s3:GetObject` access on `S3_BUCKET/*`, `states:StartExecution`, `states:DescribeExecution`, and `states:DescribeStateMachine` access on mapped state-machine ARNs, and `sts:GetCallerIdentity` to that IAM user. Do not add AWS access keys to the frontend or commit them to `.env`.
 
-## EC2 deployment
 
-1. Create `web-portal-shared` if it does not exist.
-2. Copy the production template to `.env` and set the real RDS URL and application secrets.
-3. Run `docker compose up --build -d` here; the migration service creates the fresh `web_portal` schema before the API starts.
-4. Wait for API health, then deploy the sibling `web-portal` frontend repository.
+## Getting started
 
-The API has no host port. The frontend Nginx proxy reaches it through the private `web-portal-shared` Docker network. The former local PostgreSQL Docker volume is not deleted by this change.
+To make it easy for you to get started with GitLab, here's a list of recommended next steps.
 
-## Commands
+Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
 
-```bash
-pnpm test
-pnpm build
-pnpm db:migrate
-docker compose config
+## Add your files
+
+* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
+* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+
+```
+cd existing_repo
+git remote add origin https://gitlab.com/globetelecom/platforms/esatp/applications/esatp-coreapi.git
+git branch -M main
+git push -uf origin main
 ```
 
-## Docker Hub certificate error
+## Integrate with your tools
 
-If Docker reports that a certificate for another hostname (for example,
-`securelogin.hpe.com`) was returned while pulling `node:22-alpine`, the failure is
-caused by the host network proxy or certificate trust configuration, not this API
-project. Do not disable Docker TLS verification. Ask IT for the corporate proxy root
-certificate and proxy settings, install the certificate into **Local Computer >
-Trusted Root Certification Authorities**, restart Docker Desktop, then verify with:
+* [Set up project integrations](https://gitlab.com/globetelecom/platforms/esatp/applications/esatp-coreapi/-/settings/integrations)
 
-```bash
-docker pull node:22-alpine
-```
+## Collaborate with your team
 
-Docker Desktop imports trusted Windows certificate authorities for image pulls. See
-[Docker's Windows certificate guidance](https://docs.docker.com/engine/network/ca-certs/)
-for the secure setup steps.
+* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
+* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
+* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
+* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
+* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
 
-## API documentation
+## Test and Deploy
 
-Swagger UI is available at `/api/docs/` and the OpenAPI document is available at `/api/openapi.json` in every environment. By default it shows Health, Authentication, and Processing Pipelines only; this does not disable any routes. Set `OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS=true` and restart the API to restore every endpoint in Swagger. The documentation itself is public, while protected operations require a JWT bearer token. Use `POST /api/auth/login` to obtain an access token, then select **Authorize** in Swagger UI and enter the token.
+Use the built-in continuous integration in GitLab.
 
-For a concise endpoint-by-endpoint test walkthrough, see the [Swagger testing guide](docs/SWAGGER_TESTING_GUIDE.md).
+* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
+* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
+* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
+* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
+* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+
+***
+
+# Editing this README
+
+When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+
+## Suggestions for a good README
+
+Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+
+## Name
+Choose a self-explaining name for your project.
+
+## Description
+Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+
+## Badges
+On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+
+## Visuals
+Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+
+## Installation
+Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+
+## Usage
+Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+
+## Support
+Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+
+## Roadmap
+If you have ideas for releases in the future, it is a good idea to list them in the README.
+
+## Contributing
+State if you are open to contributions and what your requirements are for accepting them.
+
+For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+
+You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+
+## Authors and acknowledgment
+Show your appreciation to those who have contributed to the project.
+
+## License
+For open source projects, say how it is licensed.
+
+## Project status
+If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
