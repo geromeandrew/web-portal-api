@@ -25,7 +25,7 @@ const envSchema = z
         "must identify a custom Okta authorization server",
       ),
     OKTA_AUDIENCE: z.string().min(1).default("api://default"),
-    OKTA_CLIENT_ID: z.string().min(1).default("0oa28lk9m5953nLCA0h8"),
+    OKTA_CLIENT_ID: z.string().min(1).default("0oa28rfcq0h2ZSAvZ0h8"),
     RATE_LIMIT_HMAC_SECRET: z.string().min(32),
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
     LAMBDA_UPLOAD_URL: z.string().url(),

@@ -20,17 +20,12 @@ const existingUser: UserRow = {
   email: "person@example.com",
   password_hash: null,
   okta_subject: null,
+  display_name: null,
   is_bootstrap_admin: false,
   is_active: false,
   must_change_password: false,
   token_version: 1,
   created_at: new Date("2026-01-02T03:04:05.000Z"),
-};
-
-const temporaryUser: UserRow = {
-  ...existingUser,
-  id: "6c3cecab-9e52-41b5-a2f2-d4da10cba187",
-  email: "juan.miguel.delacruz@globe.com",
 };
 
 function poolWithCandidates(candidates: UserRow[]) {
@@ -46,12 +41,38 @@ function poolWithCandidates(candidates: UserRow[]) {
               ...existingUser,
               okta_subject: String(values?.[0]),
               email: String(values?.[1]),
+              display_name: String(values?.[2]),
             },
           ],
         };
       }
       if (sql.includes("UPDATE users SET email")) {
-        return { rows: [{ ...existingUser, email: String(values?.[0]) }] };
+        return {
+          rows: [
+            {
+              ...existingUser,
+              email: String(values?.[0]),
+              display_name: String(values?.[1]),
+            },
+          ],
+        };
+      }
+      if (
+        sql.includes(
+          "INSERT INTO users (id, email, okta_subject, display_name)",
+        )
+      ) {
+        return {
+          rows: [
+            {
+              ...existingUser,
+              id: String(values?.[0]),
+              email: String(values?.[1]),
+              okta_subject: String(values?.[2]),
+              display_name: String(values?.[3]),
+            },
+          ],
+        };
       }
       if (sql.includes("SELECT id FROM workspaces")) {
         return { rows: [{ id: "workspace-id" }] };
@@ -66,7 +87,10 @@ function poolWithCandidates(candidates: UserRow[]) {
       query: async (_sql: string, values?: unknown[]) => ({
         rows: candidates
           .filter((candidate) => candidate.okta_subject === values?.[0])
-          .map((candidate) => ({ email: candidate.email })),
+          .map((candidate) => ({
+            email: candidate.email,
+            display_name: candidate.display_name,
+          })),
       }),
     } as unknown as Pool,
     queries,
@@ -192,6 +216,246 @@ describe("OktaAuthenticator", () => {
     );
   });
 
+  it("uses a verified preferred username when it is an email address", async () => {
+    const { pool } = poolWithCandidates([existingUser]);
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: {
+          sub: "00u-okta-subject",
+          preferred_username: "Person@Example.com",
+          exp: 1_900_000_000,
+        },
+      }),
+    };
+
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.request.auth?.email).toBe("person@example.com");
+  });
+
+  it("uses Okta uid when sub is unavailable and does not require exp metadata", async () => {
+    const { pool } = poolWithCandidates([existingUser]);
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: {
+          uid: "00u-okta-uid",
+          email: "Person@Example.com",
+        },
+      }),
+    };
+
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.request.auth).toMatchObject({
+      oktaSubject: "00u-okta-uid",
+      email: "person@example.com",
+    });
+  });
+
+  it("uses a preferred username returned by userinfo when email is omitted", async () => {
+    const { pool } = poolWithCandidates([existingUser]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            sub: "00u-okta-subject",
+            preferred_username: "person@example.com",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: { sub: "00u-okta-subject", exp: 1_900_000_000 },
+      }),
+    };
+
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.request.auth?.email).toBe("person@example.com");
+  });
+
+  it("ignores a userinfo response for a different subject", async () => {
+    const { pool } = poolWithCandidates([]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            sub: "different-okta-subject",
+            email: "person@example.com",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: { sub: "00u-okta-subject", exp: 1_900_000_000 },
+      }),
+    };
+
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.request.auth?.email).toMatch(/@identity\.invalid$/);
+  });
+
+  it("provisions a stable local identity when Okta does not expose an email", async () => {
+    const { pool, queries } = poolWithCandidates([]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ sub: "00u-no-email" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: { sub: "00u-no-email", exp: 1_900_000_000 },
+      }),
+    };
+
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.request.auth?.email).toMatch(
+      /^okta-[a-f0-9]{64}@identity\.invalid$/,
+    );
+    expect(
+      queries.find(({ sql }) =>
+        sql.includes(
+          "INSERT INTO users (id, email, okta_subject, display_name)",
+        ),
+      )?.values?.[1],
+    ).toBe(result.request.auth?.email);
+  });
+
+  it("stores an Okta profile name for a user without an email claim", async () => {
+    const { pool, queries } = poolWithCandidates([]);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ sub: "00u-profile-name", name: "Jane Example" }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+    );
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: { sub: "00u-profile-name", exp: 1_900_000_000 },
+      }),
+    };
+
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.request.auth?.displayName).toBe("Jane Example");
+    expect(
+      queries.find(({ sql }) =>
+        sql.includes(
+          "INSERT INTO users (id, email, okta_subject, display_name)",
+        ),
+      )?.values?.[3],
+    ).toBe("Jane Example");
+  });
+
+  it("creates and provisions a user for a previously unseen Okta identity", async () => {
+    const { pool, queries } = poolWithCandidates([]);
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: {
+          sub: "00u-new-okta-subject",
+          email: "New.Person@Example.com",
+          exp: 1_900_000_000,
+        },
+      }),
+    };
+
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.request.auth).toMatchObject({
+      oktaSubject: "00u-new-okta-subject",
+      email: "new.person@example.com",
+    });
+    expect(
+      queries.find(({ sql }) =>
+        sql.includes(
+          "INSERT INTO users (id, email, okta_subject, display_name)",
+        ),
+      )?.values,
+    ).toEqual([
+      expect.any(String),
+      "new.person@example.com",
+      "00u-new-okta-subject",
+      "New Person",
+    ]);
+    expect(
+      queries.some(({ sql }) => sql.includes("SELECT id FROM workspaces")),
+    ).toBe(true);
+  });
+
+  it("does not rewrite an already-synchronized Okta user", async () => {
+    const linkedUser: UserRow = {
+      ...existingUser,
+      okta_subject: "00u-okta-subject",
+      display_name: "Person Example",
+    };
+    const { pool, queries } = poolWithCandidates([linkedUser]);
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: {
+          sub: "00u-okta-subject",
+          email: "person@example.com",
+          name: "Person Example",
+          exp: 1_900_000_000,
+        },
+      }),
+    };
+
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(queries.some(({ sql }) => sql.startsWith("UPDATE users SET"))).toBe(
+      false,
+    );
+  });
+
   it("rejects an email already linked to another Okta subject", async () => {
     const { pool } = poolWithCandidates([
       { ...existingUser, okta_subject: "different-subject" },
@@ -216,56 +480,62 @@ describe("OktaAuthenticator", () => {
       code: "IDENTITY_CONFLICT",
     });
   });
-});
 
-describe("temporary local authentication", () => {
-  it("uses the preview identity without requiring or verifying a bearer token", async () => {
-    const queries: Array<{ sql: string; values?: unknown[] }> = [];
-    const client = {
-      query: vi.fn(async (sql: string, values?: unknown[]) => {
-        queries.push({ sql, values });
-        if (sql.includes("SELECT * FROM users WHERE lower(email)")) return { rows: [temporaryUser] };
-        if (sql.includes("SELECT id FROM workspaces")) return { rows: [{ id: "workspace-id" }] };
-        return { rows: [] };
-      }),
-      release: vi.fn(),
+  it("reconciles an empty synthetic Okta account with its legacy email account", async () => {
+    const syntheticUser: UserRow = {
+      ...existingUser,
+      id: "bfda188c-70f2-4b9b-a59f-9f3d36288121",
+      email:
+        "okta-e32021d7a866eea9791da1f196de04bb5fa1b285f48e6a11ef37726870c6ed37@identity.invalid",
+      okta_subject: "00u-okta-subject",
+      display_name: "Okta account",
     };
-    const pool = { connect: async () => client } as unknown as Pool;
-    const verifier = { verifyAccessToken: vi.fn() } as AccessTokenVerifier;
+    const { pool, queries } = poolWithCandidates([syntheticUser, existingUser]);
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: {
+          sub: "00u-okta-subject",
+          email: "person@example.com",
+          name: "Person Example",
+          exp: 1_900_000_000,
+        },
+      }),
+    };
 
-    const result = await invokeMiddleware(createAuthMiddleware(pool, config, verifier));
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
 
     expect(result.error).toBeUndefined();
     expect(result.request.auth).toMatchObject({
-      userId: temporaryUser.id,
-      email: "juan.miguel.delacruz@globe.com",
-      oktaSubject: "temporary-local-auth-bypass",
+      userId: existingUser.id,
+      email: "person@example.com",
+      displayName: "Person Example",
+    });
+    expect(
+      queries.some(
+        ({ sql, values }) =>
+          sql === "DELETE FROM users WHERE id = $1" &&
+          values?.[0] === syntheticUser.id,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("configured API authentication", () => {
+  it("requires an Okta bearer token when normal authentication is enabled", async () => {
+    const { pool } = poolWithCandidates([]);
+    const verifier = { verifyAccessToken: vi.fn() } as AccessTokenVerifier;
+
+    const result = await invokeMiddleware(
+      createAuthMiddleware(pool, config, verifier),
+    );
+
+    expect(result.error).toMatchObject({
+      status: 401,
+      code: "UNAUTHENTICATED",
     });
     expect(verifier.verifyAccessToken).not.toHaveBeenCalled();
-    expect(queries.some(({ sql }) => sql.includes("SELECT * FROM users WHERE lower(email)"))).toBe(true);
-  });
-
-  it("creates the preview user with the legacy password field for older local schemas", async () => {
-    const queries: Array<{ sql: string; values?: unknown[] }> = [];
-    const client = {
-      query: vi.fn(async (sql: string, values?: unknown[]) => {
-        queries.push({ sql, values });
-        if (sql.includes("SELECT * FROM users WHERE lower(email)")) return { rows: [] };
-        if (sql.includes("INSERT INTO users")) return { rows: [temporaryUser] };
-        if (sql.includes("SELECT id FROM workspaces")) return { rows: [{ id: "workspace-id" }] };
-        return { rows: [] };
-      }),
-      release: vi.fn(),
-    };
-    const pool = { connect: async () => client } as unknown as Pool;
-
-    const result = await invokeMiddleware(createAuthMiddleware(pool, config));
-
-    expect(result.error).toBeUndefined();
-    expect(queries.find(({ sql }) => sql.includes("INSERT INTO users"))?.values).toEqual([
-      expect.any(String),
-      "juan.miguel.delacruz@globe.com",
-      "temporary-local-auth-bypass-disabled",
-    ]);
   });
 });

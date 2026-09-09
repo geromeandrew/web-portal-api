@@ -8,6 +8,7 @@ export function createAuthRouter({ authenticate }: AppDependencies) {
       user: {
         id: request.auth!.userId,
         email: request.auth!.email,
+        displayName: request.auth!.displayName,
         createdAt: request.auth!.createdAt.toISOString(),
       },
     });

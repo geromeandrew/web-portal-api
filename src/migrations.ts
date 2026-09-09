@@ -830,4 +830,10 @@ export const migrations = [
       WHERE revoked_at IS NULL;
   `,
   },
+  {
+    id: "017_okta_display_name",
+    sql: `
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name text;
+  `,
+  },
 ];

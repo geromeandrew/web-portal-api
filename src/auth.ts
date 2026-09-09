@@ -1,7 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { RequestHandler } from "express";
 import OktaJwtVerifier from "@okta/jwt-verifier";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { withTransaction } from "./db.js";
@@ -10,12 +10,9 @@ import type { UserRow } from "./modules/shared/api/dtos.js";
 import { ensureWorkspace } from "./workspace.js";
 
 /**
- * TEMPORARY LOCAL UI-REVIEW SWITCH.
- *
- * Set this to true before restoring normal Okta enforcement or deploying the
- * API. Keep it false only while the matching local frontend bypass is active.
+ * Enables verification of Okta access tokens for protected API requests.
  */
-export const ENABLE_OKTA_AUTH = false;
+export const ENABLE_OKTA_AUTH = true;
 const temporaryAuthEmail = "juan.miguel.delacruz@globe.com";
 const temporaryAuthSubject = "temporary-local-auth-bypass";
 const temporaryAuthPasswordHash = "temporary-local-auth-bypass-disabled";
@@ -36,10 +33,87 @@ export type AccessTokenVerifier = {
   ): Promise<VerifiedAccessToken>;
 };
 
-const userInfoSchema = z.object({
-  sub: z.string().min(1),
-  email: z.string().email(),
+const identityEmailSchema = z.string().email();
+const identityTextSchema = z.string().trim().min(1);
+
+const identityProfileClaimsSchema = z.object({
+  email: identityEmailSchema.optional(),
+  preferred_username: identityTextSchema.optional(),
+  upn: identityTextSchema.optional(),
+  login: identityTextSchema.optional(),
+  name: identityTextSchema.optional(),
+  given_name: identityTextSchema.optional(),
+  family_name: identityTextSchema.optional(),
 });
+
+const userInfoSchema = identityProfileClaimsSchema.extend({
+  sub: z.string().min(1),
+});
+
+function getIdentityEmail(claims: unknown) {
+  const parsed = identityProfileClaimsSchema.safeParse(claims);
+  if (!parsed.success) return null;
+  return (
+    [
+      parsed.data.email,
+      parsed.data.preferred_username,
+      parsed.data.upn,
+      parsed.data.login,
+    ].find((value) => identityEmailSchema.safeParse(value).success) ?? null
+  );
+}
+
+function getIdentityDisplayName(claims: unknown) {
+  const parsed = identityProfileClaimsSchema.safeParse(claims);
+  if (!parsed.success) return null;
+  if (parsed.data.name) return parsed.data.name;
+  const fullName = [parsed.data.given_name, parsed.data.family_name]
+    .filter(Boolean)
+    .join(" ");
+  return fullName || parsed.data.preferred_username || null;
+}
+
+function getIdentitySubject(claims: Record<string, unknown>) {
+  const subject = z.string().min(1).safeParse(claims.sub);
+  if (subject.success) return subject.data;
+  const uid = z.string().min(1).safeParse(claims.uid);
+  if (uid.success) return uid.data;
+  throw new AppError(
+    401,
+    "IDENTITY_SUBJECT_MISSING",
+    "The verified Okta token does not identify a user.",
+  );
+}
+
+function fallbackEmailForSubject(subject: string) {
+  const identityHash = createHash("sha256").update(subject).digest("hex");
+  return `okta-${identityHash}@identity.invalid`;
+}
+
+function isSyntheticEmail(email: string) {
+  return email.endsWith("@identity.invalid");
+}
+
+function fallbackDisplayName(email: string) {
+  if (email.endsWith("@identity.invalid")) return "Okta account";
+  const localPart = email.split("@", 1)[0];
+  return (
+    localPart
+      .replace(/[._-]+/g, " ")
+      .split(" ")
+      .filter(Boolean)
+      .map(
+        (part) =>
+          `${part.slice(0, 1).toLocaleUpperCase()}${part.slice(1).toLocaleLowerCase()}`,
+      )
+      .join(" ") || "Okta account"
+  );
+}
+
+type IdentityProfile = {
+  email: string;
+  displayName: string;
+};
 
 const identityConflict = () =>
   new AppError(
@@ -95,117 +169,162 @@ export class OktaAuthenticator {
     }
 
     try {
-      const subject = z.string().min(1).parse(verified.claims.sub);
-      const expiresAt = new Date(
-        z.number().int().positive().parse(verified.claims.exp) * 1_000,
-      );
-      const email = await this.resolveEmail(
+      const subject = getIdentitySubject(verified.claims);
+      const expiration = z.coerce
+        .number()
+        .int()
+        .positive()
+        .safeParse(verified.claims.exp);
+      const expiresAt = expiration.success
+        ? new Date(expiration.data * 1_000)
+        : new Date(Date.now() + 5 * 60 * 1_000);
+      const profile = await this.resolveProfile(
         match[1],
         subject,
-        verified.claims.email,
+        verified.claims,
       );
-      const user = await this.findOrCreateUser(subject, email);
+      const user = await this.findOrCreateUser(subject, profile);
       request.auth = {
         userId: user.id,
         oktaSubject: subject,
         email: user.email,
+        displayName: user.display_name,
         createdAt: user.created_at,
         tokenExpiresAt: expiresAt,
       };
       next();
     } catch (error) {
+      if (!(error instanceof AppError)) {
+        console.error("Okta user provisioning failed.", error);
+      }
       next(
         error instanceof AppError
           ? error
           : new AppError(
-              401,
-              "IDENTITY_CLAIMS_INVALID",
-              "The Okta identity does not contain the required profile claims.",
+              500,
+              "IDENTITY_PROVISIONING_FAILED",
+              "The portal could not create or load your user account.",
             ),
       );
     }
   };
 
-  private async resolveEmail(
+  private async resolveProfile(
     accessToken: string,
     subject: string,
-    emailClaim: unknown,
-  ) {
-    const parsedClaim = z.string().email().safeParse(emailClaim);
-    if (parsedClaim.success) return parsedClaim.data.trim().toLowerCase();
+    claims: unknown,
+  ): Promise<IdentityProfile> {
+    const claimEmail = getIdentityEmail(claims);
+    const claimDisplayName = getIdentityDisplayName(claims);
 
-    // Once an Okta subject is linked, the local email is sufficient for
-    // workspace ownership and avoids a userinfo round-trip on every API call.
-    const linked = await this.pool.query<{ email: string }>(
-      "SELECT email FROM users WHERE okta_subject = $1",
-      [subject],
-    );
-    if (linked.rows[0]) return linked.rows[0].email.trim().toLowerCase();
+    const linked = await this.pool.query<{
+      email: string;
+      display_name: string | null;
+    }>("SELECT email, display_name FROM users WHERE okta_subject = $1", [
+      subject,
+    ]);
+    const localProfile = linked.rows[0];
 
-    let response: Response;
-    try {
-      response = await fetch(`${this.config.OKTA_ISSUER}/v1/userinfo`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-    } catch {
-      throw new AppError(
-        503,
-        "IDENTITY_PROVIDER_UNAVAILABLE",
-        "Okta profile information is temporarily unavailable.",
-      );
+    let providerProfile: unknown = null;
+    if (!localProfile || !localProfile.display_name) {
+      try {
+        const response = await fetch(`${this.config.OKTA_ISSUER}/v1/userinfo`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (response.ok) {
+          const parsed = userInfoSchema.safeParse(await response.json());
+          if (parsed.success) {
+            // The access token is the verified identity source. Do not use a
+            // userinfo response for enrichment when it identifies a different
+            // subject, but do not reject the already verified token either.
+            if (parsed.data.sub === subject) providerProfile = parsed.data;
+          }
+        }
+      } catch (error) {
+        if (error instanceof AppError) throw error;
+      }
     }
-    if (!response.ok) {
-      throw new AppError(
-        response.status === 401 ? 401 : 503,
-        response.status === 401
-          ? "UNAUTHENTICATED"
-          : "IDENTITY_PROVIDER_UNAVAILABLE",
-        response.status === 401
-          ? "Your Okta access token is invalid or expired."
-          : "Okta profile information is temporarily unavailable.",
-      );
-    }
-    const profile = userInfoSchema.parse(await response.json());
-    if (profile.sub !== subject) throw identityConflict();
-    return profile.email.trim().toLowerCase();
+
+    const providerEmail = getIdentityEmail(providerProfile);
+    const providerDisplayName = getIdentityDisplayName(providerProfile);
+    const email = (
+      providerEmail ??
+      claimEmail ??
+      localProfile?.email ??
+      fallbackEmailForSubject(subject)
+    )
+      .trim()
+      .toLowerCase();
+    const displayName =
+      providerDisplayName ??
+      claimDisplayName ??
+      localProfile?.display_name ??
+      fallbackDisplayName(email);
+
+    return { email, displayName };
   }
 
-  private async findOrCreateUser(subject: string, email: string) {
+  private async findOrCreateUser(subject: string, profile: IdentityProfile) {
     return withTransaction(this.pool, async (client) => {
       const candidates = await client.query<UserRow>(
         "SELECT * FROM users WHERE okta_subject = $1 OR lower(email) = $2 FOR UPDATE",
-        [subject, email],
+        [subject, profile.email],
       );
       const subjectUser = candidates.rows.find(
         (candidate) => candidate.okta_subject === subject,
       );
       const emailUser = candidates.rows.find(
-        (candidate) => candidate.email.toLowerCase() === email,
+        (candidate) => candidate.email.toLowerCase() === profile.email,
       );
       if (subjectUser && emailUser && subjectUser.id !== emailUser.id) {
+        if (
+          isSyntheticEmail(subjectUser.email) &&
+          !emailUser.okta_subject &&
+          (await this.canDiscardSyntheticUser(client, subjectUser.id))
+        ) {
+          await client.query("DELETE FROM users WHERE id = $1", [
+            subjectUser.id,
+          ]);
+          const linked = await client.query<UserRow>(
+            "UPDATE users SET okta_subject = $1, email = $2, display_name = $3, updated_at = now() WHERE id = $4 RETURNING *",
+            [subject, profile.email, profile.displayName, emailUser.id],
+          );
+          await ensureWorkspace(client, linked.rows[0].id);
+          return linked.rows[0];
+        }
         throw identityConflict();
       }
 
       let user: UserRow;
       if (subjectUser) {
-        const updated = await client.query<UserRow>(
-          "UPDATE users SET email = $1, updated_at = now() WHERE id = $2 RETURNING *",
-          [email, subjectUser.id],
-        );
-        user = updated.rows[0];
+        // Most requests are for an already linked identity. Avoid an
+        // unnecessary row update (and `updated_at` churn) unless Okta has
+        // actually supplied changed profile data.
+        if (
+          subjectUser.email === profile.email &&
+          subjectUser.display_name === profile.displayName
+        ) {
+          user = subjectUser;
+        } else {
+          const updated = await client.query<UserRow>(
+            "UPDATE users SET email = $1, display_name = $2, updated_at = now() WHERE id = $3 RETURNING *",
+            [profile.email, profile.displayName, subjectUser.id],
+          );
+          user = updated.rows[0];
+        }
       } else if (emailUser) {
         if (emailUser.okta_subject && emailUser.okta_subject !== subject) {
           throw identityConflict();
         }
         const linked = await client.query<UserRow>(
-          "UPDATE users SET okta_subject = $1, email = $2, updated_at = now() WHERE id = $3 RETURNING *",
-          [subject, email, emailUser.id],
+          "UPDATE users SET okta_subject = $1, email = $2, display_name = $3, updated_at = now() WHERE id = $4 RETURNING *",
+          [subject, profile.email, profile.displayName, emailUser.id],
         );
         user = linked.rows[0];
       } else {
         const created = await client.query<UserRow>(
-          "INSERT INTO users (id, email, okta_subject) VALUES ($1, $2, $3) RETURNING *",
-          [randomUUID(), email, subject],
+          "INSERT INTO users (id, email, okta_subject, display_name) VALUES ($1, $2, $3, $4) RETURNING *",
+          [randomUUID(), profile.email, subject, profile.displayName],
         );
         user = created.rows[0];
       }
@@ -223,6 +342,20 @@ export class OktaAuthenticator {
       throw error;
     });
   }
+
+  private async canDiscardSyntheticUser(client: PoolClient, userId: string) {
+    const [uploads, executions] = await Promise.all([
+      client.query(
+        "SELECT 1 FROM uploads JOIN workspaces ON workspaces.id = uploads.workspace_id WHERE workspaces.user_id = $1 LIMIT 1",
+        [userId],
+      ),
+      client.query(
+        "SELECT 1 FROM processing_pipeline_step_function_executions WHERE started_by_user_id = $1 LIMIT 1",
+        [userId],
+      ),
+    ]);
+    return !uploads.rows[0] && !executions.rows[0];
+  }
 }
 
 /**
@@ -239,6 +372,7 @@ export class TemporaryAuthenticator {
         userId: user.id,
         oktaSubject: temporaryAuthSubject,
         email: user.email,
+        displayName: user.display_name,
         createdAt: user.created_at,
         tokenExpiresAt: new Date("2999-12-31T23:59:59.999Z"),
       };
@@ -254,12 +388,14 @@ export class TemporaryAuthenticator {
         "SELECT * FROM users WHERE lower(email) = $1 FOR UPDATE",
         [temporaryAuthEmail],
       );
-      const user = existing.rows[0] ?? (
-        await client.query<UserRow>(
-          "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3) RETURNING *",
-          [randomUUID(), temporaryAuthEmail, temporaryAuthPasswordHash],
-        )
-      ).rows[0];
+      const user =
+        existing.rows[0] ??
+        (
+          await client.query<UserRow>(
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3) RETURNING *",
+            [randomUUID(), temporaryAuthEmail, temporaryAuthPasswordHash],
+          )
+        ).rows[0];
       await ensureWorkspace(client, user.id);
       return user;
     });

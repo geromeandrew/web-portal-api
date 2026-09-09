@@ -5,6 +5,7 @@ declare global {
         userId: string;
         oktaSubject: string;
         email: string;
+        displayName: string | null;
         createdAt: Date;
         tokenExpiresAt: Date;
       };

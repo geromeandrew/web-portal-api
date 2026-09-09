@@ -37,7 +37,7 @@ describe("loadConfig", () => {
     const config = loadConfig(base);
     expect(config.OKTA_ISSUER).toBe("https://globemfa.okta.com/oauth2/default");
     expect(config.OKTA_AUDIENCE).toBe("api://default");
-    expect(config.OKTA_CLIENT_ID).toBe("0oa28lk9m5953nLCA0h8");
+    expect(config.OKTA_CLIENT_ID).toBe("0oa28rfcq0h2ZSAvZ0h8");
     expect(config.RATE_LIMIT_HMAC_SECRET).toBe(base.RATE_LIMIT_HMAC_SECRET);
     expect(config.TRUST_PROXY_HOPS).toBe(0);
   });

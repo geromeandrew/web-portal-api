@@ -3,6 +3,7 @@ export type UserRow = {
   email: string;
   password_hash: string | null;
   okta_subject: string | null;
+  display_name: string | null;
   is_bootstrap_admin: boolean;
   is_active: boolean;
   must_change_password: boolean;
@@ -24,6 +25,7 @@ export function userDto(user: UserRow) {
   return {
     id: user.id,
     email: user.email,
+    displayName: user.display_name,
     createdAt: user.created_at.toISOString(),
   };
 }
