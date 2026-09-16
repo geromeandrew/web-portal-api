@@ -836,4 +836,30 @@ export const migrations = [
     ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name text;
   `,
   },
+  {
+    id: "018_pipeline_upload_batches_and_remove_memo_errors",
+    sql: `
+    CREATE TABLE processing_pipeline_upload_batches (
+      id uuid PRIMARY KEY,
+      pipeline_id bigint NOT NULL REFERENCES processing_pipelines(id) ON DELETE CASCADE,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      created_by_user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX processing_pipeline_upload_batches_history
+      ON processing_pipeline_upload_batches (pipeline_id, workspace_id, created_at DESC);
+    CREATE TABLE processing_pipeline_upload_batch_files (
+      id bigserial PRIMARY KEY,
+      batch_id uuid NOT NULL REFERENCES processing_pipeline_upload_batches(id) ON DELETE CASCADE,
+      file_requirement_id bigint NOT NULL REFERENCES processing_pipeline_file_requirements(id) ON DELETE RESTRICT,
+      original_name text NOT NULL,
+      object_key text NOT NULL,
+      read_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (batch_id, file_requirement_id)
+    );
+    CREATE INDEX processing_pipeline_upload_batch_files_history
+      ON processing_pipeline_upload_batch_files (batch_id, read_at);
+    DELETE FROM workflow_states WHERE module = 'memo' AND state_key = 'errors';
+  `,
+  },
 ];

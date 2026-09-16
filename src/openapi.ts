@@ -146,6 +146,7 @@ const pipelineUploadBody: OpenAPIV3.RequestBodyObject = {
             enum: ["true", "false"],
             default: "false",
           },
+          batchId: { type: "string", format: "uuid" },
           file: { type: "string", format: "binary" },
         },
       },
@@ -288,6 +289,16 @@ const allOpenApiDocument: OpenAPIV3.Document = {
         ...created("Upload a pipeline file"),
         parameters: [pipelineCodePath],
         requestBody: pipelineUploadBody,
+      },
+    },
+    "/api/processing-pipelines/{pipelineCode}/upload-batches": {
+      get: {
+        ...success("List mapped pipeline upload batches"),
+        parameters: [pipelineCodePath],
+      },
+      post: {
+        ...created("Create a mapped pipeline upload batch"),
+        parameters: [pipelineCodePath],
       },
     },
     "/api/processing-pipelines/{pipelineCode}/files/content": {
