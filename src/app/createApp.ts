@@ -7,7 +7,6 @@ import { createOpenApiDocument } from "../openapi.js";
 import { createAuthRouter } from "../modules/auth/api/router.js";
 import { createUploadsRouter } from "../modules/uploads/api/router.js";
 import { createPrepaidRouter } from "../modules/prepaid/api/router.js";
-import { createMemoRouter } from "../modules/memo/api/router.js";
 import { createProcessingPipelinesRouter } from "../modules/processing-pipelines/api/router.js";
 import {
   clientIpKey,
@@ -75,7 +74,6 @@ function registerFeatureRoutes(
   app.use("/api/auth", createAuthRouter(dependencies));
   app.use("/api/uploads", createUploadsRouter(dependencies, singleFileUpload));
   app.use("/api/workflows/prepaid", createPrepaidRouter(dependencies));
-  app.use("/api/workflows/memo", createMemoRouter(dependencies));
   app.use(
     "/api/processing-pipelines",
     createProcessingPipelinesRouter(dependencies, singleFileUpload),

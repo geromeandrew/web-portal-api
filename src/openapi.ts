@@ -249,8 +249,6 @@ const allOpenApiDocument: OpenAPIV3.Document = {
     "/api/workflows/prepaid/report.csv": {
       get: csv("Download Prepaid report"),
     },
-    "/api/workflows/memo/state": { get: success("Get Memo state") },
-    "/api/workflows/memo/errors.csv": { get: csv("Download Memo exceptions") },
     "/api/processing-pipelines": { get: success("List processing pipelines") },
     "/api/processing-pipelines/{pipelineCode}": {
       get: {
@@ -367,7 +365,6 @@ function tagForPath(path: string) {
   if (path.startsWith("/api/auth/")) return "Authentication";
   if (path.startsWith("/api/uploads")) return "Uploads";
   if (path.startsWith("/api/workflows/prepaid")) return "Prepaid";
-  if (path.startsWith("/api/workflows/memo")) return "Memo";
   return "Processing Pipelines";
 }
 
