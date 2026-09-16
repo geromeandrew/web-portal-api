@@ -1,0 +1,64 @@
+name: web-portal-api
+
+services:
+  migrate:
+    build: .
+    image: web-portal-api:local
+    pull_policy: build
+    environment: &api_environment
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA}
+      OKTA_ISSUER: ${OKTA_ISSUER:-https://globemfa.okta.com/oauth2/default}
+      OKTA_AUDIENCE: ${OKTA_AUDIENCE:-api://default}
+      OKTA_CLIENT_ID: ${OKTA_CLIENT_ID:-0oa28rfcq0h2ZSAvZ0h8}
+      RATE_LIMIT_HMAC_SECRET: ${RATE_LIMIT_HMAC_SECRET:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+      LAMBDA_UPLOAD_URL: ${LAMBDA_UPLOAD_URL}
+      S3_BUCKET: ${S3_BUCKET}
+      AWS_REGION: ${AWS_REGION}
+      AWS_LOCAL: ${AWS_LOCAL}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES}
+      ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES}
+    command: ["node", "dist/migrate.js"]
+    networks: [portal]
+    restart: "no"
+
+  api:
+    build: .
+    image: web-portal-api:local
+    pull_policy: build
+    ports:
+      - "3001:3001"
+    environment:
+      <<: *api_environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:3001/api/healthz'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks:
+      portal:
+        aliases: [web-portal-api]
+    restart: unless-stopped
+
+networks:
+  portal:
+    name: web-portal-shared
+    external: true

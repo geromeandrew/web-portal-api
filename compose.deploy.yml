@@ -1,0 +1,57 @@
+name: web-portal-api
+
+# Production deployment file. It deliberately pulls the immutable image named by
+# API_IMAGE and reads all application settings from the existing local .env file.
+# Do not add secrets to this file or commit the .env file.
+services:
+  migrate:
+    image: ${API_IMAGE:?Set API_IMAGE}
+    environment: &api_environment
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_SCHEMA: ${DATABASE_SCHEMA}
+      OKTA_ISSUER: ${OKTA_ISSUER}
+      OKTA_AUDIENCE: ${OKTA_AUDIENCE}
+      OKTA_CLIENT_ID: ${OKTA_CLIENT_ID}
+      RATE_LIMIT_HMAC_SECRET: ${RATE_LIMIT_HMAC_SECRET}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+      LAMBDA_UPLOAD_URL: ${LAMBDA_UPLOAD_URL}
+      S3_BUCKET: ${S3_BUCKET}
+      AWS_REGION: ${AWS_REGION}
+      AWS_LOCAL: "false"
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES}
+      ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES}
+    command: ["node", "dist/migrate.js"]
+    networks: [portal]
+    restart: "no"
+
+  api:
+    image: ${API_IMAGE:?Set API_IMAGE}
+    ports:
+      - "3001:3001"
+    environment:
+      <<: *api_environment
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://127.0.0.1:3001/api/healthz'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks:
+      portal:
+        aliases: [web-portal-api]
+    restart: unless-stopped
+
+networks:
+  portal:
+    name: web-portal-shared
+    external: true
