@@ -16,12 +16,9 @@ const config: Config = {
   OKTA_CLIENT_ID: "test-client-id",
   RATE_LIMIT_HMAC_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
   TRUST_PROXY_HOPS: 0,
-  LAMBDA_UPLOAD_URL: "https://example.lambda-url.ap-southeast-1.on.aws",
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
   MAX_UPLOAD_BYTES: 4_500_000,
-  ALLOWED_MIME_TYPES: "application/pdf",
-  allowedMimeTypes: ["application/pdf"],
   OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: false,
 };
 
@@ -39,7 +36,6 @@ describe("OpenAPI documentation", () => {
       0,
     );
     expect(operationCount).toBe(15);
-    expect(openApiDocument.paths["/api/uploads"]).toBeUndefined();
     expect(
       openApiDocument.paths["/api/workflows/prepaid/report.csv"],
     ).toBeUndefined();
@@ -106,7 +102,6 @@ describe("OpenAPI documentation", () => {
 
   it("can restore non-essential endpoints in Swagger through configuration", () => {
     const fullDocument = createOpenApiDocument(true);
-    expect(fullDocument.paths["/api/uploads"]?.post).toBeDefined();
     expect(
       fullDocument.paths["/api/workflows/prepaid/report.csv"]?.get?.responses[
         "200"

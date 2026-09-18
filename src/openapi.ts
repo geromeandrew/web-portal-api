@@ -72,12 +72,6 @@ const jsonBody = (
   ...(description ? { description } : {}),
   content: { "application/json": { schema } },
 });
-const uuidPath: OpenAPIV3.ParameterObject = {
-  name: "id",
-  in: "path",
-  required: true,
-  schema: { type: "string", format: "uuid" },
-};
 const regionPath: OpenAPIV3.ParameterObject = {
   name: "region",
   in: "path",
@@ -113,25 +107,6 @@ const freezeLayoutBody = jsonBody({
   required: ["frozen"],
   properties: { frozen: { type: "boolean" } },
 });
-const workflowUploadBody: OpenAPIV3.RequestBodyObject = {
-  required: true,
-  content: {
-    "multipart/form-data": {
-      schema: {
-        type: "object",
-        required: ["workflow", "file"],
-        properties: {
-          workflow: { type: "string", enum: ["prepaid", "memo", "aprm"] },
-          slot: {
-            type: "string",
-            description: "Required for Prepaid uploads.",
-          },
-          file: { type: "string", format: "binary" },
-        },
-      },
-    },
-  },
-};
 const pipelineUploadBody: OpenAPIV3.RequestBodyObject = {
   required: true,
   content: {
@@ -204,7 +179,6 @@ const allOpenApiDocument: OpenAPIV3.Document = {
   tags: [
     { name: "Health" },
     { name: "Authentication" },
-    { name: "Uploads" },
     { name: "Prepaid" },
     { name: "Memo" },
     { name: "Processing Pipelines" },
@@ -214,18 +188,6 @@ const allOpenApiDocument: OpenAPIV3.Document = {
       get: { ...success("Check API and database availability"), security: [] },
     },
     "/api/auth/me": { get: success("Get current user") },
-    "/api/uploads": {
-      post: {
-        ...created("Upload a workflow file"),
-        requestBody: workflowUploadBody,
-      },
-    },
-    "/api/uploads/{id}": {
-      delete: {
-        ...noContent("Delete upload metadata"),
-        parameters: [uuidPath],
-      },
-    },
     "/api/workflows/prepaid/state": { get: success("Get Prepaid state") },
     "/api/workflows/prepaid/process": {
       post: created("Process Prepaid uploads"),
@@ -363,7 +325,6 @@ const allOpenApiDocument: OpenAPIV3.Document = {
 function tagForPath(path: string) {
   if (path === "/api/healthz") return "Health";
   if (path.startsWith("/api/auth/")) return "Authentication";
-  if (path.startsWith("/api/uploads")) return "Uploads";
   if (path.startsWith("/api/workflows/prepaid")) return "Prepaid";
   return "Processing Pipelines";
 }

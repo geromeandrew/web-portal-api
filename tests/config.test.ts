@@ -6,22 +6,11 @@ const base = {
   DATABASE_URL: "postgresql://portal:password@127.0.0.1:5432/web_portal",
   RATE_LIMIT_HMAC_SECRET:
     "a-very-long-test-secret-that-is-at-least-32-characters",
-  LAMBDA_UPLOAD_URL: "https://example.lambda-url.ap-southeast-1.on.aws",
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
 };
 
 describe("loadConfig", () => {
-  it("normalizes the Lambda URL and MIME type list", () => {
-    const config = loadConfig({
-      ...base,
-      LAMBDA_UPLOAD_URL: `${base.LAMBDA_UPLOAD_URL}/`,
-      ALLOWED_MIME_TYPES: "application/pdf, image/png",
-    });
-    expect(config.LAMBDA_UPLOAD_URL).toBe(base.LAMBDA_UPLOAD_URL);
-    expect(config.allowedMimeTypes).toEqual(["application/pdf", "image/png"]);
-  });
-
   it("uses the dedicated Portal schema by default", () => {
     expect(loadConfig(base).DATABASE_SCHEMA).toBe("web_portal");
     expect(loadConfig(base).DATABASE_SSL).toBe(true);
@@ -48,14 +37,11 @@ describe("loadConfig", () => {
     ).toThrow("OKTA_ISSUER");
   });
 
-  it("accepts the legacy JWT secret only as a rate-limit migration fallback", () => {
-    const { RATE_LIMIT_HMAC_SECRET: _secret, ...withoutNewName } = base;
-    expect(
-      loadConfig({
-        ...withoutNewName,
-        JWT_SECRET: "a-legacy-secret-that-is-still-at-least-32-characters",
-      }).RATE_LIMIT_HMAC_SECRET,
-    ).toBe("a-legacy-secret-that-is-still-at-least-32-characters");
+  it("requires the dedicated rate-limit secret", () => {
+    const { RATE_LIMIT_HMAC_SECRET: _secret, ...withoutRateLimitSecret } = base;
+    expect(() => loadConfig(withoutRateLimitSecret)).toThrow(
+      "RATE_LIMIT_HMAC_SECRET",
+    );
   });
 
   it("uses the AWS SDK default credential chain outside local development", () => {

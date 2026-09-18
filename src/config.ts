@@ -28,7 +28,6 @@ const envSchema = z
     OKTA_CLIENT_ID: z.string().min(1).default("0oa28rfcq0h2ZSAvZ0h8"),
     RATE_LIMIT_HMAC_SECRET: z.string().min(32),
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
-    LAMBDA_UPLOAD_URL: z.string().url(),
     S3_BUCKET: z.string().min(3),
     AWS_REGION: z.string().min(1),
     AWS_LOCAL: z
@@ -38,11 +37,6 @@ const envSchema = z
     AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
     AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
     MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(4_500_000),
-    ALLOWED_MIME_TYPES: z
-      .string()
-      .default(
-        "application/pdf,image/jpeg,image/png,image/webp,text/plain,application/zip,application/msword,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      ),
     OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: z
       .enum(["true", "false"])
       .default("false")
@@ -66,13 +60,10 @@ const envSchema = z
     }
   });
 
-export type Config = z.infer<typeof envSchema> & { allowedMimeTypes: string[] };
+export type Config = z.infer<typeof envSchema>;
 
 export function loadConfig(env = process.env): Config {
-  const parsed = envSchema.safeParse({
-    ...env,
-    RATE_LIMIT_HMAC_SECRET: env.RATE_LIMIT_HMAC_SECRET || env.JWT_SECRET,
-  });
+  const parsed = envSchema.safeParse(env);
   if (!parsed.success) {
     throw new Error(
       `Invalid API configuration: ${parsed.error.issues.map((issue) => issue.path.join(".") + " " + issue.message).join(", ")}`,
@@ -80,9 +71,5 @@ export function loadConfig(env = process.env): Config {
   }
   return {
     ...parsed.data,
-    LAMBDA_UPLOAD_URL: parsed.data.LAMBDA_UPLOAD_URL.replace(/\/$/, ""),
-    allowedMimeTypes: parsed.data.ALLOWED_MIME_TYPES.split(",")
-      .map((value) => value.trim())
-      .filter(Boolean),
   };
 }
