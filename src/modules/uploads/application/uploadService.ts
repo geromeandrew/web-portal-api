@@ -53,6 +53,7 @@ export class UploadService {
         uploadId: id,
         workflow: input.workflow,
         slot: input.slot,
+        originalName,
       });
       return inserted.rows[0];
     });
@@ -72,6 +73,9 @@ export class UploadService {
     await this.pool.query("DELETE FROM uploads WHERE id = $1", [record.id]);
     await audit(this.pool, workspaceId, "upload.metadata_deleted", {
       uploadId: record.id,
+      workflow: record.workflow,
+      slot: record.slot,
+      originalName: record.original_name,
       objectKey: record.object_key,
       note: "The Lambda-owned object is retained.",
     });

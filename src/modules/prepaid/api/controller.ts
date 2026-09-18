@@ -6,6 +6,8 @@ const regionSchema = z.enum(["eg", "sg"]);
 
 export function createPrepaidController(service: PrepaidService): {
   getState: RequestHandler;
+  getHistory: RequestHandler;
+  clearUploads: RequestHandler;
   process: RequestHandler;
   resetLayout: RequestHandler;
   importLayout: RequestHandler;
@@ -16,6 +18,12 @@ export function createPrepaidController(service: PrepaidService): {
   return {
     getState: async (request, response) => {
       response.json(await service.getState(request.auth!.userId));
+    },
+    getHistory: async (request, response) => {
+      response.json(await service.getHistory(request.auth!.userId));
+    },
+    clearUploads: async (request, response) => {
+      response.json(await service.clearUploads(request.auth!.userId));
     },
     process: async (request, response) => {
       response

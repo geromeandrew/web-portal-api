@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
@@ -161,6 +162,17 @@ export class ProcessingPipelineStorage {
         return false;
       throw error;
     }
+  }
+
+  async deleteFile(pipelineCode: string, key: string) {
+    const prefix = this.inboundPrefix(pipelineCode);
+    if (!key.startsWith(prefix) || key === prefix || key.endsWith("/"))
+      throw new Error(
+        "Requested key is outside the selected processing pipeline folder.",
+      );
+    await this.client.send(
+      new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
   }
 
   async uploadFile(

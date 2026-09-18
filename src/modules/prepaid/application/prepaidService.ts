@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { AppError } from "../../../errors.js";
+import type { ProcessingPipelineStorage } from "../../../processingPipelineStorage.js";
 import {
   audit,
   ensureWorkspace,
@@ -10,9 +11,25 @@ import {
 import { uploadDto, type UploadRow } from "../../shared/api/dtos.js";
 
 type Region = "eg" | "sg";
+type AuditRow = {
+  id: string;
+  action: string;
+  detail: Record<string, unknown> | string;
+  created_at: Date;
+};
+
+function auditDetail(detail: AuditRow["detail"]) {
+  if (typeof detail === "string") {
+    return JSON.parse(detail) as Record<string, unknown>;
+  }
+  return detail;
+}
 
 export class PrepaidService {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly processingPipelineStorage: ProcessingPipelineStorage,
+  ) {}
 
   async getState(userId: string) {
     const workspaceId = await ensureWorkspace(this.pool, userId);
@@ -48,12 +65,18 @@ export class PrepaidService {
       "prepaid",
       "source-files",
     );
-    const found = await this.pool.query<{ slot: string }>(
-      "SELECT slot FROM uploads WHERE workspace_id = $1 AND workflow = 'prepaid'",
-      [workspaceId],
+    const available = await Promise.all(
+      source.expected.map(async (fileName) => ({
+        fileName,
+        exists: await this.processingPipelineStorage.fileExists(
+          "prepaid_reclass",
+          this.processingPipelineStorage.fileKey("prepaid_reclass", fileName),
+        ),
+      })),
     );
-    const slots = new Set(found.rows.map((row) => row.slot));
-    const missing = source.expected.filter((slot) => !slots.has(slot));
+    const missing = available
+      .filter((file) => !file.exists)
+      .map((file) => file.fileName);
     if (missing.length) {
       throw new AppError(
         400,
@@ -69,6 +92,77 @@ export class PrepaidService {
     );
     await audit(this.pool, workspaceId, "prepaid.processed", { runId: id });
     return { id, status: "completed", completedAt: new Date().toISOString() };
+  }
+
+  async getHistory(userId: string) {
+    const workspaceId = await ensureWorkspace(this.pool, userId);
+    const result = await this.pool.query<AuditRow>(
+      `SELECT id, action, detail, created_at
+       FROM audit_actions
+       WHERE workspace_id = $1
+         AND (
+           (action = 'processing-pipeline.file-uploaded' AND detail->>'pipelineCode' = 'prepaid_reclass')
+           OR action = 'prepaid.uploads_cleared'
+         )
+       ORDER BY created_at DESC
+       LIMIT 100`,
+      [workspaceId],
+    );
+    return {
+      activities: result.rows.map((row) => {
+        const detail = auditDetail(row.detail);
+        return {
+          id: row.id,
+          action:
+            row.action === "processing-pipeline.file-uploaded"
+              ? "uploaded"
+              : "cleared",
+          fileName:
+            typeof detail.expectedFileName === "string"
+              ? detail.expectedFileName
+              : null,
+          slot:
+            typeof detail.expectedFileName === "string"
+              ? detail.expectedFileName
+              : null,
+          removedCount:
+            typeof detail.removedCount === "number"
+              ? detail.removedCount
+              : null,
+          occurredAt: row.created_at.toISOString(),
+        };
+      }),
+    };
+  }
+
+  async clearUploads(userId: string) {
+    const workspaceId = await ensureWorkspace(this.pool, userId);
+    const source = await getState<{ expected: string[] }>(
+      this.pool,
+      workspaceId,
+      "prepaid",
+      "source-files",
+    );
+    let removedCount = 0;
+    for (const fileName of source.expected) {
+      const key = this.processingPipelineStorage.fileKey(
+        "prepaid_reclass",
+        fileName,
+      );
+      if (
+        await this.processingPipelineStorage.fileExists("prepaid_reclass", key)
+      ) {
+        await this.processingPipelineStorage.deleteFile("prepaid_reclass", key);
+        removedCount += 1;
+      }
+    }
+    if (removedCount) {
+      await audit(this.pool, workspaceId, "prepaid.uploads_cleared", {
+        pipelineCode: "prepaid_reclass",
+        removedCount,
+      });
+    }
+    return { removedCount };
   }
 
   async resetLayout(userId: string, region: Region) {
