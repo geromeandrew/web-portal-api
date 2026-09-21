@@ -331,6 +331,77 @@ export async function getProcessingPipelineCatalog(pool: Pool) {
   return { pipelines: pipelines.rows };
 }
 
+export type PipelineUploadBatchDto = {
+  id: string;
+  createdAt: string;
+  uploadedBy: string | null;
+  files: {
+    expectedFileName: string;
+    originalName: string;
+    readAt: string;
+  }[];
+};
+
+export async function createPipelineUploadBatch(
+  pool: Pool,
+  input: { id: string; pipelineCode: string; workspaceId: string; userId: string },
+) {
+  const result = await pool.query<{ id: string; created_at: Date }>(
+    `INSERT INTO processing_pipeline_upload_batches (id, pipeline_id, workspace_id, created_by_user_id)
+     SELECT $1, pipeline.id, $2, $3 FROM processing_pipelines pipeline
+     WHERE pipeline.code = $4 AND pipeline.is_active = true
+     RETURNING id, created_at`,
+    [input.id, input.workspaceId, input.userId, input.pipelineCode],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function recordPipelineUploadBatchFile(
+  pool: Pool,
+  input: { batchId: string; pipelineCode: string; workspaceId: string; requirementId: number; originalName: string; objectKey: string },
+): Promise<boolean> {
+  const result = await pool.query(
+    `INSERT INTO processing_pipeline_upload_batch_files (batch_id, file_requirement_id, original_name, object_key)
+     SELECT batch.id, $4, $5, $6
+     FROM processing_pipeline_upload_batches batch
+     JOIN processing_pipelines pipeline ON pipeline.id = batch.pipeline_id
+     WHERE batch.id = $1 AND batch.workspace_id = $2 AND pipeline.code = $3
+     ON CONFLICT (batch_id, file_requirement_id) DO UPDATE
+       SET original_name = EXCLUDED.original_name, object_key = EXCLUDED.object_key, read_at = now()`,
+    [input.batchId, input.workspaceId, input.pipelineCode, input.requirementId, input.originalName, input.objectKey],
+  );
+  return result.rowCount === 1;
+}
+
+export async function getPipelineUploadBatches(
+  pool: Pool,
+  input: { pipelineCode: string; workspaceId: string },
+): Promise<PipelineUploadBatchDto[]> {
+  const result = await pool.query<{
+    id: string; created_at: Date; uploaded_by: string | null; files: unknown;
+  }>(
+    `SELECT batch.id, batch.created_at,
+       COALESCE(user_record.display_name, user_record.email) AS uploaded_by,
+       COALESCE(json_agg(json_build_object('expectedFileName', requirement.file_name, 'originalName', member.original_name, 'readAt', member.read_at) ORDER BY member.read_at) FILTER (WHERE member.id IS NOT NULL), '[]'::json) AS files
+     FROM processing_pipeline_upload_batches batch
+     JOIN processing_pipelines pipeline ON pipeline.id = batch.pipeline_id
+     JOIN users user_record ON user_record.id = batch.created_by_user_id
+     LEFT JOIN processing_pipeline_upload_batch_files member ON member.batch_id = batch.id
+     LEFT JOIN processing_pipeline_file_requirements requirement ON requirement.id = member.file_requirement_id
+     WHERE pipeline.code = $1 AND batch.workspace_id = $2
+     GROUP BY batch.id, batch.created_at, user_record.display_name, user_record.email
+     HAVING COUNT(member.id) > 0
+     ORDER BY batch.created_at DESC`,
+    [input.pipelineCode, input.workspaceId],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    createdAt: row.created_at.toISOString(),
+    uploadedBy: row.uploaded_by,
+    files: jsonArray<{ expectedFileName: string; originalName: string; readAt: string }>(row.files),
+  }));
+}
+
 export async function getPipelineDetail(pool: Pool, pipelineCode: string) {
   const pipeline = await pool.query<{ code: string; label: string }>(
     "SELECT code, label FROM processing_pipelines WHERE code = $1 AND is_active = true",

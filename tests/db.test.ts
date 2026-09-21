@@ -1,10 +1,8 @@
-import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import { describe, expect, it, vi } from "vitest";
 import { createPool } from "../src/db.js";
 import type { Config } from "../src/config.js";
 
-vi.mock("node:fs", () => ({ readFileSync: vi.fn(() => "RDS CA") }));
 vi.mock("pg", () => ({ Pool: vi.fn() }));
 
 const config: Config = {
@@ -18,28 +16,21 @@ const config: Config = {
   OKTA_AUDIENCE: "api://default",
   OKTA_CLIENT_ID: "test-client-id",
   RATE_LIMIT_HMAC_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
-  LAMBDA_UPLOAD_URL: "https://example.lambda-url.ap-southeast-1.on.aws",
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
   AWS_LOCAL: false,
   MAX_UPLOAD_BYTES: 4_500_000,
-  ALLOWED_MIME_TYPES: "application/pdf",
   OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: false,
-  allowedMimeTypes: ["application/pdf"],
 };
 
 describe("createPool", () => {
-  it("uses the ap-southeast-1 RDS CA with certificate verification", () => {
+  it("uses encrypted TLS without requiring an RDS CA certificate", () => {
     createPool(config);
 
-    expect(readFileSync).toHaveBeenCalledWith(
-      expect.objectContaining({ pathname: expect.stringContaining("certs/") }),
-      "utf8",
-    );
     expect(Pool).toHaveBeenCalledWith(
       expect.objectContaining({
         connectionString: config.DATABASE_URL,
-        ssl: { ca: "RDS CA", rejectUnauthorized: true },
+        ssl: { rejectUnauthorized: false },
       }),
     );
   });
@@ -50,7 +41,7 @@ describe("createPool", () => {
     expect(Pool).toHaveBeenLastCalledWith(
       expect.objectContaining({
         connectionString: config.DATABASE_URL,
-        ssl: { ca: "RDS CA", rejectUnauthorized: true },
+        ssl: { rejectUnauthorized: false },
       }),
     );
     expect(Pool).toHaveBeenLastCalledWith(
@@ -58,11 +49,27 @@ describe("createPool", () => {
     );
   });
 
-  it("disables TLS without reading the RDS certificate when configured", () => {
+  it("disables TLS when configured", () => {
     createPool({ ...config, DATABASE_SSL: false });
 
     expect(Pool).toHaveBeenLastCalledWith(
       expect.objectContaining({ ssl: false }),
+    );
+  });
+
+  it("does not allow SSL options in the database URL to override configuration", () => {
+    createPool({
+      ...config,
+      DATABASE_URL:
+        "postgresql://esatp_sme:password@database.example.com:1769/isgesatpdv?application_name=portal&sslmode=verify-full&sslrootcert=/tmp/rds.pem",
+    });
+
+    expect(Pool).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        connectionString:
+          "postgresql://esatp_sme:password@database.example.com:1769/isgesatpdv?application_name=portal",
+        ssl: { rejectUnauthorized: false },
+      }),
     );
   });
 });

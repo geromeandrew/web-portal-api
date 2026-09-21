@@ -1,11 +1,11 @@
 export const prepaidSourceFiles = [
-  "SG CALLCARD.xlsx",
-  "LOAD UP_SG.xlsx",
-  "LOAD API_SG.xlsx",
-  "LOAD API_EG.xlsx",
-  "KE24.xlsx",
-  "LOAD UP_EG.xlsx",
-  "EG CALLCARD.xlsx",
+  "CALLCARD_SG.XLSX",
+  "Load UP_SG.XLSX",
+  "Load API_SG.XLSX",
+  "LOAD API_EG.XLSX",
+  "KE24.XLSX",
+  "LOAD UP_EG.XLSX",
+  "CALLCARD_EG.XLSX",
 ];
 
 export const layoutHeaders = [

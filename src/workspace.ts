@@ -4,8 +4,6 @@ import {
   allocationRows,
   egLayoutRows,
   jvRows,
-  memoErrors,
-  memoHeaders,
   prepaidSourceFiles,
   sgLayoutRows,
 } from "./workspace/defaultData.js";
@@ -41,11 +39,6 @@ const defaultStates = [
     module: "prepaid",
     key: "source-files",
     data: { expected: prepaidSourceFiles },
-  },
-  {
-    module: "memo",
-    key: "errors",
-    data: { headers: memoHeaders, rows: memoErrors },
   },
 ];
 

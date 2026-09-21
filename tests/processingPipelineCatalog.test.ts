@@ -8,6 +8,7 @@ import {
   matchesProcessingPipelineRequirement,
   processingPipelineSeedRequirements,
 } from "../src/processingPipelineCatalog.js";
+import { processingPipelineSeedRequirements as migration019Requirements } from "../src/migrationSnapshots/processingPipelineCatalogue019.js";
 
 describe("Processing Pipeline catalogue", () => {
   it("contains generic pipeline requirements", () => {
@@ -37,20 +38,20 @@ describe("Processing Pipeline catalogue", () => {
   it("normalizes only the Excel extension for caller-supplied expected filenames", () => {
     expect(
       canonicalizeProcessingPipelineExpectedFileName(
-        "308. Billed Adjustments Monthly Summary Report_B_01.xlsx",
+        "308. Billed Adjustments Monthly Summary Report_G_01.xlsx",
       ),
-    ).toBe("308. Billed Adjustments Monthly Summary Report_B_01.XLSX");
+    ).toBe("308. Billed Adjustments Monthly Summary Report_G_01.XLSX");
     expect(
       canonicalizeProcessingPipelineExpectedFileName(
-        "308. billed adjustments monthly summary report_B_01.xlsx",
+        "308. billed adjustments monthly summary report_G_01.xlsx",
       ),
-    ).toBe("308. billed adjustments monthly summary report_B_01.XLSX");
+    ).toBe("308. billed adjustments monthly summary report_G_01.XLSX");
   });
   it("keeps the production pipeline and filename mappings", () => {
     expect(processingPipelineSeedRequirements).toContainEqual(
       expect.objectContaining({
-        pipelineCode: "bss_billcycle_glob",
-        fileName: "308. Billed Adjustments Monthly Summary Report_G_01.XLSX",
+        pipelineCode: "bss_billcycle_bayn",
+        fileName: "308. Billed Adjustments Monthly Summary Report_B_01.XLSX",
       }),
     );
     expect(processingPipelineSeedRequirements).toContainEqual(
@@ -105,7 +106,7 @@ describe("Processing Pipeline catalogue", () => {
       processingPipelineSeedRequirements.filter(
         (item) => item.pipelineCode === "bss_billcycle_glob",
       ),
-    ).toHaveLength(44);
+    ).toHaveLength(33);
     expect(
       processingPipelineSeedRequirements.filter(
         (item) => item.pipelineCode === "bss_billcycle_inov",
@@ -115,7 +116,7 @@ describe("Processing Pipeline catalogue", () => {
       processingPipelineSeedRequirements.filter(
         (item) => item.pipelineCode === "memo_sst",
       ),
-    ).toHaveLength(72);
+    ).toHaveLength(24);
     expect(
       processingPipelineSeedRequirements.filter(
         (item) => item.pipelineCode === "iccbs_bayn",
@@ -126,6 +127,52 @@ describe("Processing Pipeline catalogue", () => {
     );
     expect(globeBillCycleStateMachines.sapGlbilled.name).toBe(
       "isg-esatp-dv-bss_billcycle_glob_preload-state_machine_SAPgbilled",
+    );
+  });
+  it("uses only the supplied file mappings", () => {
+    const globeRequirements = processingPipelineSeedRequirements.filter(
+      (item) => item.pipelineCode === "bss_billcycle_glob",
+    );
+    expect(
+      globeRequirements.some((item) => item.fileName.startsWith("308.")),
+    ).toBe(false);
+    expect(
+      processingPipelineSeedRequirements
+        .filter((item) => item.pipelineCode === "memo_sst")
+        .every((item) => item.fileName.endsWith("_01.XLSX")),
+    ).toBe(true);
+
+    const accrualOutputs = processingPipelineSeedRequirements.filter(
+      (item) =>
+        item.pipelineCode === "aprm_voice_accrual" &&
+        item.fileName.includes("_output"),
+    );
+    expect(accrualOutputs).toHaveLength(3);
+    expect(accrualOutputs.every((item) => item.match === "exact")).toBe(true);
+
+    const deltaOutputs = processingPipelineSeedRequirements.filter(
+      (item) =>
+        item.pipelineCode === "aprm_voice_delta" &&
+        item.fileName.includes("_OUTPUT"),
+    );
+    expect(deltaOutputs).toHaveLength(6);
+    expect(deltaOutputs.every((item) => item.match === "exact")).toBe(true);
+  });
+  it("keeps the migration snapshot aligned with the live catalogue", () => {
+    const mappingKey = (item: {
+      pipelineCode: string;
+      fileName: string;
+      match: string;
+      legacyPackageName: string | null;
+    }) =>
+      [
+        item.pipelineCode,
+        item.fileName,
+        item.match,
+        item.legacyPackageName ?? "",
+      ].join("|");
+    expect(migration019Requirements.map(mappingKey).sort()).toEqual(
+      processingPipelineSeedRequirements.map(mappingKey).sort(),
     );
   });
 });

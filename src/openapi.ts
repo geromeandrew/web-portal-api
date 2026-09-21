@@ -72,12 +72,6 @@ const jsonBody = (
   ...(description ? { description } : {}),
   content: { "application/json": { schema } },
 });
-const uuidPath: OpenAPIV3.ParameterObject = {
-  name: "id",
-  in: "path",
-  required: true,
-  schema: { type: "string", format: "uuid" },
-};
 const regionPath: OpenAPIV3.ParameterObject = {
   name: "region",
   in: "path",
@@ -113,25 +107,6 @@ const freezeLayoutBody = jsonBody({
   required: ["frozen"],
   properties: { frozen: { type: "boolean" } },
 });
-const workflowUploadBody: OpenAPIV3.RequestBodyObject = {
-  required: true,
-  content: {
-    "multipart/form-data": {
-      schema: {
-        type: "object",
-        required: ["workflow", "file"],
-        properties: {
-          workflow: { type: "string", enum: ["prepaid", "memo", "aprm"] },
-          slot: {
-            type: "string",
-            description: "Required for Prepaid uploads.",
-          },
-          file: { type: "string", format: "binary" },
-        },
-      },
-    },
-  },
-};
 const pipelineUploadBody: OpenAPIV3.RequestBodyObject = {
   required: true,
   content: {
@@ -146,6 +121,7 @@ const pipelineUploadBody: OpenAPIV3.RequestBodyObject = {
             enum: ["true", "false"],
             default: "false",
           },
+          batchId: { type: "string", format: "uuid" },
           file: { type: "string", format: "binary" },
         },
       },
@@ -203,7 +179,6 @@ const allOpenApiDocument: OpenAPIV3.Document = {
   tags: [
     { name: "Health" },
     { name: "Authentication" },
-    { name: "Uploads" },
     { name: "Prepaid" },
     { name: "Memo" },
     { name: "Processing Pipelines" },
@@ -213,18 +188,6 @@ const allOpenApiDocument: OpenAPIV3.Document = {
       get: { ...success("Check API and database availability"), security: [] },
     },
     "/api/auth/me": { get: success("Get current user") },
-    "/api/uploads": {
-      post: {
-        ...created("Upload a workflow file"),
-        requestBody: workflowUploadBody,
-      },
-    },
-    "/api/uploads/{id}": {
-      delete: {
-        ...noContent("Delete upload metadata"),
-        parameters: [uuidPath],
-      },
-    },
     "/api/workflows/prepaid/state": { get: success("Get Prepaid state") },
     "/api/workflows/prepaid/process": {
       post: created("Process Prepaid uploads"),
@@ -248,8 +211,6 @@ const allOpenApiDocument: OpenAPIV3.Document = {
     "/api/workflows/prepaid/report.csv": {
       get: csv("Download Prepaid report"),
     },
-    "/api/workflows/memo/state": { get: success("Get Memo state") },
-    "/api/workflows/memo/errors.csv": { get: csv("Download Memo exceptions") },
     "/api/processing-pipelines": { get: success("List processing pipelines") },
     "/api/processing-pipelines/{pipelineCode}": {
       get: {
@@ -288,6 +249,16 @@ const allOpenApiDocument: OpenAPIV3.Document = {
         ...created("Upload a pipeline file"),
         parameters: [pipelineCodePath],
         requestBody: pipelineUploadBody,
+      },
+    },
+    "/api/processing-pipelines/{pipelineCode}/upload-batches": {
+      get: {
+        ...success("List mapped pipeline upload batches"),
+        parameters: [pipelineCodePath],
+      },
+      post: {
+        ...created("Create a mapped pipeline upload batch"),
+        parameters: [pipelineCodePath],
       },
     },
     "/api/processing-pipelines/{pipelineCode}/files/content": {
@@ -354,9 +325,7 @@ const allOpenApiDocument: OpenAPIV3.Document = {
 function tagForPath(path: string) {
   if (path === "/api/healthz") return "Health";
   if (path.startsWith("/api/auth/")) return "Authentication";
-  if (path.startsWith("/api/uploads")) return "Uploads";
   if (path.startsWith("/api/workflows/prepaid")) return "Prepaid";
-  if (path.startsWith("/api/workflows/memo")) return "Memo";
   return "Processing Pipelines";
 }
 

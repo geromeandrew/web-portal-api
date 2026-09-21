@@ -10,11 +10,14 @@ import {
 } from "../../../processingPipelineCatalog.js";
 import {
   createStepFunctionExecution,
+  createPipelineUploadBatch,
+  getPipelineUploadBatches,
   getPipelineDetail,
   getProcessingPipelineBatchStepFunctionMapping,
   getProcessingPipelineCatalog,
   getProcessingPipelineRequirements,
   getStepFunctionExecution,
+  recordPipelineUploadBatchFile,
   type PipelineBatchStepFunctionMapping,
   updateStepFunctionExecution,
 } from "../../../processingPipelineRepository.js";
@@ -43,6 +46,7 @@ const expectedFileSchema = z.object({
 });
 const uploadSchema = expectedFileSchema.extend({
   replace: z.enum(["true", "false"]).default("false"),
+  batchId: z.string().uuid().optional(),
 });
 const executionDetailsQuerySchema = expectedFileSchema;
 const batchRunSchema = z.object({
@@ -91,6 +95,7 @@ function attachConfiguration(
     if (!requirement) return file;
     return {
       ...file,
+      match: requirement.match,
       stepFunction: requirement.stepFunction
         ? {
             stateMachineName: requirement.stepFunction.stateMachineName,
@@ -370,6 +375,20 @@ export function createProcessingPipelinesRouter(
       throw mapStorageError(error);
     }
   });
+  router.post("/:pipelineCode/upload-batches", async (request, response) => {
+    const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+    const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
+    const batch = await createPipelineUploadBatch(pool, {
+      id: randomUUID(), pipelineCode, workspaceId, userId: request.auth!.userId,
+    });
+    if (!batch) throw new AppError(404, "PIPELINE_NOT_FOUND", "The selected processing pipeline was not found.");
+    response.status(201).json({ batch: { id: batch.id, createdAt: batch.created_at.toISOString() } });
+  });
+  router.get("/:pipelineCode/upload-batches", async (request, response) => {
+    const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+    const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
+    response.json({ batches: await getPipelineUploadBatches(pool, { pipelineCode, workspaceId }) });
+  });
   router.get("/:pipelineCode/files/content", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
     const { key } = contentQuerySchema.parse(request.query);
@@ -414,7 +433,7 @@ export function createProcessingPipelinesRouter(
     if (!request.file)
       throw new AppError(400, "FILE_REQUIRED", "Choose a file to upload.");
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
-    const { expectedFileName, replace } = uploadSchema.parse(request.body);
+    const { expectedFileName, replace, batchId } = uploadSchema.parse(request.body);
     const extension = request.file.originalname
       .slice(request.file.originalname.lastIndexOf("."))
       .toLowerCase();
@@ -429,7 +448,7 @@ export function createProcessingPipelinesRouter(
     const requirement = (
       await getProcessingPipelineRequirements(pool, pipelineCode)
     ).find((candidate) => candidate.fileName === canonicalExpectedFileName);
-    if (!requirement)
+    if (!requirement || !requirement.id)
       throw new AppError(
         404,
         "PIPELINE_FILE_NOT_FOUND",
@@ -471,6 +490,13 @@ export function createProcessingPipelinesRouter(
         request.file.mimetype || "application/octet-stream",
       );
       const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
+      if (batchId) {
+        const recorded = await recordPipelineUploadBatchFile(pool, {
+          batchId, pipelineCode, workspaceId, requirementId: requirement.id,
+          originalName: localName, objectKey: stored.key,
+        });
+        if (!recorded) throw new AppError(404, "PIPELINE_UPLOAD_BATCH_NOT_FOUND", "The selected upload batch was not found.");
+      }
       await audit(pool, workspaceId, "processing-pipeline.file-uploaded", {
         pipelineCode,
         expectedFileName: requirement.fileName,

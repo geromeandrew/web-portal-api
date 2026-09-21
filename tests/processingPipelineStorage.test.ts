@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -65,6 +66,23 @@ describe("ProcessingPipelineStorage", () => {
     );
     await expect(storage.getFile("alpha", "beta/report.csv")).rejects.toThrow(
       "processing pipeline folder",
+    );
+  });
+  it("deletes a file only from the selected pipeline inbound folder", async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const storage = new ProcessingPipelineStorage(
+      { send } as unknown as Pick<S3Client, "send">,
+      "pipeline-files",
+    );
+
+    await storage.deleteFile(
+      "prepaid_reclass",
+      "prepaid_reclass/inbound/CALLCARD_SG.XLSX",
+    );
+
+    expect(send.mock.calls[0][0]).toBeInstanceOf(DeleteObjectCommand);
+    expect(send.mock.calls[0][0].input.Key).toBe(
+      "prepaid_reclass/inbound/CALLCARD_SG.XLSX",
     );
   });
   it("rejects root-level keys in the selected pipeline", async () => {

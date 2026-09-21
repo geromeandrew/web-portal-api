@@ -134,10 +134,6 @@ function add(
 add("BSS Bill Cycles - Globe", "bss_billcycle_glob", [
   ...[
     [
-      "308. Billed Adjustments Monthly Summary Report_G_01.XLSX",
-      "MyBss_Globe_308_Billed_Adjustments.dtsx",
-    ],
-    [
       "318. Billed Charges Summary Report_G_01.XLSX",
       "MyBss_Globe_318_Billed_Charges.dtsx",
     ],
@@ -196,7 +192,7 @@ const bayanBillCycleFiles = [
   ],
   ["411. Bill Control_PHP_B_01.XLSX", "MyBss_Bayan_411_Bill_Control_PHP.dtsx"],
   ["411. Bill Control_USD_B_01.XLSX", "MyBss_Bayan_411_Bill_Control_USD.dtsx"],
-  ["sap_glbilled_B_01.txt", "MyBss_Bayan_sapglbilled.dtsx"],
+  ["sap_glbilled_B_01.XLSX", "MyBss_Bayan_sapglbilled.dtsx"],
 ] as const;
 add(
   "BSS Bill Cycles - Bayan",
@@ -297,15 +293,9 @@ const memoFiles = [
 add(
   "Memo Standard Template",
   "memo_sst",
-  memoFiles.flatMap((name) =>
-    ["01", "02", "03"].map(
-      (suffix) =>
-        [
-          `${name}_${suffix}.XLSX`,
-          "Memo_Format04_38Columns.dtsx",
-          null,
-        ] as Definition,
-    ),
+  memoFiles.map(
+    (name) =>
+      [`${name}_01.XLSX`, "Memo_Format04_38Columns.dtsx", null] as Definition,
   ),
 );
 add("ICCBS - Innove", "iccbs_inov", [
@@ -342,9 +332,9 @@ add("APRM Voice - Accrual", "aprm_voice_accrual", [
   ["SAP_REPORT_BYN_ACCRUAL.CSV", "APRM_SAP_REPORT_BYN_ACCRUAL.dtsx"],
   ["SAP_REPORT_GLB_ACCRUAL.CSV", "APRM_SAP_REPORT_GLB_ACCRUAL.dtsx"],
   ["SAP_REPORT_INV_ACCRUAL.CSV", "APRM_SAP_REPORT_INV_ACCRUAL.dtsx"],
-  ["ICEXT_BYN_A_VOICE_*.TXT", "APRM_ICEXT_BYN_A_VOICE_output.dtsx", "glob"],
-  ["ICEXT_INV_A_VOICE_*.TXT", "APRM_ICEXT_INV_A_VOICE_output.dtsx", "glob"],
-  ["ICEXT_GLB_A_VOICE_*.TXT", "APRM_ICEXT_GLB_A_VOICE_output.dtsx", "glob"],
+  ["ICEXT_BYN_A_VOICE_output.TXT", "APRM_ICEXT_BYN_A_VOICE_output.dtsx"],
+  ["ICEXT_INV_A_VOICE_output.TXT", "APRM_ICEXT_INV_A_VOICE_output.dtsx"],
+  ["ICEXT_GLB_A_VOICE_output.TXT", "APRM_ICEXT_GLB_A_VOICE_output.dtsx"],
 ]);
 add("APRM Voice - Delta", "aprm_voice_delta", [
   ["ICEXT_BYN_I_VOICE.TXT", "APRM_SAP_BYN_DELTA_VOICE.dtsx"],
@@ -356,36 +346,12 @@ add("APRM Voice - Delta", "aprm_voice_delta", [
   ["SAP_REPORT_GLB_FINAL.CSV", "APRM_SAP_REPORT_GLB_FINAL_VOICE.dtsx"],
   ["SAP_REPORT_INV_DELTA.CSV", "APRM_SAP_REPORT_INV_DELTA_VOICE.dtsx"],
   ["SAP_REPORT_INV_FINAL.CSV", "APRM_SAP_REPORT_INV_FINAL_VOICE.dtsx"],
-  [
-    "ICEXT_GLB_I_VOICE_*_P1_OUTPUT.TXT",
-    "APRM_ICEXT_GLB_I_VOICE_P1_success.dtsx",
-    "glob",
-  ],
-  [
-    "ICEXT_GLB_I_VOICE_*_P2_OUTPUT.TXT",
-    "APRM_ICEXT_GLB_I_VOICE_P2_success.dtsx",
-    "glob",
-  ],
-  [
-    "ICEXT_INV_I_VOICE_*_P1_OUTPUT.TXT",
-    "APRM_ICEXT_INV_I_VOICE_P1_success.dtsx",
-    "glob",
-  ],
-  [
-    "ICEXT_INV_I_VOICE_*_P2_OUTPUT.TXT",
-    "APRM_ICEXT_INV_I_VOICE_P2_success.dtsx",
-    "glob",
-  ],
-  [
-    "ICEXT_BYN_I_VOICE_*_P1_OUTPUT.TXT",
-    "APRM_ICEXT_BYN_I_VOICE_P1_success.dtsx",
-    "glob",
-  ],
-  [
-    "ICEXT_BYN_I_VOICE_*_P2_OUTPUT.TXT",
-    "APRM_ICEXT_BYN_I_VOICE_P2_success.dtsx",
-    "glob",
-  ],
+  ["ICEXT_GLB_I_VOICE_P1_OUTPUT.TXT", "APRM_ICEXT_GLB_I_VOICE_P1_success.dtsx"],
+  ["ICEXT_GLB_I_VOICE_P2_OUTPUT.TXT", "APRM_ICEXT_GLB_I_VOICE_P2_success.dtsx"],
+  ["ICEXT_INV_I_VOICE_P1_OUTPUT.TXT", "APRM_ICEXT_INV_I_VOICE_P1_success.dtsx"],
+  ["ICEXT_INV_I_VOICE_P2_OUTPUT.TXT", "APRM_ICEXT_INV_I_VOICE_P2_success.dtsx"],
+  ["ICEXT_BYN_I_VOICE_P1_OUTPUT.TXT", "APRM_ICEXT_BYN_I_VOICE_P1_success.dtsx"],
+  ["ICEXT_BYN_I_VOICE_P2_OUTPUT.TXT", "APRM_ICEXT_BYN_I_VOICE_P2_success.dtsx"],
 ]);
 add("ISMS IBOB Actualization", "isms_ibob_actzn", [
   ["ACT_ISMS_IB_OB_01.XLSX", "ACT_ISMS_IB_OB_01.dtsx"],
