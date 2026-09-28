@@ -96,6 +96,12 @@ const expectedFileName: OpenAPIV3.ParameterObject = {
   required: true,
   schema: { type: "string" },
 };
+const pipelineFileKey: OpenAPIV3.ParameterObject = {
+  name: "key",
+  in: "query",
+  required: true,
+  schema: { type: "string" },
+};
 const batchCycle: OpenAPIV3.ParameterObject = {
   name: "batchCycle",
   in: "query",
@@ -250,6 +256,10 @@ const allOpenApiDocument: OpenAPIV3.Document = {
         parameters: [pipelineCodePath],
         requestBody: pipelineUploadBody,
       },
+      delete: {
+        ...noContent("Delete a stored pipeline file"),
+        parameters: [pipelineCodePath, pipelineFileKey],
+      },
     },
     "/api/processing-pipelines/{pipelineCode}/upload-batches": {
       get: {
@@ -266,12 +276,7 @@ const allOpenApiDocument: OpenAPIV3.Document = {
         ...success("Stream a pipeline file"),
         parameters: [
           pipelineCodePath,
-          {
-            name: "key",
-            in: "query",
-            required: true,
-            schema: { type: "string" },
-          },
+          pipelineFileKey,
         ],
       },
     },

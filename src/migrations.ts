@@ -995,4 +995,12 @@ export const migrations = [
     ${currentBayanAdhocMappings.map(({ requirement, mapping }) => `INSERT INTO processing_pipeline_batch_step_function_mapping_files (batch_mapping_id, file_requirement_id, display_order) SELECT batch_mapping.id, requirement.id, ${({ billedAdjustments: 1, billedCharges: 2, billControlPhp: 3, billControlUsd: 4, sapGlbilled: 5 } as Record<string, number>)[mapping.code.includes("308") ? "billedAdjustments" : mapping.code.includes("318") ? "billedCharges" : mapping.code.includes("411_php") ? "billControlPhp" : mapping.code.includes("411_usd") ? "billControlUsd" : "sapGlbilled"]} FROM processing_pipeline_batch_step_function_mappings batch_mapping JOIN processing_pipelines pipeline ON pipeline.id = batch_mapping.pipeline_id JOIN processing_pipeline_file_requirements requirement ON requirement.pipeline_id = pipeline.id AND requirement.file_name = ${quote(requirement.fileName)} WHERE pipeline.code = 'bss_billcycle_bayn' AND batch_mapping.batch_cycle = ${quote(mapping.cycle)} ON CONFLICT (batch_mapping_id, file_requirement_id) DO UPDATE SET display_order = EXCLUDED.display_order;`).join("\n")}
   `,
   },
+  {
+    id: "022_pipeline_file_upload_audit_lookup",
+    sql: `
+    CREATE INDEX IF NOT EXISTS audit_actions_pipeline_file_uploaded_lookup
+      ON audit_actions ((detail->>'pipelineCode'), (detail->>'objectKey'), created_at DESC)
+      WHERE action = 'processing-pipeline.file-uploaded';
+  `,
+  },
 ];

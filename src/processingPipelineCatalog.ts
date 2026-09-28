@@ -438,6 +438,42 @@ export function matchesProcessingPipelineRequirement(
   return new RegExp(`^${expression}$`, "i").test(fileName);
 }
 
+export function matchesBillCycleUploadFile(
+  requirement: ProcessingPipelineFileRequirement,
+  fileName: string,
+) {
+  const expected = billCycleFileIdentity(requirement.fileName);
+  const uploaded = billCycleFileIdentity(fileName);
+  return Boolean(
+    expected &&
+      uploaded &&
+      expected.report === uploaded.report &&
+      // The requirement was selected from the Bill Cycle workspace and
+      // dropdown, so it supplies omitted source-file suffixes. Explicit
+      // suffixes must still match the selected requirement.
+      (uploaded.entity === null || expected.entity === uploaded.entity) &&
+      (uploaded.cycle === null || expected.cycle === uploaded.cycle),
+  );
+}
+
+function billCycleFileIdentity(fileName: string) {
+  const suffix = fileName.match(/(?:_([BGI]))?(?:_(\d{2}))?(?=\.[^.]+$)/i);
+  const entity = suffix?.[1]?.toUpperCase() ?? null;
+  const cycle = suffix?.[2] ?? null;
+  const prefix = fileName.match(/^(\d+)/)?.[1];
+  if (prefix) {
+    const controlType =
+      prefix === "411"
+        ? /(?:^|[^a-z0-9])(php|usd)(?:[^a-z0-9]|$)/i.exec(fileName)?.[1]?.toUpperCase()
+        : null;
+    if (prefix === "411" && !controlType) return null;
+    return { report: controlType ? `${prefix}:${controlType}` : prefix, entity, cycle };
+  }
+  if (/sap/i.test(fileName) && /glbilled/i.test(fileName))
+    return { report: "SAP_GLBILLED", entity, cycle };
+  return null;
+}
+
 export function canonicalizeProcessingPipelineExpectedFileName(
   fileName: string,
 ) {

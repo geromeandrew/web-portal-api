@@ -4,6 +4,7 @@ import {
   bayanBillCycleStepFunctionMapping,
   bayanBillCycleSuffixes,
   canonicalizeProcessingPipelineExpectedFileName,
+  matchesBillCycleUploadFile,
   globeBillCycleStateMachines,
   matchesProcessingPipelineRequirement,
   processingPipelineSeedRequirements,
@@ -46,6 +47,22 @@ describe("Processing Pipeline catalogue", () => {
         "308. billed adjustments monthly summary report_G_01.xlsx",
       ),
     ).toBe("308. billed adjustments monthly summary report_G_01.XLSX");
+  });
+  it("matches bill-cycle uploads by report identity and infers omitted workspace and cycle suffixes", () => {
+    const requirements = processingPipelineSeedRequirements.filter((item) => item.pipelineCode === "bss_billcycle_bayn");
+    const adjustment = requirements.find((item) => item.fileName.startsWith("308."))!;
+    const php = requirements.find((item) => item.fileName.includes("Control_PHP_B_01"))!;
+    const usd = requirements.find((item) => item.fileName.includes("Control_USD_B_01"))!;
+    const sap = requirements.find((item) => item.fileName.startsWith("sap_glbilled_B_01"))!;
+    expect(matchesBillCycleUploadFile(adjustment, "308. revised title_b_01.xlsx")).toBe(true);
+    expect(matchesBillCycleUploadFile(adjustment, "308. revised title_b.xlsx")).toBe(true);
+    expect(matchesBillCycleUploadFile(adjustment, "308.xlsx")).toBe(true);
+    expect(matchesBillCycleUploadFile(adjustment, "308. revised title_01.xlsx")).toBe(true);
+    expect(matchesBillCycleUploadFile(adjustment, "308. revised title_g_01.xlsx")).toBe(false);
+    expect(matchesBillCycleUploadFile(adjustment, "308. revised title_b_02.xlsx")).toBe(false);
+    expect(matchesBillCycleUploadFile(php, "411. any title_php_b_01.xlsx")).toBe(true);
+    expect(matchesBillCycleUploadFile(usd, "411. any title_php_b_01.xlsx")).toBe(false);
+    expect(matchesBillCycleUploadFile(sap, "SAP alternate GLBILLED_b_01.xlsx")).toBe(true);
   });
   it("keeps the production pipeline and filename mappings", () => {
     expect(processingPipelineSeedRequirements).toContainEqual(

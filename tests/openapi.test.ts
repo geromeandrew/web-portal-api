@@ -35,7 +35,7 @@ describe("OpenAPI documentation", () => {
         ).length,
       0,
     );
-    expect(operationCount).toBe(15);
+    expect(operationCount).toBe(16);
     expect(
       openApiDocument.paths["/api/workflows/prepaid/report.csv"],
     ).toBeUndefined();

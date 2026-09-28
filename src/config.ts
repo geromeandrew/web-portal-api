@@ -18,14 +18,13 @@ const envSchema = z
     OKTA_ISSUER: z
       .string()
       .url()
-      .default("https://globemfa.okta.com/oauth2/default")
       .transform((value) => value.replace(/\/$/, ""))
       .refine(
         (value) => new URL(value).pathname.startsWith("/oauth2/"),
         "must identify a custom Okta authorization server",
       ),
     OKTA_AUDIENCE: z.string().min(1).default("api://default"),
-    OKTA_CLIENT_ID: z.string().min(1).default("0oa28rfcq0h2ZSAvZ0h8"),
+    OKTA_CLIENT_ID: z.string().min(1),
     RATE_LIMIT_HMAC_SECRET: z.string().min(32),
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
     S3_BUCKET: z.string().min(3),
