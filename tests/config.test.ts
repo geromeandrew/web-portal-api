@@ -4,6 +4,8 @@ import { loadConfig } from "../src/config.js";
 
 const base = {
   DATABASE_URL: "postgresql://portal:password@127.0.0.1:5432/web_portal",
+  OKTA_ISSUER: "https://example.okta.com/oauth2/default",
+  OKTA_CLIENT_ID: "test-client-id",
   RATE_LIMIT_HMAC_SECRET:
     "a-very-long-test-secret-that-is-at-least-32-characters",
   S3_BUCKET: "billing-cycle-files",
@@ -22,13 +24,20 @@ describe("loadConfig", () => {
     );
   });
 
-  it("uses the provisional Okta defaults and keeps proxy trust disabled locally", () => {
+  it("uses configured Okta values and keeps proxy trust disabled locally", () => {
     const config = loadConfig(base);
-    expect(config.OKTA_ISSUER).toBe("https://globemfa.okta.com/oauth2/default");
+    expect(config.OKTA_ISSUER).toBe(base.OKTA_ISSUER);
     expect(config.OKTA_AUDIENCE).toBe("api://default");
-    expect(config.OKTA_CLIENT_ID).toBe("0oa28rfcq0h2ZSAvZ0h8");
+    expect(config.OKTA_CLIENT_ID).toBe(base.OKTA_CLIENT_ID);
     expect(config.RATE_LIMIT_HMAC_SECRET).toBe(base.RATE_LIMIT_HMAC_SECRET);
     expect(config.TRUST_PROXY_HOPS).toBe(0);
+  });
+
+  it("requires the Okta issuer and client ID", () => {
+    const { OKTA_ISSUER: _issuer, ...withoutIssuer } = base;
+    const { OKTA_CLIENT_ID: _clientId, ...withoutClientId } = base;
+    expect(() => loadConfig(withoutIssuer)).toThrow("OKTA_ISSUER");
+    expect(() => loadConfig(withoutClientId)).toThrow("OKTA_CLIENT_ID");
   });
 
   it("rejects the Okta org issuer for a custom API", () => {

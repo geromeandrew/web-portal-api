@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { AppDependencies } from "../../../app/dependencies.js";
 import {
   canonicalizeProcessingPipelineExpectedFileName,
+  matchesBillCycleUploadFile,
   matchesProcessingPipelineRequirement,
 } from "../../../processingPipelineCatalog.js";
 import {
@@ -13,6 +14,7 @@ import {
   createPipelineUploadBatch,
   getPipelineUploadBatches,
   getPipelineDetail,
+  getPipelineFileUploadActivity,
   getProcessingPipelineBatchStepFunctionMapping,
   getProcessingPipelineCatalog,
   getProcessingPipelineRequirements,
@@ -87,6 +89,7 @@ function attachConfiguration(
   >,
   requirements: Awaited<ReturnType<typeof getProcessingPipelineRequirements>>,
   bucket: string,
+  uploadActivity: Map<string, { uploadedAt: string; uploadedBy: string | null }>,
 ) {
   return files.map((file) => {
     const requirement = requirements.find(
@@ -95,6 +98,8 @@ function attachConfiguration(
     if (!requirement) return file;
     return {
       ...file,
+      uploadedAt: file.key ? uploadActivity.get(file.key)?.uploadedAt ?? file.lastModified : null,
+      uploadedBy: file.key ? uploadActivity.get(file.key)?.uploadedBy ?? null : null,
       match: requirement.match,
       stepFunction: requirement.stepFunction
         ? {
@@ -363,11 +368,16 @@ export function createProcessingPipelinesRouter(
             requirements,
           )
         : [];
+      const uploadActivity = await getPipelineFileUploadActivity(
+        pool,
+        pipelineCode,
+        files.flatMap((file) => (file.key ? [file.key] : [])),
+      );
       response.json(
         requirements.length
           ? {
               configured: true,
-              files: attachConfiguration(files, requirements, config.S3_BUCKET),
+              files: attachConfiguration(files, requirements, config.S3_BUCKET, uploadActivity),
             }
           : { configured: false, files: [] },
       );
@@ -462,10 +472,12 @@ export function createProcessingPipelinesRouter(
       requirement.match === "exact"
         ? requirement.fileName
         : normalizedLocalName;
-    if (
-      requirement.match === "glob" &&
-      !matchesProcessingPipelineRequirement(requirement, savedName)
-    )
+    const validUploadName = pipelineCode.startsWith("bss_billcycle_")
+      ? matchesBillCycleUploadFile(requirement, localName)
+      : requirement.match === "glob"
+        ? matchesProcessingPipelineRequirement(requirement, savedName)
+        : true;
+    if (!validUploadName)
       throw new AppError(
         400,
         "PIPELINE_FILENAME_MISMATCH",
@@ -509,6 +521,28 @@ export function createProcessingPipelinesRouter(
         renamed: requirement.match === "exact" && localName !== savedName,
         replaced: exists,
       });
+    } catch (error) {
+      throw mapStorageError(error);
+    }
+  });
+  router.delete("/:pipelineCode/files", async (request, response) => {
+    const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+    const { key } = contentQuerySchema.parse(request.query);
+    const prefix = processingPipelineStorage.inboundPrefix(pipelineCode);
+    const fileName = key.startsWith(prefix) ? key.slice(prefix.length) : "";
+    const requirements = await getProcessingPipelineRequirements(pool, pipelineCode);
+    if (!requirements.some((requirement) => matchesProcessingPipelineRequirement(requirement, fileName)))
+      throw new AppError(404, "PIPELINE_FILE_NOT_FOUND", "The requested file is not configured for this pipeline.");
+    try {
+      if (!await processingPipelineStorage.fileExists(pipelineCode, key))
+        throw new AppError(404, "PIPELINE_FILE_NOT_FOUND", "The requested file was not found in storage.");
+      await processingPipelineStorage.deleteFile(pipelineCode, key);
+      const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
+      await audit(pool, workspaceId, "processing-pipeline.file-removed", {
+        pipelineCode,
+        objectKey: key,
+      });
+      response.status(204).end();
     } catch (error) {
       throw mapStorageError(error);
     }

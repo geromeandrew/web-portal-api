@@ -331,6 +331,48 @@ export async function getProcessingPipelineCatalog(pool: Pool) {
   return { pipelines: pipelines.rows };
 }
 
+export type PipelineFileUploadActivity = {
+  objectKey: string;
+  uploadedAt: string;
+  uploadedBy: string | null;
+};
+
+export async function getPipelineFileUploadActivity(
+  pool: Pool,
+  pipelineCode: string,
+  objectKeys: readonly string[],
+) {
+  if (!objectKeys.length) return new Map<string, PipelineFileUploadActivity>();
+  const result = await pool.query<{
+    object_key: string;
+    created_at: Date;
+    uploaded_by: string | null;
+  }>(
+    `SELECT DISTINCT ON (audit.detail->>'objectKey')
+       audit.detail->>'objectKey' AS object_key,
+       audit.created_at,
+       COALESCE(NULLIF(BTRIM(user_record.display_name), ''), user_record.email) AS uploaded_by
+     FROM audit_actions audit
+     JOIN workspaces workspace ON workspace.id = audit.workspace_id
+     JOIN users user_record ON user_record.id = workspace.user_id
+     WHERE audit.action = 'processing-pipeline.file-uploaded'
+       AND audit.detail->>'pipelineCode' = $1
+       AND audit.detail->>'objectKey' = ANY($2::text[])
+     ORDER BY audit.detail->>'objectKey', audit.created_at DESC`,
+    [pipelineCode, objectKeys],
+  );
+  return new Map(
+    result.rows.map((row) => [
+      row.object_key,
+      {
+        objectKey: row.object_key,
+        uploadedAt: row.created_at.toISOString(),
+        uploadedBy: row.uploaded_by,
+      },
+    ]),
+  );
+}
+
 export type PipelineUploadBatchDto = {
   id: string;
   createdAt: string;
@@ -338,6 +380,7 @@ export type PipelineUploadBatchDto = {
   files: {
     expectedFileName: string;
     originalName: string;
+    objectKey: string;
     readAt: string;
   }[];
 };
@@ -381,8 +424,8 @@ export async function getPipelineUploadBatches(
     id: string; created_at: Date; uploaded_by: string | null; files: unknown;
   }>(
     `SELECT batch.id, batch.created_at,
-       COALESCE(user_record.display_name, user_record.email) AS uploaded_by,
-       COALESCE(json_agg(json_build_object('expectedFileName', requirement.file_name, 'originalName', member.original_name, 'readAt', member.read_at) ORDER BY member.read_at) FILTER (WHERE member.id IS NOT NULL), '[]'::json) AS files
+       COALESCE(NULLIF(BTRIM(user_record.display_name), ''), user_record.email) AS uploaded_by,
+       COALESCE(json_agg(json_build_object('expectedFileName', requirement.file_name, 'originalName', member.original_name, 'objectKey', member.object_key, 'readAt', member.read_at) ORDER BY member.read_at) FILTER (WHERE member.id IS NOT NULL), '[]'::json) AS files
      FROM processing_pipeline_upload_batches batch
      JOIN processing_pipelines pipeline ON pipeline.id = batch.pipeline_id
      JOIN users user_record ON user_record.id = batch.created_by_user_id
@@ -398,7 +441,7 @@ export async function getPipelineUploadBatches(
     id: row.id,
     createdAt: row.created_at.toISOString(),
     uploadedBy: row.uploaded_by,
-    files: jsonArray<{ expectedFileName: string; originalName: string; readAt: string }>(row.files),
+    files: jsonArray<{ expectedFileName: string; originalName: string; objectKey: string; readAt: string }>(row.files),
   }));
 }
 
