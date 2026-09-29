@@ -21,8 +21,8 @@ const existingUser: UserRow = {
   password_hash: null,
   okta_subject: null,
   display_name: null,
-  is_bootstrap_admin: false,
-  is_active: false,
+  is_admin: false,
+  is_active: true,
   must_change_password: false,
   token_version: 1,
   created_at: new Date("2026-01-02T03:04:05.000Z"),
@@ -33,8 +33,8 @@ function poolWithCandidates(candidates: UserRow[]) {
   const client = {
     query: vi.fn(async (sql: string, values?: unknown[]) => {
       queries.push({ sql, values });
-      if (sql.includes("SELECT * FROM users")) return { rows: candidates };
-      if (sql.includes("UPDATE users SET okta_subject")) {
+      if (sql.includes("SELECT * FROM app_user")) return { rows: candidates };
+      if (sql.includes("UPDATE app_user SET okta_subject")) {
         return {
           rows: [
             {
@@ -46,7 +46,7 @@ function poolWithCandidates(candidates: UserRow[]) {
           ],
         };
       }
-      if (sql.includes("UPDATE users SET email")) {
+      if (sql.includes("UPDATE app_user SET email")) {
         return {
           rows: [
             {
@@ -59,7 +59,7 @@ function poolWithCandidates(candidates: UserRow[]) {
       }
       if (
         sql.includes(
-          "INSERT INTO users (id, email, okta_subject, display_name)",
+          "INSERT INTO app_user (id, email, okta_subject, display_name, last_login_at)",
         )
       ) {
         return {
@@ -179,7 +179,7 @@ describe("OktaAuthenticator", () => {
     expect(
       queries.some(
         ({ sql, values }) =>
-          sql.includes("UPDATE users SET okta_subject") &&
+          sql.includes("UPDATE app_user SET okta_subject") &&
           values?.[0] === "00u-okta-subject",
       ),
     ).toBe(true);
@@ -347,7 +347,7 @@ describe("OktaAuthenticator", () => {
     expect(
       queries.find(({ sql }) =>
         sql.includes(
-          "INSERT INTO users (id, email, okta_subject, display_name)",
+          "INSERT INTO app_user (id, email, okta_subject, display_name, last_login_at)",
         ),
       )?.values?.[1],
     ).toBe(result.request.auth?.email);
@@ -382,7 +382,7 @@ describe("OktaAuthenticator", () => {
     expect(
       queries.find(({ sql }) =>
         sql.includes(
-          "INSERT INTO users (id, email, okta_subject, display_name)",
+          "INSERT INTO app_user (id, email, okta_subject, display_name, last_login_at)",
         ),
       )?.values?.[3],
     ).toBe("Jane Example");
@@ -413,7 +413,7 @@ describe("OktaAuthenticator", () => {
     expect(
       queries.find(({ sql }) =>
         sql.includes(
-          "INSERT INTO users (id, email, okta_subject, display_name)",
+          "INSERT INTO app_user (id, email, okta_subject, display_name, last_login_at)",
         ),
       )?.values,
     ).toEqual([
@@ -451,7 +451,7 @@ describe("OktaAuthenticator", () => {
     );
 
     expect(result.error).toBeUndefined();
-    expect(queries.some(({ sql }) => sql.startsWith("UPDATE users SET"))).toBe(
+    expect(queries.some(({ sql }) => sql.startsWith("UPDATE app_user SET"))).toBe(
       false,
     );
   });
@@ -516,7 +516,7 @@ describe("OktaAuthenticator", () => {
     expect(
       queries.some(
         ({ sql, values }) =>
-          sql === "DELETE FROM users WHERE id = $1" &&
+          sql === "DELETE FROM app_user WHERE id = $1" &&
           values?.[0] === syntheticUser.id,
       ),
     ).toBe(true);

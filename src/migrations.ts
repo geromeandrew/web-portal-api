@@ -1003,4 +1003,66 @@ export const migrations = [
       WHERE action = 'processing-pipeline.file-uploaded';
   `,
   },
+  {
+    id: "023_rbac_app_user_and_modules",
+    sql: `
+    ALTER TABLE users RENAME TO app_user;
+    ALTER INDEX IF EXISTS users_okta_subject_unique RENAME TO app_user_okta_subject_unique;
+    ALTER TABLE app_user ADD COLUMN IF NOT EXISTS first_name varchar(200);
+    ALTER TABLE app_user ADD COLUMN IF NOT EXISTS last_name varchar(200);
+    ALTER TABLE app_user ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false;
+    ALTER TABLE app_user ADD COLUMN IF NOT EXISTS last_login_at timestamptz;
+    ALTER TABLE app_user ADD COLUMN IF NOT EXISTS created_by_user_id uuid REFERENCES app_user(id) ON DELETE SET NULL;
+    ALTER TABLE app_user ADD COLUMN IF NOT EXISTS updated_by_user_id uuid REFERENCES app_user(id) ON DELETE SET NULL;
+    UPDATE app_user SET is_admin = true WHERE is_bootstrap_admin = true;
+    ALTER TABLE app_user DROP COLUMN IF EXISTS is_bootstrap_admin;
+    ALTER TABLE app_user ALTER COLUMN email TYPE varchar(200);
+    CREATE UNIQUE INDEX IF NOT EXISTS app_user_email_lower_unique ON app_user (lower(email));
+
+    CREATE TABLE app_modules (
+      module_id varchar(100) PRIMARY KEY,
+      module_name varchar(200) NOT NULL,
+      is_active boolean NOT NULL DEFAULT true,
+      route_path varchar(255) NOT NULL,
+      display_order integer NOT NULL
+    );
+    CREATE TABLE app_user_modules (
+      user_module_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id uuid NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+      module_id varchar(100) NOT NULL REFERENCES app_modules(module_id) ON DELETE CASCADE,
+      access_level varchar(30) NOT NULL DEFAULT 'BUSINESS_USER' CHECK (access_level = 'BUSINESS_USER'),
+      assigned_by_user_id uuid REFERENCES app_user(id) ON DELETE SET NULL,
+      assigned_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (user_id, module_id)
+    );
+    CREATE INDEX app_user_modules_module_lookup ON app_user_modules (module_id, user_id);
+    CREATE TABLE app_rbac_audit_events (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      actor_user_id uuid REFERENCES app_user(id) ON DELETE SET NULL,
+      target_user_id uuid REFERENCES app_user(id) ON DELETE SET NULL,
+      module_id varchar(100) REFERENCES app_modules(module_id) ON DELETE SET NULL,
+      action varchar(100) NOT NULL,
+      detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX app_rbac_audit_events_target_lookup ON app_rbac_audit_events (target_user_id, created_at DESC);
+    INSERT INTO app_modules (module_id, module_name, route_path, display_order) VALUES
+      ('bss_billcycle_glob','BSS Bill Cycle - Globe','/processing-pipelines?workspace=bss-bill-cycle-globe',1),
+      ('bss_billcycle_inov','BSS Bill Cycle - Innove','/processing-pipelines?workspace=bss-bill-cycle-innove',2),
+      ('bss_billcycle_bayn','BSS Bill Cycle - Bayan','/processing-pipelines?workspace=bss-bill-cycle-bayan',3),
+      ('bss_eom_glob','BSS EOM - Globe','/processing-pipelines?workspace=bss-eom-globe',4),
+      ('bss_eom_inov','BSS EOM - Innove','/processing-pipelines?workspace=bss-eom-innove',5),
+      ('bss_eom_bayn','BSS EOM - Bayan','/processing-pipelines?workspace=bss-eom-bayan',6),
+      ('memo_sst','Memo Standard Template','/memo/file-upload',7),
+      ('iccbs_inov','ICCBS - Innove','/processing-pipelines?workspace=iccbs-innove',8),
+      ('iccbs_bayn','ICCBS - Bayan','/processing-pipelines?workspace=iccbs-bayan',9),
+      ('aprm_voice_accrual','APRM Voice - Accrual','/processing-pipelines?workspace=aprm-voice-accrual',10),
+      ('aprm_voice_delta','APRM Voice - Delta','/processing-pipelines?workspace=aprm-voice-delta',11),
+      ('isms_ibob_actzn','ISMS IBOB Actualization','/processing-pipelines?workspace=isms-ibob-actualization',12),
+      ('isms_iot_da','ISMS IOT Discount','/processing-pipelines?workspace=isms-iot-discount',13),
+      ('north','North','/processing-pipelines?workspace=north',14),
+      ('prepaid_reclass','Prepaid Re-Class','/prepaid/file-upload',15)
+    ON CONFLICT (module_id) DO UPDATE SET module_name = EXCLUDED.module_name, route_path = EXCLUDED.route_path, display_order = EXCLUDED.display_order;
+  `,
+  },
 ];

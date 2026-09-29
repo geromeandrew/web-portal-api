@@ -354,7 +354,7 @@ export async function getPipelineFileUploadActivity(
        COALESCE(NULLIF(BTRIM(user_record.display_name), ''), user_record.email) AS uploaded_by
      FROM audit_actions audit
      JOIN workspaces workspace ON workspace.id = audit.workspace_id
-     JOIN users user_record ON user_record.id = workspace.user_id
+     JOIN app_user user_record ON user_record.id = workspace.user_id
      WHERE audit.action = 'processing-pipeline.file-uploaded'
        AND audit.detail->>'pipelineCode' = $1
        AND audit.detail->>'objectKey' = ANY($2::text[])
@@ -428,7 +428,7 @@ export async function getPipelineUploadBatches(
        COALESCE(json_agg(json_build_object('expectedFileName', requirement.file_name, 'originalName', member.original_name, 'objectKey', member.object_key, 'readAt', member.read_at) ORDER BY member.read_at) FILTER (WHERE member.id IS NOT NULL), '[]'::json) AS files
      FROM processing_pipeline_upload_batches batch
      JOIN processing_pipelines pipeline ON pipeline.id = batch.pipeline_id
-     JOIN users user_record ON user_record.id = batch.created_by_user_id
+     JOIN app_user user_record ON user_record.id = batch.created_by_user_id
      LEFT JOIN processing_pipeline_upload_batch_files member ON member.batch_id = batch.id
      LEFT JOIN processing_pipeline_file_requirements requirement ON requirement.id = member.file_requirement_id
      WHERE pipeline.code = $1 AND batch.workspace_id = $2

@@ -7,6 +7,7 @@ declare global {
         email: string;
         displayName: string | null;
         createdAt: Date;
+        isAdmin: boolean;
         tokenExpiresAt: Date;
       };
     }
