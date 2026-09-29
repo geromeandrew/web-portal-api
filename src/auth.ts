@@ -220,6 +220,7 @@ export class OktaAuthenticator {
   ): Promise<IdentityProfile> {
     const claimEmail = getIdentityEmail(claims);
     const claimDisplayName = getIdentityDisplayName(claims);
+    const subjectEmail = identityEmailSchema.safeParse(subject);
 
     const linked = await this.pool.query<{
       email: string;
@@ -230,7 +231,14 @@ export class OktaAuthenticator {
     const localProfile = linked.rows[0];
 
     let providerProfile: unknown = null;
-    if (!localProfile || !localProfile.display_name) {
+    // A placeholder profile means a prior login did not expose the user's
+    // Okta details. Keep attempting enrichment on later logins so the local
+    // account is repaired as soon as Okta makes those claims available.
+    if (
+      !localProfile ||
+      !localProfile.display_name ||
+      isSyntheticEmail(localProfile.email)
+    ) {
       try {
         const response = await fetch(`${this.config.OKTA_ISSUER}/v1/userinfo`, {
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -254,6 +262,7 @@ export class OktaAuthenticator {
     const email = (
       providerEmail ??
       claimEmail ??
+      (subjectEmail.success ? subjectEmail.data : null) ??
       localProfile?.email ??
       fallbackEmailForSubject(subject)
     )
@@ -301,28 +310,26 @@ export class OktaAuthenticator {
 
       let user: AppUserRow;
       if (subjectUser) {
-        // Most requests are for an already linked identity. Avoid an
-        // unnecessary row update (and `updated_at` churn) unless Okta has
-        // actually supplied changed profile data.
-        if (
-          subjectUser.email === profile.email &&
-          subjectUser.display_name === profile.displayName
-        ) {
-          user = subjectUser;
-        } else {
+        // A synthetic email is a placeholder produced when no usable email
+        // was available at first login. Repair only that placeholder. For a
+        // real, already-linked account, the portal remains the owner of its
+        // profile fields; logging in must not overwrite them from Okta.
+        if (isSyntheticEmail(subjectUser.email) && !isSyntheticEmail(profile.email)) {
           const updated = await client.query<AppUserRow>(
-            "UPDATE app_user SET email = $1, display_name = $2, last_login_at = now(), updated_at = now() WHERE id = $3 RETURNING *",
-            [profile.email, profile.displayName, subjectUser.id],
+            "UPDATE app_user SET email = $1, last_login_at = now(), updated_at = now() WHERE id = $2 RETURNING *",
+            [profile.email, subjectUser.id],
           );
           user = updated.rows[0];
+        } else {
+          user = subjectUser;
         }
       } else if (emailUser) {
         if (emailUser.okta_subject && emailUser.okta_subject !== subject) {
           throw identityConflict();
         }
         const linked = await client.query<AppUserRow>(
-          "UPDATE app_user SET okta_subject = $1, email = $2, display_name = $3, last_login_at = now(), updated_at = now() WHERE id = $4 RETURNING *",
-          [subject, profile.email, profile.displayName, emailUser.id],
+          "UPDATE app_user SET okta_subject = $1, last_login_at = now(), updated_at = now() WHERE id = $2 RETURNING *",
+          [subject, emailUser.id],
         );
         user = linked.rows[0];
       } else {

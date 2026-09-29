@@ -47,12 +47,12 @@ function poolWithCandidates(candidates: UserRow[]) {
         };
       }
       if (sql.includes("UPDATE app_user SET email")) {
+        const user = candidates.find((candidate) => candidate.id === values?.[1]);
         return {
           rows: [
             {
-              ...existingUser,
+              ...(user ?? existingUser),
               email: String(values?.[0]),
-              display_name: String(values?.[1]),
             },
           ],
         };
@@ -388,6 +388,40 @@ describe("OktaAuthenticator", () => {
     ).toBe("Jane Example");
   });
 
+  it("repairs a synthetic account from an email-shaped Okta subject", async () => {
+    const syntheticUser: UserRow = {
+      ...existingUser,
+      email:
+        "okta-e32021d7a866eea9791da1f196de04bb5fa1b285f48e6a11ef37726870c6ed37@identity.invalid",
+      okta_subject: "ve260596@ad-dev.globe.com",
+      display_name: "Okta account",
+    };
+    const { pool, queries } = poolWithCandidates([syntheticUser]);
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: { sub: "ve260596@ad-dev.globe.com", exp: 1_900_000_000 },
+      }),
+    };
+
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.request.auth).toMatchObject({
+      email: "ve260596@ad-dev.globe.com",
+      displayName: "Okta account",
+    });
+    expect(
+      queries.some(
+        ({ sql, values }) =>
+          sql.includes("UPDATE app_user SET email") &&
+          values?.[0] === "ve260596@ad-dev.globe.com",
+      ),
+    ).toBe(true);
+  });
+
   it("creates and provisions a user for a previously unseen Okta identity", async () => {
     const { pool, queries } = poolWithCandidates([]);
     const verifier: AccessTokenVerifier = {
@@ -452,6 +486,40 @@ describe("OktaAuthenticator", () => {
 
     expect(result.error).toBeUndefined();
     expect(queries.some(({ sql }) => sql.startsWith("UPDATE app_user SET"))).toBe(
+      false,
+    );
+  });
+
+  it("does not overwrite an existing user's portal profile during login", async () => {
+    const linkedUser: UserRow = {
+      ...existingUser,
+      okta_subject: "00u-okta-subject",
+      email: "portal-managed@example.com",
+      display_name: "Portal Managed Name",
+    };
+    const { pool, queries } = poolWithCandidates([linkedUser]);
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: {
+          sub: "00u-okta-subject",
+          email: "okta-profile@example.com",
+          name: "Okta Profile Name",
+          exp: 1_900_000_000,
+        },
+      }),
+    };
+
+    const result = await invoke(
+      new OktaAuthenticator(pool, config, verifier),
+      "Bearer valid-token",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.request.auth).toMatchObject({
+      email: "portal-managed@example.com",
+      displayName: "Portal Managed Name",
+    });
+    expect(queries.some(({ sql }) => sql.includes("UPDATE app_user SET"))).toBe(
       false,
     );
   });
