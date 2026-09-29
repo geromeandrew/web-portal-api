@@ -444,16 +444,8 @@ export function matchesBillCycleUploadFile(
 ) {
   const expected = billCycleFileIdentity(requirement.fileName);
   const uploaded = billCycleFileIdentity(fileName);
-  return Boolean(
-    expected &&
-      uploaded &&
-      expected.report === uploaded.report &&
-      // The requirement was selected from the Bill Cycle workspace and
-      // dropdown, so it supplies omitted source-file suffixes. Explicit
-      // suffixes must still match the selected requirement.
-      (uploaded.entity === null || expected.entity === uploaded.entity) &&
-      (uploaded.cycle === null || expected.cycle === uploaded.cycle),
-  );
+
+  return Boolean(expected && uploaded && expected.report === uploaded.report);
 }
 
 function billCycleFileIdentity(fileName: string) {
@@ -464,10 +456,16 @@ function billCycleFileIdentity(fileName: string) {
   if (prefix) {
     const controlType =
       prefix === "411"
-        ? /(?:^|[^a-z0-9])(php|usd)(?:[^a-z0-9]|$)/i.exec(fileName)?.[1]?.toUpperCase()
+        ? /(?:^|[^a-z0-9])(php|usd)(?:[^a-z0-9]|$)/i
+            .exec(fileName)?.[1]
+            ?.toUpperCase()
         : null;
     if (prefix === "411" && !controlType) return null;
-    return { report: controlType ? `${prefix}:${controlType}` : prefix, entity, cycle };
+    return {
+      report: controlType ? `${prefix}:${controlType}` : prefix,
+      entity,
+      cycle,
+    };
   }
   if (/sap/i.test(fileName) && /glbilled/i.test(fileName))
     return { report: "SAP_GLBILLED", entity, cycle };
