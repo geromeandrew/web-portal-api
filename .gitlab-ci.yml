@@ -46,7 +46,7 @@ build_image:
         --build-arg "VITE_OKTA_ISSUER=$TARGET_ISSUER" 
         --tarPath ${CI_PROJECT_DIR}/app_image.tar 
         --destination ${PE_ARTIFACTORY_URL}/${PE_ARTIFACT_DOCKER_LOCAL_REPO}/${CI_PROJECT_NAME}:${CI_COMMIT_TAG} 
-        --no-push`
+        --no-push
 
     artifacts:
         paths:
