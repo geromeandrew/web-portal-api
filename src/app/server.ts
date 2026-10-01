@@ -11,7 +11,6 @@ export async function startServer(): Promise<Server> {
   const logger = createLogger();
 
   try {
-    await pool.query("SELECT 1");
     const server = await new Promise<Server>((resolve) => {
       const httpServer = createApp(pool, config).listen(
         config.PORT,
@@ -22,6 +21,7 @@ export async function startServer(): Promise<Server> {
         },
       );
     });
+    //await pool.query("SELECT 1");
     let closing = false;
     const close = async () => {
       if (closing) return;
@@ -29,7 +29,7 @@ export async function startServer(): Promise<Server> {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );
-      await pool.end();
+     //await pool.end();
     };
     process.on("SIGTERM", () => void close());
     process.on("SIGINT", () => void close());
@@ -38,7 +38,7 @@ export async function startServer(): Promise<Server> {
     logger.error("api.startup_failed", {
       error: error instanceof Error ? error.message : String(error),
     });
-    await pool.end();
+    //await pool.end();
     throw error;
   }
 }
