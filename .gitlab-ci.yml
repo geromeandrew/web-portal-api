@@ -48,8 +48,6 @@ build_image:
         --destination ${PE_ARTIFACTORY_URL}/${PE_ARTIFACT_DOCKER_LOCAL_REPO}/${CI_PROJECT_NAME}:${CI_COMMIT_TAG} 
         --no-push`
 
-    only:
-        - tags
     artifacts:
         paths:
             - "*.tar"
