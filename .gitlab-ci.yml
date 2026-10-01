@@ -35,8 +35,8 @@ build_image:
           TARGET_ISSUER: $PRD_OKTA_ISSUER
 
     script:
-    # The template already handles JFrog authentication in the background!
-    # Just run the Kaniko command with your appended build arguments:
+      # The template already handles JFrog authentication in the background!
+      # Just run the Kaniko command with your appended build arguments:
       - /kaniko/executor 
         --context $CI_PROJECT_DIR 
         --dockerfile $CI_PROJECT_DIR/Dockerfile 
