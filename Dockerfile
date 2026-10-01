@@ -64,13 +64,13 @@ RUN AUTH_BASE64=$(printf "%s:%s" "$JFROG_USERNAME" "$JFROG_PASSWORD" | base64 | 
     echo "//${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth=${AUTH_BASE64}" >> ~/.npmrc && \
     echo "always-auth=true" >> ~/.npmrc
 
-RUN npm install --verbose
+RUN npm install 
 
 # Set the environment to production
 ENV NODE_ENV=production
 
 #Build the typescript files
-RUN npm run build --verbose
+RUN npm run build 
 
 # Strip credentials out before finalizing this stage
 RUN rm -f ~/.npmrc
