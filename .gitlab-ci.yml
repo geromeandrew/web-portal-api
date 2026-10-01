@@ -22,16 +22,19 @@ build_image:
       # 1. Dev Environment (Triggers ONLY on tags starting with 'dev-')
       - if: '$CI_COMMIT_TAG =~ /^dev-/'
         variables:
-          TARGET_ISSUER: $DEV_OKTA_ISSUER
+          TARGET_CLIENT: $STG_OKTA_CLIENT_ID
+          TARGET_ISSUER: $STG_OKTA_ISSUER
 
       # 2. Staging Environment (Triggers ONLY on tags starting with 'stg-')
       - if: '$CI_COMMIT_TAG =~ /^stg-/'
         variables:
+          TARGET_CLIENT: $STG_OKTA_CLIENT_ID
           TARGET_ISSUER: $STG_OKTA_ISSUER
 
       # 3. Production Environment (Triggers ONLY on version tags like v1.0.0)
       - if: '$CI_COMMIT_TAG =~ /^v[0-9]+/'
         variables:
+          TARGET_CLIENT: $STG_OKTA_CLIENT_ID
           TARGET_ISSUER: $PRD_OKTA_ISSUER
 
     script:
@@ -43,7 +46,8 @@ build_image:
         --build-arg "JFROG_USERNAME=$PE_ARTIFACT_SA_USERNAME" 
         --build-arg "JFROG_PASSWORD=$PE_ARTIFACT_SA_TOKEN" 
         --build-arg "ARTIFACTORY_URL=$PE_ARTIFACTORY_URL" 
-        --build-arg "VITE_OKTA_ISSUER=$TARGET_ISSUER" 
+        --build-arg "OKTA_CLIENT_ID=$TARGET_CLIENT"
+        --build-arg "OKTA_ISSUER=$TARGET_ISSUER" 
         --tarPath ${CI_PROJECT_DIR}/app_image.tar 
         --destination ${PE_ARTIFACTORY_URL}/${PE_ARTIFACT_DOCKER_LOCAL_REPO}/${CI_PROJECT_NAME}:${CI_COMMIT_TAG} 
         --no-push
