@@ -2,20 +2,12 @@ import { Pool, type PoolClient } from "pg";
 import type { Config } from "./config.js";
 
 export function createPool(config: Config, setSearchPath = true) {
-  const connectionUrl = new URL(config.DATABASE_URL);
-  for (const parameter of [
-    "ssl",
-    "sslmode",
-    "sslcert",
-    "sslkey",
-    "sslrootcert",
-    "sslca",
-  ]) {
-    connectionUrl.searchParams.delete(parameter);
-  }
-
   return new Pool({
-    connectionString: connectionUrl.toString(),
+    host: config.DATABASE_HOST,
+    port: config.DATABASE_PORT,
+    database: config.DATABASE_NAME,
+    user: config.DATABASE_USER,
+    password: config.DATABASE_PASSWORD,
     max: 10,
     ...(setSearchPath
       ? { options: `-c search_path=${config.DATABASE_SCHEMA},public` }

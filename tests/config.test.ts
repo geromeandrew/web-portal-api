@@ -3,7 +3,11 @@ import { createAwsClientOptions } from "../src/aws.js";
 import { loadConfig } from "../src/config.js";
 
 const base = {
-  DATABASE_URL: "postgresql://portal:password@127.0.0.1:5432/web_portal",
+  DATABASE_HOST: "127.0.0.1",
+  DATABASE_PORT: "5432",
+  DATABASE_NAME: "web_portal",
+  DATABASE_USER: "portal",
+  DATABASE_PASSWORD: "password",
   OKTA_ISSUER: "https://example.okta.com/oauth2/default",
   OKTA_CLIENT_ID: "test-client-id",
   RATE_LIMIT_HMAC_SECRET:
@@ -91,9 +95,11 @@ describe("loadConfig", () => {
     ).toBe(true);
   });
 
-  it("requires a database URL and a safe schema identifier", () => {
-    const { DATABASE_URL: _databaseUrl, ...withoutUrl } = base;
-    expect(() => loadConfig(withoutUrl)).toThrow("DATABASE_URL");
+  it("requires individual database connection settings and a safe schema identifier", () => {
+    const { DATABASE_HOST: _databaseHost, ...withoutHost } = base;
+    const { DATABASE_PORT: _databasePort, ...withoutPort } = base;
+    expect(() => loadConfig(withoutHost)).toThrow("DATABASE_HOST");
+    expect(() => loadConfig(withoutPort)).toThrow("DATABASE_PORT");
     expect(() =>
       loadConfig({ ...base, DATABASE_SCHEMA: "web-portal" }),
     ).toThrow("DATABASE_SCHEMA");

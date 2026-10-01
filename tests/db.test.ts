@@ -8,8 +8,11 @@ vi.mock("pg", () => ({ Pool: vi.fn() }));
 const config: Config = {
   NODE_ENV: "test",
   PORT: 3001,
-  DATABASE_URL:
-    "postgresql://esatp_sme:password@database.example.com:1769/isgesatpdv",
+  DATABASE_HOST: "database.example.com",
+  DATABASE_PORT: 1769,
+  DATABASE_NAME: "isgesatpdv",
+  DATABASE_USER: "esatp_sme",
+  DATABASE_PASSWORD: "password",
   DATABASE_SSL: true,
   DATABASE_SCHEMA: "web_portal",
   OKTA_ISSUER: "https://example.okta.com/oauth2/default",
@@ -29,7 +32,11 @@ describe("createPool", () => {
 
     expect(Pool).toHaveBeenCalledWith(
       expect.objectContaining({
-        connectionString: config.DATABASE_URL,
+        host: config.DATABASE_HOST,
+        port: config.DATABASE_PORT,
+        database: config.DATABASE_NAME,
+        user: config.DATABASE_USER,
+        password: config.DATABASE_PASSWORD,
         ssl: { rejectUnauthorized: false },
       }),
     );
@@ -40,7 +47,11 @@ describe("createPool", () => {
 
     expect(Pool).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        connectionString: config.DATABASE_URL,
+        host: config.DATABASE_HOST,
+        port: config.DATABASE_PORT,
+        database: config.DATABASE_NAME,
+        user: config.DATABASE_USER,
+        password: config.DATABASE_PASSWORD,
         ssl: { rejectUnauthorized: false },
       }),
     );
@@ -57,17 +68,16 @@ describe("createPool", () => {
     );
   });
 
-  it("does not allow SSL options in the database URL to override configuration", () => {
-    createPool({
-      ...config,
-      DATABASE_URL:
-        "postgresql://esatp_sme:password@database.example.com:1769/isgesatpdv?application_name=portal&sslmode=verify-full&sslrootcert=/tmp/rds.pem",
-    });
+  it("uses the individually configured database connection settings", () => {
+    createPool({ ...config, DATABASE_HOST: "other-database.example.com" });
 
     expect(Pool).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        connectionString:
-          "postgresql://esatp_sme:password@database.example.com:1769/isgesatpdv?application_name=portal",
+        host: "other-database.example.com",
+        port: config.DATABASE_PORT,
+        database: config.DATABASE_NAME,
+        user: config.DATABASE_USER,
+        password: config.DATABASE_PASSWORD,
         ssl: { rejectUnauthorized: false },
       }),
     );

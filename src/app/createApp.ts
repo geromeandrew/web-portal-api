@@ -27,6 +27,9 @@ export function createApplication(dependencies: AppDependencies): Express {
   app.set("trust proxy", dependencies.config.TRUST_PROXY_HOPS);
   app.use(createSecurityHeaders(dependencies.config));
   app.use(express.json({ limit: "128kb" }));
+  app.get("/api/healthz", (_request, response) => {
+    response.status(200).json("The pod is healthy");
+  });
   app.use(
     "/api",
     createRateLimitMiddleware(
@@ -44,7 +47,7 @@ export function createApplication(dependencies: AppDependencies): Express {
   return app;
 }
 
-function registerPublicRoutes(app: Express, { pool, config }: AppDependencies) {
+function registerPublicRoutes(app: Express, { config }: AppDependencies) {
   const openApiDocument = createOpenApiDocument(
     config.OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS,
   );
@@ -60,10 +63,6 @@ function registerPublicRoutes(app: Express, { pool, config }: AppDependencies) {
       swaggerOptions: { persistAuthorization: false },
     }),
   );
-  app.get("/api/healthz", async (_request, response) => {
-    await pool.query("SELECT 1");
-    response.json({ status: "ok" });
-  });
 }
 
 function registerFeatureRoutes(
