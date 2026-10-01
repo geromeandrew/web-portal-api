@@ -6,7 +6,11 @@ const envSchema = z
       .enum(["development", "test", "production"])
       .default("development"),
     PORT: z.coerce.number().int().positive().default(3001),
-    DATABASE_URL: z.string().url(),
+    DATABASE_HOST: z.string().min(1),
+    DATABASE_PORT: z.coerce.number().int().positive(),
+    DATABASE_NAME: z.string().min(1),
+    DATABASE_USER: z.string().min(1),
+    DATABASE_PASSWORD: z.string().min(1),
     DATABASE_SSL: z
       .enum(["true", "false"])
       .default("true")

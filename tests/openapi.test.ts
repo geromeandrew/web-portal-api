@@ -10,7 +10,11 @@ import { createApp } from "../src/routes.js";
 const config: Config = {
   NODE_ENV: "test",
   PORT: 3001,
-  DATABASE_URL: "postgresql://portal:password@127.0.0.1:5432/web_portal",
+  DATABASE_HOST: "127.0.0.1",
+  DATABASE_PORT: 5432,
+  DATABASE_NAME: "web_portal",
+  DATABASE_USER: "portal",
+  DATABASE_PASSWORD: "password",
   OKTA_ISSUER: "https://example.okta.com/oauth2/default",
   OKTA_AUDIENCE: "api://default",
   OKTA_CLIENT_ID: "test-client-id",
@@ -23,6 +27,25 @@ const config: Config = {
 };
 
 describe("OpenAPI documentation", () => {
+  it("returns health status without querying the database", async () => {
+    const pool = {
+      query: async () => {
+        throw new Error("health checks must not access the database");
+      },
+    } as unknown as Pool;
+    const server = createApp(pool, config).listen(0);
+    await once(server, "listening");
+    const { port } = server.address() as AddressInfo;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/healthz`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toBe("The pod is healthy");
+    } finally {
+      server.close();
+    }
+  });
+
   it("is a valid OpenAPI document covering the currently exposed Swagger routes", async () => {
     await expect(
       SwaggerParser.validate(openApiDocument),
@@ -130,12 +153,19 @@ describe("OpenAPI documentation", () => {
     const { port } = server.address() as AddressInfo;
 
     try {
-      const [rootResponse, specResponse, docsResponse, stylesheetResponse] =
+      const [
+        rootResponse,
+        specResponse,
+        docsResponse,
+        stylesheetResponse,
+        healthResponse,
+      ] =
         await Promise.all([
           fetch(`http://127.0.0.1:${port}/`, { redirect: "manual" }),
           fetch(`http://127.0.0.1:${port}/api/openapi.json`),
           fetch(`http://127.0.0.1:${port}/api/docs/`),
           fetch(`http://127.0.0.1:${port}/api/docs/swagger-ui.css`),
+          fetch(`http://127.0.0.1:${port}/api/healthz`),
         ]);
       expect(rootResponse.status).toBe(302);
       expect(rootResponse.headers.get("location")).toBe("/api/docs/");
@@ -154,6 +184,8 @@ describe("OpenAPI documentation", () => {
       expect(stylesheetResponse.headers.get("content-type")).toContain(
         "text/css",
       );
+      expect(healthResponse.status).toBe(200);
+      expect(await healthResponse.json()).toBe("The pod is healthy");
       await Promise.all([docsResponse.text(), stylesheetResponse.text()]);
     } finally {
       await new Promise<void>((resolve, reject) =>

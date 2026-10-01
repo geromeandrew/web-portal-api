@@ -1,15 +1,17 @@
-export type UserRow = {
+export type AppUserRow = {
   id: string;
   email: string;
   password_hash: string | null;
   okta_subject: string | null;
   display_name: string | null;
-  is_bootstrap_admin: boolean;
+  is_admin: boolean;
   is_active: boolean;
   must_change_password: boolean;
   token_version: number;
   created_at: Date;
 };
+/** @deprecated Use AppUserRow. Retained while downstream tests migrate. */
+export type UserRow = AppUserRow;
 export type UploadRow = {
   id: string;
   workflow: "prepaid" | "memo" | "aprm";
@@ -21,7 +23,7 @@ export type UploadRow = {
   created_at: Date;
 };
 
-export function userDto(user: UserRow) {
+export function userDto(user: AppUserRow) {
   return {
     id: user.id,
     email: user.email,

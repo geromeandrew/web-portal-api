@@ -24,6 +24,7 @@ import {
   updateStepFunctionExecution,
 } from "../../../processingPipelineRepository.js";
 import { AppError } from "../../../errors.js";
+import { assertModuleAccess, getEffectiveModules } from "../../../rbac.js";
 import { audit, ensureWorkspace } from "../../../workspace.js";
 import {
   mapStepFunctionError,
@@ -138,6 +139,15 @@ export function createProcessingPipelinesRouter(
 ) {
   const router = express.Router();
   router.use(authenticate);
+  router.use("/:pipelineCode", async (request, _response, next) => {
+    try {
+      const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+      await assertModuleAccess(pool, request.auth!.userId, pipelineCode);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
   const resolveBatchFiles = async (
     pipelineCode: string,
     mapping: PipelineBatchStepFunctionMapping,
@@ -157,9 +167,17 @@ export function createProcessingPipelinesRouter(
       }),
     );
   // Keep the UI's primary catalogue request intentionally small and stable.
-  router.get("/", async (_request, response) =>
-    response.json(await getProcessingPipelineCatalog(pool)),
-  );
+  router.get("/", async (request, response) => {
+    const catalog = await getProcessingPipelineCatalog(pool);
+    const allowed = new Set(
+      (await getEffectiveModules(pool, request.auth!.userId)).map(
+        (module) => module.moduleId,
+      ),
+    );
+    response.json({
+      pipelines: catalog.pipelines.filter((pipeline) => allowed.has(pipeline.code)),
+    });
+  });
   router.get("/:pipelineCode", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
     const detail = await getPipelineDetail(pool, pipelineCode);

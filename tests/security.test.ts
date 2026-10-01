@@ -9,7 +9,11 @@ import {
 const config: Config = {
   NODE_ENV: "test",
   PORT: 3001,
-  DATABASE_URL: "postgresql://portal:password@127.0.0.1:5432/web_portal",
+  DATABASE_HOST: "127.0.0.1",
+  DATABASE_PORT: 5432,
+  DATABASE_NAME: "web_portal",
+  DATABASE_USER: "portal",
+  DATABASE_PASSWORD: "password",
   DATABASE_SCHEMA: "web_portal",
   OKTA_ISSUER: "https://example.okta.com/oauth2/default",
   OKTA_AUDIENCE: "api://default",

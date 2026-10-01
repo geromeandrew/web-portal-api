@@ -2,6 +2,7 @@ import express from "express";
 import type { AppDependencies } from "../../../app/dependencies.js";
 import { PrepaidService } from "../application/prepaidService.js";
 import { createPrepaidController } from "./controller.js";
+import { assertModuleAccess } from "../../../rbac.js";
 
 export function createPrepaidRouter({
   pool,
@@ -10,6 +11,14 @@ export function createPrepaidRouter({
 }: AppDependencies) {
   const router = express.Router();
   router.use(authenticate);
+  router.use(async (request, _response, next) => {
+    try {
+      await assertModuleAccess(pool, request.auth!.userId, "prepaid_reclass");
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
 
   const controller = createPrepaidController(
     new PrepaidService(pool, processingPipelineStorage),

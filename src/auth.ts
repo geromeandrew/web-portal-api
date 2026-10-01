@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { Config } from "./config.js";
 import { withTransaction } from "./db.js";
 import { AppError } from "./errors.js";
-import type { UserRow } from "./modules/shared/api/dtos.js";
+import type { AppUserRow } from "./modules/shared/api/dtos.js";
 import { ensureWorkspace } from "./workspace.js";
 
 /**
@@ -184,12 +184,16 @@ export class OktaAuthenticator {
         verified.claims,
       );
       const user = await this.findOrCreateUser(subject, profile);
+      if (!user.is_active) {
+        throw new AppError(403, "ACCOUNT_INACTIVE", "This portal account is inactive.");
+      }
       request.auth = {
         userId: user.id,
         oktaSubject: subject,
         email: user.email,
         displayName: user.display_name,
         createdAt: user.created_at,
+        isAdmin: user.is_admin,
         tokenExpiresAt: expiresAt,
       };
       next();
@@ -216,17 +220,25 @@ export class OktaAuthenticator {
   ): Promise<IdentityProfile> {
     const claimEmail = getIdentityEmail(claims);
     const claimDisplayName = getIdentityDisplayName(claims);
+    const subjectEmail = identityEmailSchema.safeParse(subject);
 
     const linked = await this.pool.query<{
       email: string;
       display_name: string | null;
-    }>("SELECT email, display_name FROM users WHERE okta_subject = $1", [
+    }>("SELECT email, display_name FROM app_user WHERE okta_subject = $1", [
       subject,
     ]);
     const localProfile = linked.rows[0];
 
     let providerProfile: unknown = null;
-    if (!localProfile || !localProfile.display_name) {
+    // A placeholder profile means a prior login did not expose the user's
+    // Okta details. Keep attempting enrichment on later logins so the local
+    // account is repaired as soon as Okta makes those claims available.
+    if (
+      !localProfile ||
+      !localProfile.display_name ||
+      isSyntheticEmail(localProfile.email)
+    ) {
       try {
         const response = await fetch(`${this.config.OKTA_ISSUER}/v1/userinfo`, {
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -250,6 +262,7 @@ export class OktaAuthenticator {
     const email = (
       providerEmail ??
       claimEmail ??
+      (subjectEmail.success ? subjectEmail.data : null) ??
       localProfile?.email ??
       fallbackEmailForSubject(subject)
     )
@@ -266,8 +279,8 @@ export class OktaAuthenticator {
 
   private async findOrCreateUser(subject: string, profile: IdentityProfile) {
     return withTransaction(this.pool, async (client) => {
-      const candidates = await client.query<UserRow>(
-        "SELECT * FROM users WHERE okta_subject = $1 OR lower(email) = $2 FOR UPDATE",
+      const candidates = await client.query<AppUserRow>(
+        "SELECT * FROM app_user WHERE okta_subject = $1 OR lower(email) = $2 FOR UPDATE",
         [subject, profile.email],
       );
       const subjectUser = candidates.rows.find(
@@ -282,11 +295,11 @@ export class OktaAuthenticator {
           !emailUser.okta_subject &&
           (await this.canDiscardSyntheticUser(client, subjectUser.id))
         ) {
-          await client.query("DELETE FROM users WHERE id = $1", [
+          await client.query("DELETE FROM app_user WHERE id = $1", [
             subjectUser.id,
           ]);
-          const linked = await client.query<UserRow>(
-            "UPDATE users SET okta_subject = $1, email = $2, display_name = $3, updated_at = now() WHERE id = $4 RETURNING *",
+          const linked = await client.query<AppUserRow>(
+            "UPDATE app_user SET okta_subject = $1, email = $2, display_name = $3, last_login_at = now(), updated_at = now() WHERE id = $4 RETURNING *",
             [subject, profile.email, profile.displayName, emailUser.id],
           );
           await ensureWorkspace(client, linked.rows[0].id);
@@ -295,35 +308,33 @@ export class OktaAuthenticator {
         throw identityConflict();
       }
 
-      let user: UserRow;
+      let user: AppUserRow;
       if (subjectUser) {
-        // Most requests are for an already linked identity. Avoid an
-        // unnecessary row update (and `updated_at` churn) unless Okta has
-        // actually supplied changed profile data.
-        if (
-          subjectUser.email === profile.email &&
-          subjectUser.display_name === profile.displayName
-        ) {
-          user = subjectUser;
-        } else {
-          const updated = await client.query<UserRow>(
-            "UPDATE users SET email = $1, display_name = $2, updated_at = now() WHERE id = $3 RETURNING *",
-            [profile.email, profile.displayName, subjectUser.id],
+        // A synthetic email is a placeholder produced when no usable email
+        // was available at first login. Repair only that placeholder. For a
+        // real, already-linked account, the portal remains the owner of its
+        // profile fields; logging in must not overwrite them from Okta.
+        if (isSyntheticEmail(subjectUser.email) && !isSyntheticEmail(profile.email)) {
+          const updated = await client.query<AppUserRow>(
+            "UPDATE app_user SET email = $1, last_login_at = now(), updated_at = now() WHERE id = $2 RETURNING *",
+            [profile.email, subjectUser.id],
           );
           user = updated.rows[0];
+        } else {
+          user = subjectUser;
         }
       } else if (emailUser) {
         if (emailUser.okta_subject && emailUser.okta_subject !== subject) {
           throw identityConflict();
         }
-        const linked = await client.query<UserRow>(
-          "UPDATE users SET okta_subject = $1, email = $2, display_name = $3, updated_at = now() WHERE id = $4 RETURNING *",
-          [subject, profile.email, profile.displayName, emailUser.id],
+        const linked = await client.query<AppUserRow>(
+          "UPDATE app_user SET okta_subject = $1, last_login_at = now(), updated_at = now() WHERE id = $2 RETURNING *",
+          [subject, emailUser.id],
         );
         user = linked.rows[0];
       } else {
-        const created = await client.query<UserRow>(
-          "INSERT INTO users (id, email, okta_subject, display_name) VALUES ($1, $2, $3, $4) RETURNING *",
+        const created = await client.query<AppUserRow>(
+          "INSERT INTO app_user (id, email, okta_subject, display_name, last_login_at) VALUES ($1, $2, $3, $4, now()) RETURNING *",
           [randomUUID(), profile.email, subject, profile.displayName],
         );
         user = created.rows[0];
@@ -368,12 +379,16 @@ export class TemporaryAuthenticator {
   readonly middleware: RequestHandler = async (request, _response, next) => {
     try {
       const user = await this.findOrCreateUser();
+      if (!user.is_active) {
+        throw new AppError(403, "ACCOUNT_INACTIVE", "This portal account is inactive.");
+      }
       request.auth = {
         userId: user.id,
         oktaSubject: temporaryAuthSubject,
         email: user.email,
         displayName: user.display_name,
         createdAt: user.created_at,
+        isAdmin: user.is_admin,
         tokenExpiresAt: new Date("2999-12-31T23:59:59.999Z"),
       };
       next();
@@ -384,15 +399,15 @@ export class TemporaryAuthenticator {
 
   private async findOrCreateUser() {
     return withTransaction(this.pool, async (client) => {
-      const existing = await client.query<UserRow>(
-        "SELECT * FROM users WHERE lower(email) = $1 FOR UPDATE",
+      const existing = await client.query<AppUserRow>(
+        "SELECT * FROM app_user WHERE lower(email) = $1 FOR UPDATE",
         [temporaryAuthEmail],
       );
       const user =
         existing.rows[0] ??
         (
-          await client.query<UserRow>(
-            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3) RETURNING *",
+          await client.query<AppUserRow>(
+            "INSERT INTO app_user (id, email, password_hash) VALUES ($1, $2, $3) RETURNING *",
             [randomUUID(), temporaryAuthEmail, temporaryAuthPasswordHash],
           )
         ).rows[0];

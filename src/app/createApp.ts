@@ -5,6 +5,7 @@ import type { AppDependencies } from "./dependencies.js";
 import { errorHandler, notFound } from "../errors.js";
 import { createOpenApiDocument } from "../openapi.js";
 import { createAuthRouter } from "../modules/auth/api/router.js";
+import { createAdminRouter } from "../modules/auth/api/adminRouter.js";
 import { createPrepaidRouter } from "../modules/prepaid/api/router.js";
 import { createProcessingPipelinesRouter } from "../modules/processing-pipelines/api/router.js";
 import {
@@ -26,6 +27,9 @@ export function createApplication(dependencies: AppDependencies): Express {
   app.set("trust proxy", dependencies.config.TRUST_PROXY_HOPS);
   app.use(createSecurityHeaders(dependencies.config));
   app.use(express.json({ limit: "128kb" }));
+  app.get("/api/healthz", (_request, response) => {
+    response.status(200).json("The pod is healthy");
+  });
   app.use(
     "/api",
     createRateLimitMiddleware(
@@ -43,7 +47,7 @@ export function createApplication(dependencies: AppDependencies): Express {
   return app;
 }
 
-function registerPublicRoutes(app: Express, { pool, config }: AppDependencies) {
+function registerPublicRoutes(app: Express, { config }: AppDependencies) {
   const openApiDocument = createOpenApiDocument(
     config.OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS,
   );
@@ -59,10 +63,6 @@ function registerPublicRoutes(app: Express, { pool, config }: AppDependencies) {
       swaggerOptions: { persistAuthorization: false },
     }),
   );
-  app.get("/api/healthz", async (_request, response) => {
-    await pool.query("SELECT 1");
-    response.json({ status: "ok" });
-  });
 }
 
 function registerFeatureRoutes(
@@ -71,6 +71,7 @@ function registerFeatureRoutes(
   singleFileUpload: RequestHandler,
 ) {
   app.use("/api/auth", createAuthRouter(dependencies));
+  app.use("/api/admin", createAdminRouter(dependencies));
   app.use("/api/workflows/prepaid", createPrepaidRouter(dependencies));
   app.use(
     "/api/processing-pipelines",
