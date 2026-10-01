@@ -26,6 +26,7 @@ ARG LABEL_MAINTAINER
 ARG LABEL_VERSION
 ARG PE_JFROG_URL
 ARG PE_JFROG_REPO
+ARG VITE_OKTA_ISSUER
 
 # # Setup Docker Labels
 # LABEL maintainer=$LABEL_MAINTAINER
@@ -44,6 +45,7 @@ RUN echo "https://$JFROG_USERNAME:$JFROG_PASSWORD@$ARTIFACTORY_URL/artifactory/h
 # Set environment variables
 ENV VIRTUAL_ENV=/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+ENV VITE_OKTA_ISSUER=$VITE_OKTA_ISSUER
 
 # # Install system dependencies
 RUN apk update && apk add --no-cache \
