@@ -6,8 +6,8 @@ import { createApp } from "../routes.js";
 
 /** Starts the HTTP server and wires process shutdown to database cleanup. */
 export async function startServer(): Promise<Server> {
-  const config = loadConfig();
-  const pool = createPool(config);
+//  const config = loadConfig();
+//  const pool = createPool(config);
   const logger = createLogger();
 
   try {
@@ -29,7 +29,7 @@ export async function startServer(): Promise<Server> {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );
-     //await pool.end();
+     await pool.end();
     };
     process.on("SIGTERM", () => void close());
     process.on("SIGINT", () => void close());
@@ -38,7 +38,7 @@ export async function startServer(): Promise<Server> {
     logger.error("api.startup_failed", {
       error: error instanceof Error ? error.message : String(error),
     });
-    //await pool.end();
+    await pool.end();
     throw error;
   }
 }
