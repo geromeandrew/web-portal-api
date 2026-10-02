@@ -47,7 +47,7 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # # Install system dependencies
 RUN apk update && apk add --no-cache \
-     bash
+     bash\
      openssh 9.8_p1-r0\
      openssl
 
