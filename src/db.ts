@@ -12,13 +12,13 @@ export function createPool(config: Config, setSearchPath = true) {
     ...(setSearchPath
       ? { options: `-c search_path=${config.DATABASE_SCHEMA},public` }
       : {}),
-    ssl: config.DATABASE_SSL
-      ? {
+//    ssl: config.DATABASE_SSL
+//      ? {
           // Match PostgreSQL's `sslmode=require`: encrypt traffic, but do not
           // require a locally supplied RDS CA certificate.
-          rejectUnauthorized: false,
-        }
-      : false,
+//          rejectUnauthorized: false,
+//        }
+//      : false,
   });
 }
 

@@ -6,8 +6,8 @@ import { createApp } from "../routes.js";
 
 /** Starts the HTTP server and wires process shutdown to database cleanup. */
 export async function startServer(): Promise<Server> {
-//  const config = loadConfig();
-//  const pool = createPool(config);
+  const config = loadConfig();
+  const pool = createPool(config);
   const logger = createLogger();
 
   try {
