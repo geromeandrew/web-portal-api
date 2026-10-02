@@ -48,8 +48,8 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 # # Install system dependencies
 RUN apk update && apk add --no-cache \
      bash
-#     openssh 9.8_p1-r0\
-#     openssl
+     openssh 9.8_p1-r0\
+     openssl
 
 # Set the working directory
 WORKDIR /app
