@@ -134,18 +134,8 @@ describe("OpenAPI documentation", () => {
 
   it("serves the OpenAPI JSON and Swagger UI", async () => {
     const pool = {
-      query: async (query: string) => {
-        if (query.includes("rate_limit_buckets"))
-          return {
-            rows: [
-              {
-                request_count: 1,
-                expires_at: new Date(Date.now() + 60_000),
-              },
-            ],
-            rowCount: 1,
-          };
-        return { rows: [], rowCount: 1 };
+      query: async () => {
+        throw new Error("Swagger routes must not access the database");
       },
     } as unknown as Pool;
     const server = createApp(pool, config).listen(0);

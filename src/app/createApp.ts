@@ -2,7 +2,7 @@ import express, { type Express, type RequestHandler } from "express";
 import multer from "multer";
 import swaggerUi from "swagger-ui-express";
 import type { AppDependencies } from "./dependencies.js";
-import { errorHandler, notFound } from "../errors.js";
+import { createErrorHandler, notFound } from "../errors.js";
 import { createOpenApiDocument } from "../openapi.js";
 import { createAuthRouter } from "../modules/auth/api/router.js";
 import { createAdminRouter } from "../modules/auth/api/adminRouter.js";
@@ -30,6 +30,11 @@ export function createApplication(dependencies: AppDependencies): Express {
   app.get("/api/healthz", (_request, response) => {
     response.status(200).json("The pod is healthy");
   });
+
+  // Keep operational documentation available while PostgreSQL is unavailable.
+  // Database-backed feature routes remain behind the PostgreSQL rate limiter.
+  registerPublicRoutes(app, dependencies);
+
   app.use(
     "/api",
     createRateLimitMiddleware(
@@ -39,11 +44,10 @@ export function createApplication(dependencies: AppDependencies): Express {
     ),
   );
 
-  registerPublicRoutes(app, dependencies);
   registerFeatureRoutes(app, dependencies, singleFileUpload);
 
   app.use(notFound);
-  app.use(errorHandler);
+  app.use(createErrorHandler(dependencies.logger, dependencies.config));
   return app;
 }
 

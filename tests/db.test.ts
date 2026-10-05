@@ -37,6 +37,7 @@ describe("createPool", () => {
         database: config.DATABASE_NAME,
         user: config.DATABASE_USER,
         password: config.DATABASE_PASSWORD,
+        connectionTimeoutMillis: 10_000,
         ssl: { rejectUnauthorized: false },
       }),
     );
