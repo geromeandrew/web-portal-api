@@ -2,7 +2,6 @@ import { startServer } from "./app/server.js";
 
 try {
   await startServer();
-} catch (error) {
-  console.error(error);
+} catch {
   process.exitCode = 1;
 }

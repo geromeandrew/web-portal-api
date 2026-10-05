@@ -13,7 +13,7 @@ const envSchema = z
     DATABASE_PASSWORD: z.string().min(1),
     DATABASE_SSL: z
       .enum(["true", "false"])
-      .default("true")
+      .default("false")
       .transform((value) => value === "true"),
     DATABASE_SCHEMA: z
       .string()

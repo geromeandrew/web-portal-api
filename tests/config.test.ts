@@ -17,9 +17,15 @@ const base = {
 };
 
 describe("loadConfig", () => {
-  it("uses the dedicated Portal schema by default", () => {
+  it("uses the dedicated Portal schema and disables database TLS by default", () => {
     expect(loadConfig(base).DATABASE_SCHEMA).toBe("web_portal");
-    expect(loadConfig(base).DATABASE_SSL).toBe(true);
+    expect(loadConfig(base).DATABASE_SSL).toBe(false);
+  });
+
+  it("enables database TLS when configured", () => {
+    expect(loadConfig({ ...base, DATABASE_SSL: "true" }).DATABASE_SSL).toBe(
+      true,
+    );
   });
 
   it("supports disabling database TLS for a local PostgreSQL server", () => {

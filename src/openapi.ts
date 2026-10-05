@@ -191,7 +191,7 @@ const allOpenApiDocument: OpenAPIV3.Document = {
   ],
   paths: {
     "/api/healthz": {
-      get: { ...success("Check API and database availability"), security: [] },
+      get: { ...success("Check API process availability"), security: [] },
     },
     "/api/auth/me": { get: success("Get current user") },
     "/api/workflows/prepaid/state": { get: success("Get Prepaid state") },
