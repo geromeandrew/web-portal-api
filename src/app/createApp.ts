@@ -76,7 +76,10 @@ function registerFeatureRoutes(
 ) {
   app.use("/api/auth", createAuthRouter(dependencies));
   app.use("/api/admin", createAdminRouter(dependencies));
-  app.use("/api/workflows/prepaid", createPrepaidRouter(dependencies));
+  app.use(
+    "/api/workflows/prepaid",
+    createPrepaidRouter(dependencies, singleFileUpload),
+  );
   app.use(
     "/api/processing-pipelines",
     createProcessingPipelinesRouter(dependencies, singleFileUpload),

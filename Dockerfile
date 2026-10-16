@@ -50,11 +50,13 @@ RUN apk update && apk add --no-cache \
      bash\
      openssh\
      openssl
+RUN apk add --no-cache python3 py3-pip
 
 # Set the working directory
 WORKDIR /app
 
 COPY . .
+RUN python3 -m venv /app/.venv-prepaid && /app/.venv-prepaid/bin/pip install --no-cache-dir -r infrastructure/prepaid/requirements-backend.txt
 
 # Step 1: Generate Base64 auth and write directly to .npmrc to avoid CLI parsing errors
 RUN AUTH_BASE64=$(printf "%s:%s" "$JFROG_USERNAME" "$JFROG_PASSWORD" | base64 | tr -d '\n') && \

@@ -55,6 +55,27 @@ services:
         aliases: [web-portal-api]
     restart: unless-stopped
 
+  prepaid-migrate:
+    profiles: [prepaid]
+    image: ${API_IMAGE:?Set API_IMAGE}
+    environment:
+      <<: *api_environment
+    command: ["node", "dist/migratePrepaid.js"]
+    networks: [portal]
+    restart: "no"
+
+  prepaid-worker:
+    profiles: [prepaid]
+    image: ${API_IMAGE:?Set API_IMAGE}
+    environment:
+      <<: *api_environment
+    command: ["node", "dist/prepaidWorker.js"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [portal]
+    restart: unless-stopped
+
 networks:
   portal:
     name: web-portal-shared

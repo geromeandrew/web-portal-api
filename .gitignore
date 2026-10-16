@@ -15,3 +15,6 @@ outputs/
 scripts/
 *.docx
 *.xlsx
+__pycache__/
+.venv-prepaid/
+*.pyc

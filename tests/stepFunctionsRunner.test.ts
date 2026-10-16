@@ -9,6 +9,65 @@ import { describe, expect, it, vi } from "vitest";
 import { AwsStepFunctionsRunner } from "../src/stepFunctionsRunner.js";
 
 describe("AwsStepFunctionsRunner", () => {
+  it("recovers a named execution after jsonb key reordering but rejects changed values", async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("exists"), { name: "ExecutionAlreadyExists" }),
+      )
+      .mockResolvedValueOnce({
+        status: "RUNNING",
+        input: '{"b":2,"a":1}',
+        startDate: new Date("2026-10-16T00:00:00Z"),
+      });
+    const runner = new AwsStepFunctionsRunner(
+      { send } as any,
+      {
+        send: vi.fn().mockResolvedValue({
+          Account: "123456789012",
+          Arn: "arn:aws:sts::123456789012:assumed-role/test/test",
+        }),
+      } as any,
+      "us-east-1",
+    );
+    expect(
+      (await runner.startExecution("source", { a: 1, b: 2 }, "persisted-name"))
+        .executionArn,
+    ).toBe(
+      "arn:aws:states:us-east-1:123456789012:execution:source:persisted-name",
+    );
+    send
+      .mockRejectedValueOnce(
+        Object.assign(new Error("exists"), { name: "ExecutionAlreadyExists" }),
+      )
+      .mockResolvedValueOnce({ status: "RUNNING", input: '{"b":999,"a":1}' });
+    await expect(
+      runner.startExecution("source", { a: 1, b: 2 }, "persisted-name"),
+    ).rejects.toThrow("different input");
+  });
+  it("retrieves executable definitions explicitly before source extraction", async () => {
+    const send = vi.fn().mockResolvedValue({
+      stateMachineArn:
+        "arn:aws:states:us-east-1:123456789012:stateMachine:source",
+      type: "STANDARD",
+      status: "ACTIVE",
+      definition: '{"StartAt":"PortalEntry"}',
+    });
+    const runner = new AwsStepFunctionsRunner(
+      { send } as any,
+      {
+        send: vi.fn().mockResolvedValue({
+          Account: "123456789012",
+          Arn: "arn:aws:sts::123456789012:assumed-role/test/test",
+        }),
+      } as any,
+      "us-east-1",
+    );
+    expect(
+      (await runner.describeStateMachineDefinition("source")).definition,
+    ).toContain("PortalEntry");
+    expect(send.mock.calls[0][0].input.includedData).toBe("ALL_DATA");
+  });
   it("starts the mapped state machine with the exact batch-cycle input", async () => {
     const stepFunctionsSend = vi.fn().mockResolvedValue({
       executionArn:

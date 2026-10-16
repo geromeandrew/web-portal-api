@@ -12,14 +12,19 @@ import {
 } from "@aws-sdk/client-sts";
 import { createAwsClientOptions } from "./aws.js";
 import type { Config } from "./config.js";
+import { isDeepStrictEqual } from "node:util";
 
 type StepFunctionsSender = Pick<SFNClientType, "send">;
 type StsSender = Pick<STSClientType, "send">;
 
 export type StepFunctionsRunner = {
+  describeStateMachineDefinition(
+    stateMachineName: string,
+  ): Promise<{ arn: string; type: string; status: string; definition: string }>;
   startExecution(
     stateMachineName: string,
     input: Record<string, unknown>,
+    executionName?: string,
   ): Promise<{ executionArn: string; startedAt: string }>;
   describeExecution(executionArn: string): Promise<{
     status: string;
@@ -60,16 +65,70 @@ export class AwsStepFunctionsRunner implements StepFunctionsRunner {
     private readonly region: string,
   ) {}
 
+  async describeStateMachineDefinition(stateMachineName: string) {
+    const result = await this.client.send(
+      new DescribeStateMachineCommand({
+        stateMachineArn: await this.stateMachineArn(stateMachineName),
+        includedData: "ALL_DATA",
+      }),
+    );
+    if (
+      !result.stateMachineArn ||
+      !result.type ||
+      !result.status ||
+      !result.definition
+    )
+      throw Error(
+        "Step Functions did not return the executable state-machine definition.",
+      );
+    return {
+      arn: result.stateMachineArn,
+      type: result.type,
+      status: result.status,
+      definition: result.definition,
+    };
+  }
+
   async startExecution(
     stateMachineName: string,
     input: Record<string, unknown>,
+    executionName?: string,
   ) {
-    const response = await this.client.send(
-      new StartExecutionCommand({
-        stateMachineArn: await this.stateMachineArn(stateMachineName),
-        input: JSON.stringify(input),
-      }),
-    );
+    const arn = await this.stateMachineArn(stateMachineName);
+    let response;
+    try {
+      response = await this.client.send(
+        new StartExecutionCommand({
+          stateMachineArn: arn,
+          input: JSON.stringify(input),
+          ...(executionName ? { name: executionName } : {}),
+        }),
+      );
+    } catch (error) {
+      if (
+        !executionName ||
+        (error as { name?: string }).name !== "ExecutionAlreadyExists"
+      )
+        throw error;
+      const executionArn =
+        arn.replace(":stateMachine:", ":execution:") + ":" + executionName;
+      const existing = await this.describeExecution(executionArn);
+      // PostgreSQL jsonb reorders object keys. A persisted retry can therefore
+      // have different JSON bytes while identifying the exact same request.
+      // Recover the named execution only when JSON values are identical.
+      if (
+        !existing.input ||
+        !isDeepStrictEqual(
+          JSON.parse(existing.input),
+          JSON.parse(JSON.stringify(input)),
+        )
+      )
+        throw new Error("Named execution already exists with different input.");
+      return {
+        executionArn,
+        startedAt: existing.startedAt ?? new Date().toISOString(),
+      };
+    }
     if (!response.executionArn || !response.startDate)
       throw new Error(
         "AWS Step Functions did not return an execution ARN and start time.",

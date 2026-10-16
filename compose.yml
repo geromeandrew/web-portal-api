@@ -2,7 +2,9 @@ name: web-portal-api
 
 services:
   migrate:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile-local
     image: web-portal-api:local
     pull_policy: build
     environment: &api_environment
@@ -33,7 +35,9 @@ services:
     restart: "no"
 
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile-local
     image: web-portal-api:local
     pull_policy: build
     ports:
@@ -60,6 +64,27 @@ services:
     networks:
       portal:
         aliases: [web-portal-api]
+    restart: unless-stopped
+
+  prepaid-migrate:
+    profiles: [prepaid]
+    image: web-portal-api:local
+    environment:
+      <<: *api_environment
+    command: ["node", "dist/migratePrepaid.js"]
+    networks: [portal]
+    restart: "no"
+
+  prepaid-worker:
+    profiles: [prepaid]
+    image: web-portal-api:local
+    environment:
+      <<: *api_environment
+    command: ["node", "dist/prepaidWorker.js"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [portal]
     restart: unless-stopped
 
 networks:

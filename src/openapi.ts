@@ -1,4 +1,5 @@
 import type { OpenAPIV3 } from "openapi-types";
+import { prepaidOpenApiPaths } from "./modules/prepaid/api/openapi.js";
 
 const success = (summary: string): OpenAPIV3.OperationObject => ({
   summary,
@@ -110,8 +111,11 @@ const batchCycle: OpenAPIV3.ParameterObject = {
 };
 const freezeLayoutBody = jsonBody({
   type: "object",
-  required: ["frozen"],
-  properties: { frozen: { type: "boolean" } },
+  required: ["frozen", "version"],
+  properties: {
+    frozen: { type: "boolean", enum: [true] },
+    version: { type: "integer", minimum: 0 },
+  },
 });
 const pipelineUploadBody: OpenAPIV3.RequestBodyObject = {
   required: true,
@@ -196,23 +200,54 @@ const allOpenApiDocument: OpenAPIV3.Document = {
     "/api/auth/me": { get: success("Get current user") },
     "/api/workflows/prepaid/state": { get: success("Get Prepaid state") },
     "/api/workflows/prepaid/process": {
-      post: created("Process Prepaid uploads"),
+      post: {
+        summary: "Queue selected-run ingestion",
+        responses: { "202": { description: "Queued, not completed." } },
+      },
     },
     "/api/workflows/prepaid/layouts/{region}/reset": {
-      post: { ...success("Reset layout"), parameters: [regionPath] },
+      post: {
+        ...success("Reset selected-run draft"),
+        parameters: [regionPath],
+        requestBody: jsonBody({
+          type: "object",
+          required: ["version"],
+          properties: { version: { type: "integer", minimum: 0 } },
+        }),
+      },
     },
     "/api/workflows/prepaid/layouts/{region}/import": {
-      post: { ...success("Refresh layout"), parameters: [regionPath] },
+      post: {
+        ...success("Import selected-run verified sources"),
+        parameters: [regionPath],
+        requestBody: jsonBody({
+          type: "object",
+          required: ["version"],
+          properties: { version: { type: "integer", minimum: 0 } },
+        }),
+      },
     },
     "/api/workflows/prepaid/layouts/{region}/freeze": {
       patch: {
-        ...success("Set layout frozen state"),
+        summary:
+          "Freeze selected-run draft and queue SAP delivery (use Edit endpoint for corrections)",
+        responses: { "202": { description: "Queued, not delivered." } },
         parameters: [regionPath],
         requestBody: freezeLayoutBody,
       },
     },
     "/api/workflows/prepaid/allocation/validate": {
-      post: success("Validate allocation"),
+      post: {
+        ...success("Validate selected-run regional draft"),
+        requestBody: jsonBody({
+          type: "object",
+          required: ["version", "region"],
+          properties: {
+            version: { type: "integer", minimum: 0 },
+            region: { type: "string", enum: ["eg", "sg"] },
+          },
+        }),
+      },
     },
     "/api/workflows/prepaid/report.csv": {
       get: csv("Download Prepaid report"),
@@ -274,10 +309,7 @@ const allOpenApiDocument: OpenAPIV3.Document = {
     "/api/processing-pipelines/{pipelineCode}/files/content": {
       get: {
         ...success("Stream a pipeline file"),
-        parameters: [
-          pipelineCodePath,
-          pipelineFileKey,
-        ],
+        parameters: [pipelineCodePath, pipelineFileKey],
       },
     },
     "/api/processing-pipelines/{pipelineCode}/runs": {
@@ -334,6 +366,7 @@ function tagForPath(path: string) {
   return "Processing Pipelines";
 }
 
+Object.assign(allOpenApiDocument.paths, prepaidOpenApiPaths);
 for (const [path, pathItem] of Object.entries(allOpenApiDocument.paths)) {
   if (!pathItem || "$ref" in pathItem) continue;
   for (const operation of [

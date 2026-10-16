@@ -1,0 +1,2 @@
+# Matches the openpyxl version configured on the existing five Glue jobs.
+openpyxl==3.1.2

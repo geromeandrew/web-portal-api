@@ -2,6 +2,9 @@
 .env
 .env.*
 node_modules
+.venv-prepaid
+__pycache__
+docs/db-backups/
 dist
 coverage
 *.tsbuildinfo
