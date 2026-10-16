@@ -418,7 +418,7 @@ export async function recordPipelineUploadBatchFile(
 
 export async function getPipelineUploadBatches(
   pool: Pool,
-  input: { pipelineCode: string; workspaceId: string },
+  input: { pipelineCode: string },
 ): Promise<PipelineUploadBatchDto[]> {
   const result = await pool.query<{
     id: string; created_at: Date; uploaded_by: string | null; files: unknown;
@@ -431,11 +431,11 @@ export async function getPipelineUploadBatches(
      JOIN app_user user_record ON user_record.id = batch.created_by_user_id
      LEFT JOIN processing_pipeline_upload_batch_files member ON member.batch_id = batch.id
      LEFT JOIN processing_pipeline_file_requirements requirement ON requirement.id = member.file_requirement_id
-     WHERE pipeline.code = $1 AND batch.workspace_id = $2
+     WHERE pipeline.code = $1
      GROUP BY batch.id, batch.created_at, user_record.display_name, user_record.email
      HAVING COUNT(member.id) > 0
      ORDER BY batch.created_at DESC`,
-    [input.pipelineCode, input.workspaceId],
+    [input.pipelineCode],
   );
   return result.rows.map((row) => ({
     id: row.id,
