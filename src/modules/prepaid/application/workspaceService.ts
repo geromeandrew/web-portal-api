@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { AppError } from "../../../errors.js";
+import { prepaidMaximumSourceBytes } from "../domain/limits.js";
 import {
   expectedName,
   sourceCodes,
@@ -196,6 +197,12 @@ export class PrepaidWorkspaceService {
     code: string,
     file: { originalname: string; buffer: Buffer; mimetype: string },
   ) {
+    if (file.buffer.length > prepaidMaximumSourceBytes)
+      throw new AppError(
+        413,
+        "PREPAID_SOURCE_TOO_LARGE",
+        "Prepaid sources must not exceed 100 MiB.",
+      );
     if (!file.buffer.length)
       throw new AppError(
         400,

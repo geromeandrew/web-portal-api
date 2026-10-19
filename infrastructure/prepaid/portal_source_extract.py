@@ -14,6 +14,8 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, getcontext
 
 getcontext().prec = 50  # do not round intermediate sums through Python's default 28 digits
+MAX_SOURCE_BYTES = 100 * 1024 * 1024  # legacy generic upload controller: 100 MiB
+MAX_WORKBOOK_CELLS = 2_000_000
 
 
 def dumps(value):
@@ -207,7 +209,7 @@ def validate_request(request):
 
 def workbook_rows(body, workflow):
     import openpyxl
-    if len(body) > 4_500_000:
+    if len(body) > MAX_SOURCE_BYTES:
         raise ValueError("Source exceeds portal upload size")
     with zipfile.ZipFile(io.BytesIO(body)) as archive:
         if len(archive.infolist()) > 5000 or sum(item.file_size for item in archive.infolist()) > 128_000_000:
@@ -220,7 +222,12 @@ def workbook_rows(body, workflow):
         sheet = sheets[0]  # same first-sheet selection as the existing flat jobs
         if sheet.max_row > 250000 or sheet.max_column > 100:
             raise ValueError("Workbook dimensions exceed extraction limits")
-        rows = list(sheet.iter_rows(values_only=True))
+        rows, cell_count = [], 0
+        for row in sheet.iter_rows(values_only=True):
+            cell_count += len(row)
+            if len(rows) >= 250000 or len(row) > 100 or cell_count > MAX_WORKBOOK_CELLS:
+                raise ValueError("Workbook rows/columns/cells exceed extraction limits")
+            rows.append(row)
         formulas = openpyxl.load_workbook(io.BytesIO(body), read_only=True, data_only=False, keep_links=False)
         try:
             for index, row in enumerate(formulas[sheet.title].iter_rows()):
@@ -275,7 +282,7 @@ def run(request, phase, s3):
             raise ValueError("308 header phase has not completed")
         artifacts.extend(header["artifacts"])
     for source in request["sources"]:
-        body = read_object(s3, bucket, source["key"], 4_500_000)
+        body = read_object(s3, bucket, source["key"], MAX_SOURCE_BYTES)
         if hashlib.sha256(body).hexdigest() != source["sha256"]:
             raise ValueError("Uploaded source checksum mismatch")
         rows = workbook_rows(body, workflow)

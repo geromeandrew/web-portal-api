@@ -44,7 +44,9 @@ export class AwsSourceJobInspector implements SourceJobInspector {
         args["--input_file_name"] !== mapping.inputPattern ||
         args["--target_table"] !==
           `sdbtdir1_prepaid_dbo.${mapping.targets[index]}` ||
-        (number === 4 && args["--move_to_success"] !== "false") ||
+        (index === 0 &&
+          mapping.jobs.length > 1 &&
+          args["--move_to_success"] !== "false") ||
         Object.keys(args).some((key) => key.startsWith("--portal_"))
       )
         throw Error(
@@ -70,7 +72,11 @@ export class AwsSourceJobInspector implements SourceJobInspector {
         token = page.nextToken;
       } while (token);
     }
-    for (const number of [1, 2, 3, 4, 5]) {
+    for (const number of [
+      ...new Set(
+        Object.values(sourceWorkflows).flatMap((mapping) => [...mapping.jobs]),
+      ),
+    ]) {
       let token: string | undefined;
       do {
         const page = await this.glue.send(

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { prepaidMaximumSourceBytes } from "./modules/prepaid/domain/limits.js";
 
 const envSchema = z
   .object({
@@ -40,6 +41,12 @@ const envSchema = z
     AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
     AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
     MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(4_500_000),
+    PREPAID_MAX_UPLOAD_BYTES: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(prepaidMaximumSourceBytes)
+      .default(prepaidMaximumSourceBytes),
     OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: z
       .enum(["true", "false"])
       .default("false")

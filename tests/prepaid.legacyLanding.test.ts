@@ -46,6 +46,19 @@ describe("Shared legacy landing safeguards", () => {
         .every(([c]: any) => c.input.IfMatch),
     ).toBe(true);
   });
+  it("stages and verifies original files above the old 4.5 MB ceiling", async () => {
+    const { s3, landing } = fixture();
+    const bytes = Buffer.alloc(5_000_000, "x");
+    const larger = { ...file, bytes, sha256: sha256(bytes) };
+    await landing.acquire("larger");
+    await landing.stage("larger", "load_api_eg", [larger]);
+    await landing.stage("larger", "load_api_eg", [larger]);
+    expect(s3.objects.get(landing.prefix + file.name)!.bytes.length).toBe(
+      5_000_000,
+    );
+    await landing.finish("larger", "load_api_eg", [larger]);
+    expect(s3.objects.has(landing.lockKey)).toBe(false);
+  });
   it("does not overwrite/delete a replaced or foreign object, even if its bytes match", async () => {
     const { s3, landing } = fixture();
     await landing.acquire("first");

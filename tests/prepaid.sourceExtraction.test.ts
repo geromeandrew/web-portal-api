@@ -96,7 +96,11 @@ describe("Unchanged source workflow compatibility (read-only)", () => {
         envPrefix: "isg-esatp-dv",
         sharedWritesApproved: true,
       }),
-    ).toEqual({ envPrefix: "isg-esatp-dv", sharedWritesApproved: true });
+    ).toEqual({
+      envPrefix: "isg-esatp-dv",
+      sharedWritesApproved: true,
+      coverage: "legacy_four",
+    });
     expect(() =>
       sourceExtractionSchema.parse({ envPrefix: "isg-esatp-dv" }),
     ).toThrow();

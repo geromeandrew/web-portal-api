@@ -42,7 +42,7 @@ describe("Prepaid migration SQL", () => {
     expect(
       statements.filter((s) => /CREATE(?: OR REPLACE)? FUNCTION/.test(s)),
     ).toHaveLength(16);
-    expect(statements.filter((s) => /CREATE TABLE/.test(s))).toHaveLength(39);
+    expect(statements.filter((s) => /CREATE TABLE/.test(s))).toHaveLength(47);
   });
 });
 
@@ -100,14 +100,14 @@ describe.skipIf(!testUrl)("Prepaid migrations (isolated PostgreSQL)", () => {
       client.release();
     }
   }
-  it("installs all seven migrations, 35 portal tables and five raw tables", async () => {
+  it("installs all nine migrations, 36 portal tables and twelve raw targets", async () => {
     expect(await run()).toEqual(prepaidMigrations().map(([id]) => id));
     const result = await pool.query(
       "SELECT schemaname,count(*)::integer count FROM pg_tables WHERE schemaname=ANY($1) GROUP BY schemaname",
       [[schema, raw]],
     );
-    expect(result.rows.find((r) => r.schemaname === schema).count).toBe(37); // 35 prepaid + two prerequisites
-    expect(result.rows.find((r) => r.schemaname === raw).count).toBe(5);
+    expect(result.rows.find((r) => r.schemaname === schema).count).toBe(38); // 36 prepaid + two prerequisites
+    expect(result.rows.find((r) => r.schemaname === raw).count).toBe(12);
     const column = await pool.query(
       "SELECT is_identity,identity_generation FROM information_schema.columns WHERE table_schema=$1 AND table_name='dcload_api' AND column_name='rownum'",
       [raw],
@@ -151,6 +151,39 @@ describe.skipIf(!testUrl)("Prepaid migrations (isolated PostgreSQL)", () => {
       `ALTER TABLE "${raw}".dccallcard_sg ALTER COLUMN trade TYPE varchar(255)`,
     );
     await pool.query(prepaidRawSourceValidationSql(raw));
+  });
+  it("detects additional raw target drift and workflow-constraint drift without hiding them behind the ledger", async () => {
+    await pool.query(
+      `ALTER TABLE "${raw}"."dcKE24" ALTER COLUMN "Cost Element" TYPE varchar(50)`,
+    );
+    await expect(run()).rejects.toThrow(
+      "additional raw source schema mismatch",
+    );
+    await pool.query(
+      `ALTER TABLE "${raw}"."dcKE24" ALTER COLUMN "Cost Element" TYPE text`,
+    );
+    await pool.query(
+      `ALTER TABLE "${schema}".prepaid_source_extractions DROP CONSTRAINT prepaid_source_extractions_workflow_check`,
+    );
+    await expect(run()).rejects.toThrow(
+      "workflow constraint from migration 008",
+    );
+    const workflows = [
+      "ke24",
+      "callcard_eg",
+      "callcard_sg",
+      "load_up_eg",
+      "load_up_sg",
+      "load_api_eg",
+      "load_api_sg",
+      "monthly_recharge",
+      "adjustments_308",
+      "charges_318",
+    ];
+    await pool.query(
+      `ALTER TABLE "${schema}".prepaid_source_extractions ADD CONSTRAINT prepaid_source_extractions_workflow_check CHECK(workflow IN (${workflows.map((w) => "'" + w + "'").join(",")}))`,
+    );
+    expect(await run()).toEqual([]);
   });
   it("detects missing tables even when the migration ledger is current", async () => {
     await pool.query(

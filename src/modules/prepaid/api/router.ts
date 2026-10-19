@@ -7,6 +7,7 @@ import { assertModuleAccess } from "../../../rbac.js";
 import { AppError } from "../../../errors.js";
 import { PrepaidRunService } from "../application/runService.js";
 import { PrepaidWorkspaceService } from "../application/workspaceService.js";
+import { PrepaidReferenceRefreshService } from "../application/referenceRefreshService.js";
 import { frozenReports } from "../application/reportService.js";
 import { PrepaidRepository } from "../infrastructure/repository.js";
 import { createPrepaidStorage } from "../infrastructure/prepaidStorage.js";
@@ -37,6 +38,7 @@ export function createPrepaidRouter(
   );
   const router = express.Router();
   const workspace = new PrepaidWorkspaceService(service);
+  const references = new PrepaidReferenceRefreshService(service.repo);
   router.use(authenticate);
   router.use(async (req, _res, next) => {
     try {
@@ -52,7 +54,7 @@ export function createPrepaidRouter(
   router.use(async (_req, _res, next) => {
     try {
       const ready = await pool.query(
-        "SELECT to_regclass($1) present, to_regclass($2) workspace, to_regclass($3) consistency,to_regclass($4) legacy,to_regclass($5) extractions, EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass($5) AND attname='context' AND NOT attisdropped) backend_context",
+        "SELECT to_regclass($1) present, to_regclass($2) workspace, to_regclass($3) consistency,to_regclass($4) legacy,to_regclass($5) extractions, EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass($5) AND attname='context' AND NOT attisdropped) backend_context, EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass($5) AND conname='prepaid_source_extractions_workflow_check' AND pg_get_constraintdef(oid) LIKE '%charges_318%') all_sources",
         [
           `${service.repo.schema}.prepaid_runs`,
           `${service.repo.schema}.prepaid_upload_sessions`,
@@ -67,12 +69,13 @@ export function createPrepaidRouter(
         !ready.rows[0]?.consistency ||
         !ready.rows[0]?.legacy ||
         !ready.rows[0]?.extractions ||
-        !ready.rows[0]?.backend_context
+        !ready.rows[0]?.backend_context ||
+        !ready.rows[0]?.all_sources
       )
         throw new AppError(
           503,
           "PREPAID_SCHEMA_NOT_INSTALLED",
-          "Prepaid-only migrations 001 through 007 must be installed before using this backend.",
+          "Prepaid-only migrations 001 through 008 must be installed before using this backend.",
         );
       next();
     } catch (error) {
@@ -151,6 +154,30 @@ export function createPrepaidRouter(
         manualIntegrationSchema.parse(req.body),
       ),
     );
+  });
+  router.post("/reference-exports", async (req, res) => {
+    res.status(202).json(await references.create(req.auth!.userId, req.body));
+  });
+  router.get("/reference-exports/:referenceId", async (req, res) => {
+    res.json(
+      await references.get(
+        req.auth!.userId,
+        uuid.parse(req.params.referenceId),
+      ),
+    );
+  });
+  router.post("/reference-exports/:referenceId/reconcile", async (req, res) => {
+    z.object({})
+      .strict()
+      .parse(req.body ?? {});
+    res
+      .status(202)
+      .json(
+        await references.reconcile(
+          req.auth!.userId,
+          uuid.parse(req.params.referenceId),
+        ),
+      );
   });
   router.get("/report-history", async (req, res) => {
     const input = z

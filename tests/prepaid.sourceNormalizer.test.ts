@@ -28,12 +28,18 @@ describe.skipIf(!existsSync(runtime))(
       };
       const bytes = Buffer.from(
         zipSync(
-          Object.fromEntries(
-            Object.entries(files).map(([key, value]) => [key, strToU8(value)]),
-          ),
+          Object.fromEntries([
+            ...Object.entries(files).map(([key, value]) => [
+              key,
+              strToU8(value),
+            ]),
+            ["unused-padding.bin", new Uint8Array(5_000_000)],
+          ]),
+          { level: 0 },
         ),
       );
       const normalizer = new BackendSourceNormalizer();
+      expect(bytes.length).toBeGreaterThan(4_500_000);
       expect(await normalizer.revision()).toMatch(/^[a-f0-9]{64}$/);
       expect(
         await normalizer.normalize("load_api_eg", "load_api_eg", bytes),

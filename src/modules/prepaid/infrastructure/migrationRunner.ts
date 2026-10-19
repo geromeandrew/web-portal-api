@@ -1,9 +1,14 @@
+import {
+  prepaidAllSourceMigrationSql,
+  prepaidAdditionalRawValidationSql,
+} from "./allSourceMigration.js";
 import { prepaidMigrationSql } from "./migrations.js";
 import { prepaidWorkspaceMigrationSql } from "./workspaceMigration.js";
 import { prepaidConsistencyMigrationSql } from "./consistencyMigration.js";
 import { prepaidLegacyRulesMigrationSql } from "./legacyRulesMigration.js";
 import { prepaidSourceExtractionMigrationSql } from "./sourceExtractionMigration.js";
 import { prepaidSourceBackendMigrationSql } from "./sourceBackendMigration.js";
+import { prepaidReferenceRefreshMigrationSql } from "./referenceRefreshMigration.js";
 import {
   prepaidRawSchema,
   prepaidRawSourceMigrationSql,
@@ -25,6 +30,11 @@ export function prepaidMigrations(rawSchema = prepaidRawSchema) {
     ],
     ["006_prepaid_source_extractions", prepaidSourceExtractionMigrationSql],
     ["007_prepaid_backend_source_context", prepaidSourceBackendMigrationSql],
+    [
+      "008_prepaid_all_source_workflows",
+      (schema: string) => prepaidAllSourceMigrationSql(schema, rawSchema),
+    ],
+    ["009_prepaid_reference_refresh", prepaidReferenceRefreshMigrationSql],
   ] as const;
 }
 
@@ -80,12 +90,33 @@ export async function migratePrepaid(
     }
   }
   await connection.query(prepaidRawSourceValidationSql(rawSchema));
+  await connection.query(prepaidAdditionalRawValidationSql(rawSchema));
   const context = await connection.query(
     `SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('${s}.prepaid_source_extractions') AND attname='context' AND atttypid='jsonb'::regtype AND NOT attisdropped`,
   );
   if (!context.rows.length)
     throw Error(
       "Missing/incompatible backend source context from migration 007. Restore/review schema drift; existing data is preserved.",
+    );
+  const workflows = await connection.query(
+    `SELECT pg_get_constraintdef(oid) definition FROM pg_constraint WHERE conrelid=to_regclass('${s}.prepaid_source_extractions') AND conname='prepaid_source_extractions_workflow_check' AND contype='c' AND convalidated`,
+  );
+  const definition = String(workflows.rows[0]?.definition ?? "");
+  const required = [
+    "ke24",
+    "callcard_eg",
+    "callcard_sg",
+    "load_up_eg",
+    "load_up_sg",
+    "load_api_eg",
+    "load_api_sg",
+    "monthly_recharge",
+    "adjustments_308",
+    "charges_318",
+  ];
+  if (required.some((workflow) => !definition.includes("'" + workflow + "'")))
+    throw Error(
+      "Missing/incompatible workflow constraint from migration 008. Restore/review schema drift; existing data is preserved.",
     );
   return applied;
 }

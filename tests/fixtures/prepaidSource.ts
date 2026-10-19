@@ -29,7 +29,7 @@ export function legacyDefinition(workflow: SourceWorkflow) {
           ...(i === numbers.length - 1
             ? { End: true }
             : {
-                ResultPath: "$.extract_4_output",
+                ResultPath: `$.extract_${numbers[0]}_output`,
                 Next: `Extract_${numbers[i + 1]}`,
               }),
         },

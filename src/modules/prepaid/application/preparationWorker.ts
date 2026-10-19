@@ -14,6 +14,7 @@ import {
   PrepaidSourceExtractionWorker,
 } from "./sourceExtractionWorker.js";
 
+import { PrepaidNativeManifestBuilder } from "./nativeManifestBuilder.js";
 import { verifiedExtractionBridge } from "./sourceExtractionBridge.js";
 
 /** Version 2 normalization discovers the period; it never dispatches SAP. */
@@ -68,8 +69,20 @@ export class PrepaidPreparationWorker {
       }
       const config = manualIntegrationSchema.parse(session.configuration);
       const prefix = `${this.storage.sessionPrefix(session.id)}preparation/${job.id}/`;
-      let extractionReceipts;
-      if (config.sourceExtraction && !job.execution_arn) {
+      const native = config.preparationMode === "native_sources";
+      let extractionReceipts = job.execution_input?.extractionReceipts;
+      const owns = async () => {
+        const result = await this.repo.pool.query(
+          `SELECT 1 FROM ${this.t("preparation_jobs")} WHERE id=$1 AND lease_token=$2 AND status='running'`,
+          [job.id, token],
+        );
+        if (!result.rowCount || lost) throw Error("Preparation lease lost.");
+      };
+      if (
+        config.sourceExtraction &&
+        !job.execution_arn &&
+        !(native && job.execution_input?.manifestKey)
+      ) {
         // Child inputs are persisted separately, so a lost dispatch response is
         // recoverable even before the final V2 ingestion request exists.
         job.source_extraction_pending = true;
@@ -87,88 +100,145 @@ export class PrepaidPreparationWorker {
           return true;
         }
       }
-      if (!job.execution_arn) {
+      let manifest: ReturnType<typeof sessionManifestSchema.parse>;
+      if (native) {
         if (!job.execution_input) {
-          const machine = await this.runner.describeStateMachine(
-            config.ingestStateMachine,
-          );
-          if (machine.type !== "STANDARD" || machine.status !== "ACTIVE") {
-            knownOutcome = true;
-            throw Error(
-              "Preparation requires an active Standard state machine with the version-2 session contract.",
-            );
-          }
           job.execution_input = {
             contractVersion: 2,
+            preparationMode: "native_sources",
             sessionId: session.id,
             workspaceId: session.workspace_id,
             preparationId: job.id,
             sourceVersion: job.source_version,
-            bucket: this.storage.bucket,
-            outputPrefix: prefix,
-            expectedCycles: config.expectedCycles,
-            discoverPeriodFrom: "ke24",
             sources: job.source_files.map((f: any) => ({
               id: f.id,
               code: f.source_code,
               key: f.object_key,
               sha256: f.sha256,
             })),
-            ...(extractionReceipts ? { extractionReceipts } : {}),
+            extractionReceipts,
+            manifestKey: `${prefix}native-manifest.json`,
           };
+          await owns();
           const saved = await this.repo.pool.query(
             `UPDATE ${this.t("preparation_jobs")} SET execution_input=$3 WHERE id=$1 AND lease_token=$2 AND status='running'`,
             [job.id, token, JSON.stringify(job.execution_input)],
           );
-          if (!saved.rowCount || lost) throw Error("Preparation lease lost.");
+          if (!saved.rowCount || lost)
+            throw Error(
+              "Preparation lease lost before native output assembly.",
+            );
         }
-        const started = await this.runner.startExecution(
-          config.ingestStateMachine,
-          job.execution_input,
-          job.execution_name,
+        let built;
+        try {
+          built = await new PrepaidNativeManifestBuilder(this.storage).build(
+            job,
+            session,
+            config,
+            job.execution_input.extractionReceipts,
+            owns,
+          );
+        } catch (error) {
+          if ((error as any).$metadata || (error as any).code) throw error;
+          throw new PrepaidSourceExtractionError((error as Error).message);
+        }
+        manifest = sessionManifestSchema.parse(
+          await this.storage.json(built.manifestKey, prefix),
         );
-        await this.repo.pool.query(
-          `UPDATE ${this.t("preparation_jobs")} SET execution_arn=$3,status='waiting',lease_until=NULL,available_at=now()+interval '10 seconds' WHERE id=$1 AND lease_token=$2 AND status='running'`,
-          [job.id, token, started.executionArn],
+        knownOutcome = true;
+        if (
+          manifest.producer !== "backend" ||
+          manifest.executionArn !== `backend:preparation:${job.id}` ||
+          !isDeepStrictEqual(manifest.referenceSource, config.referenceExport)
+        )
+          throw Error("Native manifest backend/reference identity mismatch.");
+      } else {
+        if (!job.execution_arn) {
+          if (!job.execution_input) {
+            const machine = await this.runner.describeStateMachine(
+              config.ingestStateMachine!,
+            );
+            if (machine.type !== "STANDARD" || machine.status !== "ACTIVE") {
+              knownOutcome = true;
+              throw Error(
+                "Preparation requires an active Standard state machine with the version-2 session contract.",
+              );
+            }
+            job.execution_input = {
+              contractVersion: 2,
+              sessionId: session.id,
+              workspaceId: session.workspace_id,
+              preparationId: job.id,
+              sourceVersion: job.source_version,
+              bucket: this.storage.bucket,
+              outputPrefix: prefix,
+              expectedCycles: config.expectedCycles,
+              discoverPeriodFrom: "ke24",
+              sources: job.source_files.map((f: any) => ({
+                id: f.id,
+                code: f.source_code,
+                key: f.object_key,
+                sha256: f.sha256,
+              })),
+              ...(extractionReceipts ? { extractionReceipts } : {}),
+            };
+            const saved = await this.repo.pool.query(
+              `UPDATE ${this.t("preparation_jobs")} SET execution_input=$3 WHERE id=$1 AND lease_token=$2 AND status='running'`,
+              [job.id, token, JSON.stringify(job.execution_input)],
+            );
+            if (!saved.rowCount || lost) throw Error("Preparation lease lost.");
+          }
+          const started = await this.runner.startExecution(
+            config.ingestStateMachine!,
+            job.execution_input,
+            job.execution_name,
+          );
+          await this.repo.pool.query(
+            `UPDATE ${this.t("preparation_jobs")} SET execution_arn=$3,status='waiting',lease_until=NULL,available_at=now()+interval '10 seconds' WHERE id=$1 AND lease_token=$2 AND status='running'`,
+            [job.id, token, started.executionArn],
+          );
+          return true;
+        }
+        const execution = await this.runner.describeExecution(
+          job.execution_arn,
         );
-        return true;
+        if (execution.status === "RUNNING") {
+          await this.repo.pool.query(
+            `UPDATE ${this.t("preparation_jobs")} SET status='waiting',lease_until=NULL,available_at=now()+interval '10 seconds' WHERE id=$1 AND lease_token=$2 AND status='running'`,
+            [job.id, token],
+          );
+          return true;
+        }
+        knownOutcome = true;
+        if (
+          !execution.inputIncluded ||
+          !execution.input ||
+          !isDeepStrictEqual(JSON.parse(execution.input), job.execution_input)
+        )
+          throw Error(
+            "Source preparation execution input does not match the persisted request.",
+          );
+        if (
+          execution.status !== "SUCCEEDED" ||
+          !execution.outputIncluded ||
+          !execution.output
+        )
+          throw Error(
+            "Source preparation failed or returned no attested output.",
+          );
+        const output = JSON.parse(execution.output);
+        if (
+          output.contractVersion !== 2 ||
+          typeof output.manifestKey !== "string"
+        )
+          throw Error(
+            "The ingestion adapter must implement the version-2 source-driven period contract.",
+          );
+
+        manifest = sessionManifestSchema.parse(
+          await this.storage.json(output.manifestKey, prefix),
+        );
       }
-      const execution = await this.runner.describeExecution(job.execution_arn);
-      if (execution.status === "RUNNING") {
-        await this.repo.pool.query(
-          `UPDATE ${this.t("preparation_jobs")} SET status='waiting',lease_until=NULL,available_at=now()+interval '10 seconds' WHERE id=$1 AND lease_token=$2 AND status='running'`,
-          [job.id, token],
-        );
-        return true;
-      }
-      knownOutcome = true;
-      if (
-        !execution.inputIncluded ||
-        !execution.input ||
-        !isDeepStrictEqual(JSON.parse(execution.input), job.execution_input)
-      )
-        throw Error(
-          "Source preparation execution input does not match the persisted request.",
-        );
-      if (
-        execution.status !== "SUCCEEDED" ||
-        !execution.outputIncluded ||
-        !execution.output
-      )
-        throw Error(
-          "Source preparation failed or returned no attested output.",
-        );
-      const output = JSON.parse(execution.output);
-      if (
-        output.contractVersion !== 2 ||
-        typeof output.manifestKey !== "string"
-      )
-        throw Error(
-          "The ingestion adapter must implement the version-2 source-driven period contract.",
-        );
-      const manifest = sessionManifestSchema.parse(
-        await this.storage.json(output.manifestKey, prefix),
-      );
       if (
         config.sourceExtraction &&
         !isDeepStrictEqual(
@@ -177,14 +247,15 @@ export class PrepaidPreparationWorker {
         )
       )
         throw Error(
-          "The final ingestion manifest must attest the verified four-workflow extraction receipts.",
+          "The final ingestion manifest must attest the verified native-source extraction receipts.",
         );
       if (
         manifest.sessionId !== session.id ||
         manifest.workspaceId !== session.workspace_id ||
         manifest.preparationId !== job.id ||
         manifest.sourceVersion !== job.source_version ||
-        manifest.executionArn !== job.execution_arn
+        manifest.executionArn !==
+          (native ? `backend:preparation:${job.id}` : job.execution_arn)
       )
         throw Error(
           "Preparation manifest identifies another session or execution.",

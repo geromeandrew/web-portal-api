@@ -6,6 +6,10 @@ import {
   manualIntegrationSchema,
 } from "../domain/contracts.js";
 import { PrepaidRunService } from "./runService.js";
+import {
+  reportWorkbook,
+  type ReportSheet,
+} from "../infrastructure/reportWorkbook.js";
 
 /** Exports only immutable, owned revisions; never creates SAP delivery work. */
 export async function frozenReports(
@@ -43,6 +47,11 @@ export async function frozenReports(
     };
     for (const revision of revisions) {
       const prefix = `${revision.region}-r${revision.revision}`;
+      // Never retrofit the new format onto historical frozen revisions.
+      const format =
+        revision.format ??
+        manualIntegrationSchema.parse(run.configuration).format;
+      const sheets: ReportSheet[] = [];
       for (const [table, order] of [
         ["layout_rows", "layout_number"],
         ["allocations", "id"],
@@ -63,10 +72,22 @@ export async function frozenReports(
         const fields = Object.keys(rows[0] ?? {}).filter(
           (x) => x !== "revision_id" && x !== "id",
         );
-        add(
-          `${prefix}-${table}.csv`,
-          encodeDelimited(rows, fields, ",", "\r\n", "utf8"),
-        );
+        if (format.fileType === "xlsx")
+          sheets.push({
+            name:
+              table === "layout_rows"
+                ? "Layout"
+                : table === "allocations"
+                  ? "Allocation"
+                  : "Reconciliation",
+            headers: fields,
+            rows,
+          });
+        else
+          add(
+            `${prefix}-${table}.csv`,
+            encodeDelimited(rows, fields, ",", "\r\n", "utf8"),
+          );
       }
       const jv = (
         await db.query(
@@ -80,20 +101,24 @@ export async function frozenReports(
           "PREPAID_REPORT_TOO_LARGE",
           "This JV exceeds the synchronous row limit.",
         );
-      // Existing frozen runs use the immutable run configuration as fallback.
-      const format =
-        revision.format ??
-        manualIntegrationSchema.parse(run.configuration).format;
-      add(
-        `${prefix}-jv.txt`,
-        encodeDelimited(
-          jv.map((x) => x.fields),
-          jvHeaders,
-          format.delimiter,
-          format.lineEnding,
-          format.encoding,
-        ),
-      );
+      if (format.fileType === "xlsx") {
+        sheets.push({
+          name: "JV",
+          headers: jvHeaders,
+          rows: jv.map((x) => x.fields),
+        });
+        add(`${prefix}-reports.xlsx`, await reportWorkbook(sheets));
+      } else
+        add(
+          `${prefix}-jv.txt`,
+          encodeDelimited(
+            jv.map((x) => x.fields),
+            jvHeaders,
+            format.delimiter,
+            format.lineEnding,
+            format.encoding,
+          ),
+        );
     }
     // ZIP defaults to today's timestamp, which changes otherwise immutable bytes.
     return Buffer.from(

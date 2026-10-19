@@ -25,6 +25,7 @@ services:
       AWS_REGION: ${AWS_REGION}
       AWS_LOCAL: "false"
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES}
+      PREPAID_MAX_UPLOAD_BYTES: ${PREPAID_MAX_UPLOAD_BYTES:-104857600}
       ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES}
     command: ["node", "dist/migrate.js"]
     networks: [portal]

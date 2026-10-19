@@ -6,6 +6,8 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { createHash } from "node:crypto";
+import type { Readable } from "node:stream";
+import { prepaidMaximumSourceBytes } from "../domain/limits.js";
 import {
   sourceWorkflows,
   type SourceWorkflow,
@@ -113,18 +115,29 @@ export class LegacyLanding implements SourceLanding {
         object.Metadata?.["portal-owner"] !== owner ||
         object.Metadata?.["portal-sha256"] !== file.sha256 ||
         !object.ETag ||
-        (object.ContentLength ?? 0) > 4_500_000
+        (object.ContentLength ?? 0) > prepaidMaximumSourceBytes
       ) {
         (object.Body as any)?.destroy?.();
         throw new SharedExtractionBusy(
           "A shared input object is not owned by this extraction; refusing overwrite/delete.",
         );
       }
-      const bytes = await object.Body?.transformToByteArray();
-      if (
-        !bytes ||
-        createHash("sha256").update(bytes).digest("hex") !== file.sha256
-      )
+      const body = object.Body as Readable | undefined;
+      if (!body) throw Error("Shared input object has no body.");
+      const digest = createHash("sha256");
+      let length = 0;
+      try {
+        for await (const chunk of body) {
+          const bytes = Buffer.from(chunk);
+          length += bytes.length;
+          if (length > prepaidMaximumSourceBytes)
+            throw Error("Shared input exceeds the source byte limit.");
+          digest.update(bytes);
+        }
+      } finally {
+        body.destroy();
+      }
+      if (digest.digest("hex") !== file.sha256)
         throw Error("Shared input checksum differs from the uploaded source.");
       return object.ETag;
     } catch (e) {
@@ -138,13 +151,13 @@ export class LegacyLanding implements SourceLanding {
     if (names.size !== files.length)
       throw Error("Duplicate shared input filenames.");
     const pattern = sourceWorkflows[workflow].inputPattern;
-    const matches = (name: string) =>
-      workflow === "adjustments_308"
-        ? name
-            .toLowerCase()
-            .startsWith("308. billed adjustments monthly summary report_g_b") &&
-          name.toLowerCase().endsWith(".xlsx")
-        : name.toLowerCase() === pattern.toLowerCase();
+    const matches = (name: string) => {
+      const [prefix, suffix] = pattern.toLowerCase().split("**");
+      return suffix === undefined
+        ? name.toLowerCase() === prefix
+        : name.toLowerCase().startsWith(prefix) &&
+            name.toLowerCase().endsWith(suffix);
+    };
     if (!files.length || files.some((f) => !matches(f.name)))
       throw Error(
         "Source filename does not match the existing Glue input contract.",
@@ -152,7 +165,7 @@ export class LegacyLanding implements SourceLanding {
     if (
       files.some(
         (file) =>
-          file.bytes.length > 4_500_000 ||
+          file.bytes.length > prepaidMaximumSourceBytes ||
           createHash("sha256").update(file.bytes).digest("hex") !== file.sha256,
       )
     )
@@ -199,7 +212,9 @@ export class LegacyLanding implements SourceLanding {
               .update(file.bytes)
               .digest("base64"),
             ContentType:
-              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              sourceWorkflows[workflow].format === "csv"
+                ? "text/csv"
+                : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           }),
         );
       } catch (e) {
@@ -225,7 +240,16 @@ export class LegacyLanding implements SourceLanding {
           }),
         );
     }
-    const lock = await this.assertOwner(owner);
+    await this.release(owner);
+  }
+  /** Idempotent release for a reference-only operation; never remove inbound files. */
+  async release(owner: string) {
+    const lock = await this.lock();
+    if (!lock) return;
+    if (lock.owner !== owner)
+      throw new SharedExtractionBusy(
+        "Shared extraction lock is owned by another operation; refusing release.",
+      );
     await this.client.send(
       new DeleteObjectCommand({
         Bucket: this.bucket,

@@ -18,11 +18,13 @@ const config: Config = {
   OKTA_ISSUER: "https://example.okta.com/oauth2/default",
   OKTA_AUDIENCE: "api://default",
   OKTA_CLIENT_ID: "test-client-id",
-  RATE_LIMIT_HMAC_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
+  RATE_LIMIT_HMAC_SECRET:
+    "a-very-long-test-secret-that-is-at-least-32-characters",
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
   AWS_LOCAL: false,
   MAX_UPLOAD_BYTES: 4_500_000,
+  PREPAID_MAX_UPLOAD_BYTES: 104_857_600,
   OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: false,
 };
 

@@ -134,6 +134,64 @@ add(
   "get",
   "Read schema/configuration readiness; never starts AWS jobs or verifies SAP connectivity",
 );
+add(
+  "/reference-exports",
+  "post",
+  "Administrator: queue a verified immutable SAP reference export",
+  json({
+    type: "object",
+    additionalProperties: false,
+    required: ["idempotencyKey", "period", "mode", "scopeApproved"],
+    oneOf: [
+      { properties: { mode: { type: "string", enum: ["export_existing"] } } },
+      {
+        required: ["sharedWritesApproved"],
+        properties: { mode: { type: "string", enum: ["refresh_and_export"] } },
+      },
+    ],
+    properties: {
+      idempotencyKey: { type: "string", format: "uuid" },
+      period: { type: "string", pattern: "^\\d{4}-(0[1-9]|1[0-2])$" },
+      mode: { type: "string", enum: ["export_existing", "refresh_and_export"] },
+      scopeApproved: {
+        type: "boolean",
+        enum: [true],
+        description:
+          "Acknowledge the portal scope: client 300, company GLOB. GLOB is not an explicit legacy-view filter.",
+      },
+      sharedWritesApproved: {
+        type: "boolean",
+        enum: [true],
+        description:
+          "Required for refresh_and_export: authorizes the existing Glue job's whole-table overwrite.",
+      },
+    },
+  }),
+  "202",
+);
+add(
+  "/reference-exports/{referenceId}",
+  "get",
+  "Administrator: poll a reference operation and retrieve its immutable export descriptor",
+);
+add(
+  "/reference-exports/{referenceId}/reconcile",
+  "post",
+  "Administrator: reconcile an unknown original reference run without starting another",
+  json({ type: "object", additionalProperties: false }),
+  "202",
+);
+for (const path of [
+  "/reference-exports",
+  "/reference-exports/{referenceId}",
+  "/reference-exports/{referenceId}/reconcile",
+]) {
+  const operation = paths[`/api/workflows/prepaid${path}`]!;
+  for (const method of ["get", "post"] as const)
+    if (operation[method])
+      operation[method]!.description =
+        "Requires authentication, Prepaid module access, active administrator permission and migration 009; no run is needed. Explicit opt-in operation, never triggered by uploads. export_existing only reads PostgreSQL. refresh_and_export calls the inspected existing ZTF0455S Glue job, not a Step Function, after shared-job coordination and destination/script checks. Poll status; unknown dispatch must be reconciled and is never blindly retried. Completion returns result.referenceExport {key,prefix,sha256,rowCount}, without an approval flag. An administrator must review/approve this descriptor in PUT /integration. No cycle values or business approvals are invented. Source rows, credentials and durable snapshot bytes are not returned.";
+}
 paths["/api/workflows/prepaid/readiness"]!.get!.description =
   "Requires authentication and Prepaid module access, not run ownership. Returns schemaInstalled, integrationConfigured, readyForUploads, actionable checks, legacyBasis and externalVerification=not_verified. legacyBasis distinguishes supplied SQL Agent/JV evidence from unavailable job steps, cycle data and physical export settings. It is not executable AWS configuration. Configuration is not proof of deployed ingestion or SAP acceptance.";
 (
@@ -153,6 +211,11 @@ paths["/api/workflows/prepaid/readiness"]!.get!.description =
       ],
       properties: {
         schemaInstalled: { type: "boolean" },
+        referenceExportsAvailable: {
+          type: "boolean",
+          description:
+            "Migration 009 admin reference capability is installed. Independent of existing approved external-reference upload readiness.",
+        },
         integrationConfigured: { type: "boolean" },
         readyForUploads: { type: "boolean" },
         externalVerification: { type: "string", enum: ["not_verified"] },
@@ -164,6 +227,7 @@ paths["/api/workflows/prepaid/readiness"]!.get!.description =
           properties: {
             ingestion: { type: "object", additionalProperties: true },
             freeze: { type: "object", additionalProperties: true },
+            referenceSupply: { type: "object", additionalProperties: true },
             billingCycles: { type: "object", additionalProperties: true },
             journal: { type: "object", additionalProperties: true },
           },
@@ -194,17 +258,63 @@ add(
   "Configure approved ingestion and manual report format (administrator only)",
   json({
     type: "object",
-    required: ["ingestStateMachine", "expectedCycles", "format"],
+    required: ["expectedCycles", "format"],
+    oneOf: [
+      {
+        required: ["ingestStateMachine"],
+        properties: {
+          preparationMode: { type: "string", enum: ["external_adapter"] },
+        },
+      },
+      {
+        required: ["preparationMode", "sourceExtraction", "referenceExport"],
+        properties: {
+          preparationMode: { type: "string", enum: ["native_sources"] },
+          sourceExtraction: {
+            type: "object",
+            required: ["coverage"],
+            properties: { coverage: { type: "string", enum: ["all_sources"] } },
+          },
+        },
+      },
+    ],
     properties: {
-      ingestStateMachine: { type: "string" },
+      ingestStateMachine: {
+        type: "string",
+        description:
+          "Required for external_adapter mode only; must not name a partial source extractor.",
+      },
+      preparationMode: {
+        type: "string",
+        enum: ["external_adapter", "native_sources"],
+        default: "external_adapter",
+      },
+      referenceExport: {
+        type: "object",
+        required: ["key", "prefix", "sha256", "rowCount", "approved"],
+        properties: {
+          key: { type: "string" },
+          prefix: { type: "string" },
+          sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          rowCount: { type: "integer", minimum: 1 },
+          approved: { type: "boolean", enum: [true] },
+        },
+        description:
+          "Native mode uses an explicitly approved immutable legacy ZTF0455S JSONL export. Its hash/count and fields are validated; approval is not inferred.",
+      },
       sourceExtraction: {
         type: "object",
         required: ["envPrefix", "sharedWritesApproved"],
         additionalProperties: false,
         description:
-          "Optional unchanged four-workflow extraction using only env_prefix. The backend validates/normalizes originals and creates receipts; no Portal* states or script deployment required. Requires explicit approval for shared legacy raw-table writes and coordinated input folders. Does not replace the complete V2 adapter.",
+          "Optional unchanged native source extraction using only env_prefix. The backend validates/normalizes originals and creates receipts; no Portal* states or script deployment required. Requires explicit approval for shared legacy raw-table writes and coordinated input folders. all_sources plus native_sources mode supplies the canonical backend producer; external_adapter mode still requires its V2 adapter.",
         properties: {
           envPrefix: { type: "string", enum: ["isg-esatp-dv"] },
+          coverage: {
+            type: "string",
+            enum: ["legacy_four", "all_sources"],
+            default: "legacy_four",
+          },
           sharedWritesApproved: { type: "boolean", enum: [true] },
         },
       },
@@ -224,22 +334,39 @@ add(
         items: { type: "string", pattern: "^[0-9]{2}$" },
       },
       format: {
-        type: "object",
-        required: [
-          "profile",
-          "approved",
-          "delimiter",
-          "lineEnding",
-          "encoding",
+        description:
+          "New manual reports use the user-confirmed XLSX file type. Existing delimited profiles are retained for immutable historical downloads. XLSX does not require delimiter, lineEnding or encoding. No automatic SAP delivery is enabled.",
+        oneOf: [
+          {
+            type: "object",
+            required: ["fileType", "profile", "approved"],
+            properties: {
+              fileType: { type: "string", enum: ["xlsx"] },
+              profile: { type: "string", minLength: 1 },
+              approved: { type: "boolean", enum: [true] },
+              reversalSupported: { type: "boolean" },
+            },
+          },
+          {
+            type: "object",
+            required: [
+              "profile",
+              "approved",
+              "delimiter",
+              "lineEnding",
+              "encoding",
+            ],
+            properties: {
+              fileType: { type: "string", enum: ["delimited"] },
+              profile: { type: "string" },
+              approved: { type: "boolean", enum: [true] },
+              delimiter: { type: "string", enum: ["\t", "|", ","] },
+              lineEnding: { type: "string", enum: ["\r\n", "\n"] },
+              encoding: { type: "string", enum: ["utf8", "utf16le"] },
+              reversalSupported: { type: "boolean" },
+            },
+          },
         ],
-        properties: {
-          profile: { type: "string" },
-          approved: { type: "boolean", enum: [true] },
-          delimiter: { type: "string", enum: ["\t", "|", ","] },
-          lineEnding: { type: "string", enum: ["\r\n", "\n"] },
-          encoding: { type: "string", enum: ["utf8", "utf16le"] },
-          reversalSupported: { type: "boolean" },
-        },
       },
     },
   }),
@@ -247,7 +374,7 @@ add(
 add(
   "/workspace/extractions",
   "get",
-  "Read your four source workflow executions and remaining external dependencies",
+  "Read your configured source workflow executions and remaining external dependencies",
 );
 add("/runs", "get", "List accounting-period runs in your workspace");
 add(
@@ -525,6 +652,12 @@ add(
 );
 const zipPath =
   paths["/api/workflows/prepaid/runs/{runId}/reports/{snapshotFile}"]!.get!;
+zipPath.description =
+  "Requires ownership and a frozen snapshot. XLSX profiles produce one workbook per region/revision with Layout, Allocation, Reconciliation and JV sheets; the JV retains the 40 legacy business columns. Decimal strings/account codes are literal Excel text, not formulas or rounded JS numbers. Existing frozen delimited profiles retain CSV/text output. ZIP/workbook bytes are deterministic. Synchronous workbook limits: 250,000 cells, 32 MiB cell text; oversized output returns 413 without truncation. This endpoint never posts to SAP.";
+(zipPath.responses["413"] as OpenAPIV3.ResponseObject) = {
+  description:
+    "Report row, cell or byte bound exceeded; nothing was truncated.",
+};
 (zipPath.responses["200"] as OpenAPIV3.ResponseObject).content = {
   "application/zip": { schema: { type: "string", format: "binary" } },
 };

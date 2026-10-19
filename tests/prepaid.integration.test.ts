@@ -6,10 +6,14 @@ import { prepaidWorkspaceMigrationSql } from "../src/modules/prepaid/infrastruct
 import { prepaidConsistencyMigrationSql } from "../src/modules/prepaid/infrastructure/consistencyMigration.js";
 import { prepaidLegacyRulesMigrationSql } from "../src/modules/prepaid/infrastructure/legacyRulesMigration.js";
 import { prepaidSourceExtractionMigrationSql } from "../src/modules/prepaid/infrastructure/sourceExtractionMigration.js";
+import { prepaidAllSourceMigrationSql } from "../src/modules/prepaid/infrastructure/allSourceMigration.js";
 import { prepaidSourceBackendMigrationSql } from "../src/modules/prepaid/infrastructure/sourceBackendMigration.js";
+import { prepaidReferenceRefreshMigrationSql } from "../src/modules/prepaid/infrastructure/referenceRefreshMigration.js";
 import { PrepaidWorkspaceService } from "../src/modules/prepaid/application/workspaceService.js";
 import { PrepaidPreparationWorker } from "../src/modules/prepaid/application/preparationWorker.js";
 import { frozenReports } from "../src/modules/prepaid/application/reportService.js";
+import { unzipSync } from "fflate";
+import ExcelJS from "exceljs";
 import { prepaidMigrationSql } from "../src/modules/prepaid/infrastructure/migrations.js";
 import { PrepaidRepository } from "../src/modules/prepaid/infrastructure/repository.js";
 import {
@@ -146,6 +150,8 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
     await q(prepaidLegacyRulesMigrationSql(schema));
     await q(prepaidSourceExtractionMigrationSql(schema));
     await q(prepaidSourceBackendMigrationSql(schema));
+    await q(prepaidAllSourceMigrationSql(schema, schema + "_raw"));
+    await q(prepaidReferenceRefreshMigrationSql(schema));
     await service.configure(user, configuration);
     const app = express();
     app.use(express.json());
@@ -189,7 +195,9 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
     // Exactly the randomly generated test schema in the dedicated test cluster.
     if (!/^prepaid_test_[a-f0-9]{32}$/.test(schema))
       throw new Error("Unsafe test schema cleanup");
-    await q(`DROP SCHEMA "${schema}" CASCADE`);
+    await q(
+      `DROP SCHEMA "${schema}_raw" CASCADE; DROP SCHEMA "${schema}" CASCADE`,
+    );
     await pool.end();
   });
   async function fresh(setup?: (run: Record<string, any>) => Promise<void>) {
@@ -719,6 +727,72 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
         [result.revisionId],
       ),
     ).rejects.toThrow("PREPAID_AUDIT_APPEND_ONLY");
+  });
+  it("freezes XLSX reports from PostgreSQL, preserves their format, and never creates SAP delivery", async () => {
+    const next = {
+      ...configuration,
+      format: {
+        fileType: "xlsx",
+        profile: "prepaid-manual-xlsx-v1",
+        approved: true,
+      },
+    };
+    await service.configure(user, next);
+    try {
+      const { run, layout } = await imported();
+      const before = start.mock.calls.length;
+      const frozen = await service.freeze(user, run.id, "eg", layout.version);
+      const revision = await repo.revision(pool, run.id, "eg");
+      const archive = await frozenReports(
+        service,
+        user,
+        run.id,
+        revision.source_snapshot_id,
+      );
+      const files = unzipSync(archive);
+      const name = `eg-r${revision.revision}-reports.xlsx`;
+      expect(Object.keys(files)).toEqual([name]);
+      const book = new ExcelJS.Workbook();
+      await book.xlsx.load(Buffer.from(files[name]) as any);
+      expect(book.worksheets.map((sheet) => sheet.name)).toEqual([
+        "Layout",
+        "Allocation",
+        "Reconciliation",
+        "JV",
+      ]);
+      expect(book.getWorksheet("JV")!.getRow(1).values).toEqual([
+        undefined,
+        ...jvHeaders,
+      ]);
+      expect(frozen.status).toBe("staged");
+      expect(
+        (
+          await q("SELECT 1 FROM prepaid_deliveries WHERE revision_id=$1", [
+            revision.id,
+          ])
+        ).rowCount,
+      ).toBe(0);
+      expect(start.mock.calls.length).toBe(before);
+      // Changing the live settings must not rewrite an existing frozen XLSX.
+      await service.configure(user, configuration);
+      expect(
+        await frozenReports(service, user, run.id, revision.source_snapshot_id),
+      ).toEqual(archive);
+      const denied = await fetch(
+        `${base}/runs/${run.id}/reports/${revision.source_snapshot_id}.zip`,
+        { headers: { "x-test-user": otherUser } },
+      );
+      expect(denied.status).toBe(404);
+      const response = await fetch(
+        `${base}/runs/${run.id}/reports/${revision.source_snapshot_id}.zip`,
+        { headers: { "x-test-user": user } },
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("application/zip");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(archive);
+    } finally {
+      await service.configure(user, configuration);
+    }
   });
   it("workspace GET creates nothing and invalid upload cannot create a session", async () => {
     const fresh = randomUUID();

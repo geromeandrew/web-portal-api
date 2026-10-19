@@ -5,10 +5,15 @@ import { GlueClient } from "@aws-sdk/client-glue";
 import { SFNClient } from "@aws-sdk/client-sfn";
 import { loadConfig } from "../../../config.js";
 import { createAwsClientOptions } from "../../../aws.js";
-import { datasetSchemas } from "../domain/contracts.js";
+import { periodSchema } from "../domain/contracts.js";
+import { prepaidMaximumSourceBytes } from "../domain/limits.js";
+import { validateSourceFragment } from "../domain/sourceFragments.js";
 import {
   extractionReceiptSchema,
   sourceWorkflows,
+  selectedSourceWorkflows,
+  sourceBelongsTo,
+  sourceLandingName,
   validateLegacySourceDefinition,
   type SourceWorkflow,
   type sourceExtractionSchema,
@@ -92,7 +97,7 @@ export class PrepaidSourceExtractionWorker {
     // Read-only inspection, never an AWS deployment. Fail before any shared copy
     // or execution if an unchanged workflow has a known incompatible contract.
     try {
-      for (const workflow of Object.keys(sourceWorkflows) as SourceWorkflow[]) {
+      for (const workflow of selectedSourceWorkflows(settings)) {
         const definition = await this.runner.describeStateMachineDefinition(
           sourceWorkflows[workflow].machine,
         );
@@ -119,16 +124,30 @@ export class PrepaidSourceExtractionWorker {
     const machines = [...definitions.values()].map((d) => d.arn);
     const revision = await this.normalizer.revision();
     const receipts: Summary[] = [];
-    for (const workflow of Object.keys(sourceWorkflows) as SourceWorkflow[]) {
+    let accountingPeriod: string | undefined;
+    const recordReceipt = async (receipt: Summary) => {
+      receipts.push(receipt);
+      if (receipt.workflow === "ke24") {
+        const periods = new Set<string>();
+        for (const artifact of receipt.artifacts)
+          for await (const value of this.storage.rows(
+            artifact.key,
+            this.storage.sessionPrefix(session.id),
+            artifact.sha256,
+            artifact.rowCount,
+          ))
+            periods.add(periodSchema.parse((value as any).period));
+        if (periods.size !== 1)
+          throw new PrepaidSourceExtractionError(
+            "KE24 must identify exactly one accounting period.",
+          );
+        accountingPeriod = [...periods][0];
+      }
+    };
+    for (const workflow of selectedSourceWorkflows(settings)) {
       await owns();
       const sources = job.source_files
-        .filter((f: any) =>
-          workflow === "adjustments_308"
-            ? /^308_\d{2}$/.test(f.source_code)
-            : sourceWorkflows[workflow].sources.some(
-                (code) => code === f.source_code,
-              ),
-        )
+        .filter((f: any) => sourceBelongsTo(workflow, f.source_code))
         .map((f: any) => ({
           id: f.id,
           code: f.source_code,
@@ -143,7 +162,8 @@ export class PrepaidSourceExtractionWorker {
       if (
         new Set(sources.map((s: any) => s.id)).size !== sources.length ||
         new Set(sources.map((s: any) => s.code)).size !== sources.length ||
-        (workflow !== "adjustments_308" && sources.length !== 1)
+        (!["adjustments_308", "charges_318"].includes(workflow) &&
+          sources.length !== 1)
       )
         throw new PrepaidSourceExtractionError(
           "Duplicate source identities for extraction.",
@@ -165,6 +185,7 @@ export class PrepaidSourceExtractionWorker {
         sourceVersion: job.source_version,
         producer: "backend" as const,
         normalizerRevision: revision,
+        ...(accountingPeriod ? { accountingPeriod } : {}),
         sources,
       };
       await this.repo.pool.query(
@@ -207,10 +228,7 @@ export class PrepaidSourceExtractionWorker {
         );
       const receiptKey = `${outputPrefix}receipt.json`;
       const copyNames = sources.map((s: any) => ({
-        name:
-          workflow === "adjustments_308"
-            ? `308. Billed Adjustments Monthly Summary Report_G_BC${s.code.slice(4)}.xlsx`
-            : sourceWorkflows[workflow].inputPattern,
+        name: sourceLandingName(workflow, s.code),
         sha256: s.sha256,
       }));
       if (!row.context) {
@@ -220,7 +238,7 @@ export class PrepaidSourceExtractionWorker {
             const bytes = await this.storage.bytes(
               source.key,
               `${this.storage.sessionPrefix(session.id)}sources/${source.id}/`,
-              4_500_000,
+              prepaidMaximumSourceBytes,
             );
             if (sha256(bytes) !== source.sha256)
               throw Error("Uploaded source checksum mismatch.");
@@ -228,11 +246,9 @@ export class PrepaidSourceExtractionWorker {
               workflow,
               source.code,
               bytes,
+              accountingPeriod,
             );
-            const expectedNames =
-              workflow === "adjustments_308"
-                ? ["adjustment_headers", "adjustments"]
-                : [workflow === "callcard_sg" ? "callcard" : "loadapi"];
+            const expectedNames = [...sourceWorkflows[workflow].artifacts];
             if (
               !isDeepStrictEqual(
                 Object.keys(fragments).sort(),
@@ -243,13 +259,21 @@ export class PrepaidSourceExtractionWorker {
             for (const [name, values] of Object.entries(fragments)) {
               const artifactName = name as Receipt["artifacts"][number]["name"];
               if (
-                ((name === "loadapi" || name === "adjustment_headers") &&
+                ([
+                  "loadapi",
+                  "loadup",
+                  "adjustment_headers",
+                  "charge_headers",
+                ].includes(name) &&
                   values.length !== 1) ||
-                (name === "callcard" && values.length !== 2)
+                (workflow === "callcard_sg" &&
+                  name === "callcard" &&
+                  values.length !== 2) ||
+                (name === "ke24" && values.length === 0)
               )
                 throw Error("Unexpected source aggregate/header row count.");
               for (const value of values)
-                this.validateFragment(
+                validateSourceFragment(
                   workflow,
                   source.code,
                   artifactName,
@@ -343,7 +367,7 @@ export class PrepaidSourceExtractionWorker {
               "Saved backend receipt identity mismatch.",
             );
         await cleanup();
-        receipts.push({
+        await recordReceipt({
           workflow,
           executionArn: expectedArn,
           receiptKey,
@@ -361,7 +385,7 @@ export class PrepaidSourceExtractionWorker {
             const bytes = await this.storage.bytes(
               source.key,
               `${this.storage.sessionPrefix(session.id)}sources/${source.id}/`,
-              4_500_000,
+              prepaidMaximumSourceBytes,
             );
             if (sha256(bytes) !== source.sha256)
               throw new PrepaidSourceExtractionError(
@@ -445,7 +469,7 @@ export class PrepaidSourceExtractionWorker {
             artifact.sha256,
             artifact.rowCount,
           ))
-            this.validateFragment(
+            validateSourceFragment(
               workflow,
               artifact.sourceCode,
               artifact.name,
@@ -456,7 +480,7 @@ export class PrepaidSourceExtractionWorker {
         failure = (e as Error).message;
       }
       // Even a failed SFN may leave a Glue cancellation in flight. Do not clean,
-      // release or mark a definitive failure until all five Glue jobs are idle.
+      // release or mark a definitive failure until all twelve Glue jobs are idle.
       await cleanup();
       if (failure) {
         await owns();
@@ -480,7 +504,7 @@ export class PrepaidSourceExtractionWorker {
         `UPDATE ${this.t("source_extractions")} SET status='completed',receipt=$2,completed_at=now() WHERE id=$1`,
         [row.id, JSON.stringify(receipt)],
       );
-      receipts.push({
+      await recordReceipt({
         workflow,
         executionArn: expectedArn,
         receiptKey,
@@ -499,39 +523,5 @@ export class PrepaidSourceExtractionWorker {
       `UPDATE ${this.t("source_extractions")} SET status='failed',error=$2,completed_at=now() WHERE id=$1 AND EXISTS(SELECT 1 FROM ${this.t("preparation_jobs")} WHERE id=$3 AND lease_token=$4 AND status='running')`,
       [id, message, preparationId, token],
     );
-  }
-  private validateFragment(
-    workflow: SourceWorkflow,
-    code: string,
-    name: Receipt["artifacts"][number]["name"],
-    value: unknown,
-  ) {
-    if (name === "adjustment_headers") {
-      const header = z
-        .object({
-          cycle: z.string().regex(/^\d{2}$/),
-          cycleYear: z.string().regex(/^\d{4}$/),
-          cycleInstance: z.string().min(1),
-        })
-        .parse(value);
-      if (header.cycle !== code.slice(4))
-        throw Error("308 header cycle mismatch.");
-    } else {
-      const schemas = {
-        callcard: datasetSchemas.callcard.omit({ period: true }),
-        loadapi: datasetSchemas.loadapi.omit({ period: true }),
-        adjustments: datasetSchemas.adjustments.omit({ period: true }),
-      };
-      const data = schemas[name].parse(value) as any;
-      if (
-        name === "loadapi" &&
-        data.region !== (workflow === "load_api_eg" ? "eg" : "sg")
-      )
-        throw Error("Load API region mismatch.");
-      if (name === "callcard" && data.region !== "sg")
-        throw Error("Call Card region mismatch.");
-      if (name === "adjustments" && data.cycle !== code.slice(4))
-        throw Error("Adjustment cycle mismatch.");
-    }
   }
 }

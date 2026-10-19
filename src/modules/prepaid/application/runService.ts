@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { AppError } from "../../../errors.js";
+import { prepaidMaximumSourceBytes } from "../domain/limits.js";
 import { assertAdministrator } from "../../../rbac.js";
 import {
   manualIntegrationSchema,
@@ -30,12 +31,20 @@ export class PrepaidRunService {
       "integrations",
       "source_totals",
       "source_extractions",
+      "reference_refreshes",
     ];
     const present = await this.repo.pool.query(
-      "SELECT name,to_regclass(name) IS NOT NULL present FROM unnest($1::text[]) name UNION ALL SELECT 'backend_source_context',EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass($2) AND attname='context' AND NOT attisdropped)",
+      "SELECT name,to_regclass(name) IS NOT NULL present FROM unnest($1::text[]) name UNION ALL SELECT 'backend_source_context',EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass($2) AND attname='context' AND NOT attisdropped) UNION ALL SELECT 'all_source_workflows',EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass($2) AND conname='prepaid_source_extractions_workflow_check' AND pg_get_constraintdef(oid) LIKE '%charges_318%')",
       [objects.map((x) => this.t(x)), this.t("source_extractions")],
     );
-    const schemaInstalled = present.rows.every((r) => r.present);
+    // Migration 009 is an additive admin capability. Existing installations
+    // using an approved external reference export do not lose their upload path.
+    const referenceExportsAvailable = !!present.rows.find(
+      (r) => r.name === this.t("reference_refreshes"),
+    )?.present;
+    const schemaInstalled = present.rows
+      .filter((r) => r.name !== this.t("reference_refreshes"))
+      .every((r) => r.present);
     const hasIntegration = present.rows[3]?.present;
     const stored = hasIntegration
       ? (
@@ -51,9 +60,16 @@ export class PrepaidRunService {
         status: schemaInstalled ? "configured" : "missing",
         message: schemaInstalled
           ? "Prepaid schema is installed."
-          : "Install Prepaid migrations 001 through 007.",
+          : "Install Prepaid migrations 001 through 008.",
       },
       ...configuration.checks,
+      {
+        code: "referenceExports",
+        status: referenceExportsAvailable ? "configured" : "missing",
+        message: referenceExportsAvailable
+          ? "Administrator reference refresh/export is available; live data and mapping approval still require verification."
+          : "Install additive migration 009 to enable administrator SAP reference refresh/export. Existing approved external reference exports remain supported.",
+      },
       {
         code: "externalVerification",
         status: "not_verified",
@@ -63,6 +79,7 @@ export class PrepaidRunService {
     ];
     return {
       schemaInstalled,
+      referenceExportsAvailable,
       integrationConfigured: configuration.integrationConfigured,
       readyForUploads: schemaInstalled && configuration.integrationConfigured,
       legacyBasis: configuration.legacyBasis,
@@ -232,6 +249,12 @@ export class PrepaidRunService {
     code: string,
     file: { originalname: string; buffer: Buffer; mimetype: string },
   ) {
+    if (file.buffer.length > prepaidMaximumSourceBytes)
+      throw new AppError(
+        413,
+        "PREPAID_SOURCE_TOO_LARGE",
+        "Prepaid sources must not exceed 100 MiB.",
+      );
     const run = await this.repo.own(this.repo.pool, userId, runId);
     const config = manualIntegrationSchema.parse(run.configuration);
     if (
@@ -427,6 +450,12 @@ export class PrepaidRunService {
     return this.repo.transaction(async (db) => {
       await this.mutableSources(db, userId, runId);
       const source = await this.sources(userId, runId, db);
+      if (source.config.preparationMode === "native_sources")
+        throw new AppError(
+          409,
+          "PREPAID_NATIVE_WORKSPACE_REQUIRED",
+          "Use workspace upload/prepare for native sources; run-scoped external ingestion is not configured.",
+        );
       if (!source.valid)
         throw new AppError(
           400,

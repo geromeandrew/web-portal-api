@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import type { SourceWorkflow } from "../domain/sourceExtraction.js";
+import { prepaidMaximumSourceBytes } from "../domain/limits.js";
 
 export interface SourceNormalizer {
   revision(): Promise<string>;
@@ -11,6 +12,7 @@ export interface SourceNormalizer {
     workflow: SourceWorkflow,
     code: string,
     bytes: Buffer,
+    period?: string,
   ): Promise<Record<string, unknown[]>>;
 }
 
@@ -30,8 +32,13 @@ export class BackendSourceNormalizer implements SourceNormalizer {
       .update(await readFile(this.core))
       .digest("hex");
   }
-  async normalize(workflow: SourceWorkflow, code: string, bytes: Buffer) {
-    if (bytes.length > 4_500_000)
+  async normalize(
+    workflow: SourceWorkflow,
+    code: string,
+    bytes: Buffer,
+    period?: string,
+  ) {
+    if (bytes.length > prepaidMaximumSourceBytes)
       throw Error("Source exceeds portal upload limit.");
     const venv = fileURLToPath(
       new URL(
@@ -51,7 +58,14 @@ export class BackendSourceNormalizer implements SourceNormalizer {
     return new Promise<Record<string, unknown[]>>((resolve, reject) => {
       const child = spawn(
         executable,
-        ["-X", "utf8", fileURLToPath(this.helper), workflow, code],
+        [
+          "-X",
+          "utf8",
+          fileURLToPath(this.helper),
+          workflow,
+          code,
+          ...(period ? [period] : []),
+        ],
         { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
       );
       const output: Buffer[] = [],
@@ -69,7 +83,7 @@ export class BackendSourceNormalizer implements SourceNormalizer {
       };
       const timeout = setTimeout(
         () => finish(Error("Backend source normalization timed out.")),
-        60_000,
+        180_000,
       );
       child.on("error", () =>
         finish(

@@ -29,6 +29,7 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES}
+      PREPAID_MAX_UPLOAD_BYTES: ${PREPAID_MAX_UPLOAD_BYTES:-104857600}
       ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES}
     command: ["node", "dist/migrate.js"]
     networks: [portal]

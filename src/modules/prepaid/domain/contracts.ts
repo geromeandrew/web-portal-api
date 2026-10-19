@@ -182,7 +182,7 @@ export const integrationSchema = z.object({
         !Object.values(sourceWorkflows).some(
           (workflow) => workflow.machine === value,
         ),
-      "The four supplied source workflows are partial extractors, not a complete V2 adapter. Configure them through sourceExtraction, not ingestStateMachine.",
+      "The supplied source workflows are partial extractors, not a complete V2 adapter. Configure them through sourceExtraction, not ingestStateMachine.",
     ),
   deliveryStateMachine: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
   target: z.string().min(1).max(100),
@@ -204,20 +204,81 @@ export const integrationSchema = z.object({
   }),
 });
 export type Integration = z.infer<typeof integrationSchema>;
-// Manual staging needs ingestion and an approved export format, not SAP dispatch.
-export const manualIntegrationSchema = integrationSchema.extend({
-  // Optional pre-ingestion children. The final V2 adapter remains a separate
-  // dependency; the four children cannot substitute for missing source jobs.
-  sourceExtraction: sourceExtractionSchema.optional(),
-  // Explicit opt-in; old configurations retain independent gross edits.
-  sourceSplitPolicy: z.enum(["independent", "legacy_eg_total"]).optional(),
-  deliveryStateMachine: integrationSchema.shape.deliveryStateMachine.optional(),
-  target: integrationSchema.shape.target.optional(),
-  upstreamPrefix: integrationSchema.shape.upstreamPrefix.optional(),
-  format: integrationSchema.shape.format.extend({
+export const referenceExportSchema = z.object({
+  key: z.string().min(1),
+  prefix: z
+    .string()
+    .min(1)
+    .refine(
+      (s) =>
+        s.endsWith("/") &&
+        !s.startsWith("/") &&
+        !s.includes("..") &&
+        !s.includes("\\"),
+    ),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  rowCount: z.number().int().positive(),
+});
+// XLSX is an explicit new manual-report contract. Existing frozen delimited
+// configurations retain their original bytes; automatic SAP delivery is unchanged.
+export const manualReportFormatSchema = z.union([
+  integrationSchema.shape.format.extend({
+    fileType: z.literal("delimited").optional(),
     reversalSupported: z.boolean().optional(),
   }),
-});
+  z.object({
+    fileType: z.literal("xlsx"),
+    profile: z.string().min(1),
+    approved: z.literal(true),
+    reversalSupported: z.boolean().optional(),
+  }),
+]);
+// Manual staging needs ingestion and an approved export format, not SAP dispatch.
+export const manualIntegrationSchema = integrationSchema
+  .extend({
+    // Optional native sources: old settings retain four external-adapter children.
+    // native_sources explicitly selects all ten and backend final assembly.
+    sourceExtraction: sourceExtractionSchema.optional(),
+    preparationMode: z.enum(["external_adapter", "native_sources"]).optional(),
+    ingestStateMachine: integrationSchema.shape.ingestStateMachine.optional(),
+    referenceExport: referenceExportSchema
+      .extend({ approved: z.literal(true) })
+      .optional(),
+    // Explicit opt-in; old configurations retain independent gross edits.
+    sourceSplitPolicy: z.enum(["independent", "legacy_eg_total"]).optional(),
+    deliveryStateMachine:
+      integrationSchema.shape.deliveryStateMachine.optional(),
+    target: integrationSchema.shape.target.optional(),
+    upstreamPrefix: integrationSchema.shape.upstreamPrefix.optional(),
+    format: manualReportFormatSchema,
+  })
+  .superRefine((config, ctx) => {
+    if (config.preparationMode === "native_sources") {
+      if (
+        !config.sourceExtraction ||
+        config.sourceExtraction.coverage !== "all_sources"
+      )
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["sourceExtraction"],
+          message:
+            "Native preparation requires explicit all_sources coverage and shared-write approval.",
+        });
+      if (!config.referenceExport)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["referenceExport"],
+          message:
+            "Native preparation requires an approved, immutable SAP reference export.",
+        });
+    } else if (!config.ingestStateMachine)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ingestStateMachine"],
+        message:
+          "Configure a complete external V2 adapter, or choose native_sources with all ten workflows and an approved reference export.",
+      });
+  });
 export const sessionManifestSchema = manifestSchema
   .omit({ runId: true, ingestionId: true })
   .extend({
@@ -225,6 +286,10 @@ export const sessionManifestSchema = manifestSchema
     sessionId: z.string().uuid(),
     preparationId: z.string().uuid(),
     sourceVersion: z.number().int().nonnegative(),
+    producer: z.literal("backend").optional(),
+    referenceSource: referenceExportSchema
+      .extend({ approved: z.literal(true) })
+      .optional(),
     extractionReceipts: z
       .array(
         z.object({

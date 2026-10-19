@@ -192,6 +192,13 @@ export class PrepaidWorker {
     run: Record<string, any>,
   ) {
     const config = manualIntegrationSchema.parse(snapshot.configuration);
+    if (
+      !config.ingestStateMachine ||
+      config.preparationMode === "native_sources"
+    )
+      throw Error(
+        "Run-scoped adapter ingestion is unavailable in native_sources mode; use workspace source preparation.",
+      );
     const prefix = `${this.storage.prefix(job.run_id)}ingestion/${snapshot.id}/`;
     if (snapshot.upstream_source) {
       const m = upstreamManifestSchema.parse(snapshot.upstream_source.manifest);

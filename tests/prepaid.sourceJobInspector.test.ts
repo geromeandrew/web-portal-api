@@ -85,6 +85,6 @@ describe("Read-only existing Glue job inspection", () => {
       ["machine"],
       "isg-esatp-dv",
     );
-    expect(glue.send).toHaveBeenCalledTimes(5);
+    expect(glue.send).toHaveBeenCalledTimes(12);
   });
 });

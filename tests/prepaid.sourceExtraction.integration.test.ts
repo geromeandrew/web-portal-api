@@ -17,6 +17,11 @@ import {
 } from "../src/modules/prepaid/infrastructure/prepaidStorage.js";
 import { LegacyLanding } from "../src/modules/prepaid/infrastructure/legacyLanding.js";
 import { PrepaidSourceExtractionWorker } from "../src/modules/prepaid/application/sourceExtractionWorker.js";
+import { PrepaidPreparationWorker } from "../src/modules/prepaid/application/preparationWorker.js";
+import {
+  sourceCodes,
+  manualIntegrationSchema,
+} from "../src/modules/prepaid/domain/contracts.js";
 import { verifiedExtractionBridge } from "../src/modules/prepaid/application/sourceExtractionBridge.js";
 import {
   sourceWorkflows,
@@ -36,7 +41,7 @@ if (testUrl) {
     throw Error("Use only the isolated prepaid_test cluster on port 55479.");
 }
 describe.skipIf(!testUrl)(
-  "Backend-owned four-workflow preparation (isolated DB, mocked AWS)",
+  "Backend-owned source preparation (isolated DB, mocked AWS)",
   () => {
     const schema = `prepaid_extract_${randomUUID().replaceAll("-", "")}`,
       raw = `${schema}_raw`;
@@ -101,43 +106,144 @@ describe.skipIf(!testUrl)(
     const normalizer = {
       revision: async () => "a".repeat(64),
       normalize: vi.fn(async (workflow: SourceWorkflow, code: string) =>
-        workflow === "callcard_sg"
+        workflow === "ke24"
           ? {
-              callcard: ["trade", "internal"].map((kind) => ({
-                region: "sg",
-                kind,
-                month_no: 9,
-                sourcePeriod: "2026-09",
-                amount: "12.30",
-              })),
+              ke24: [
+                {
+                  period: "2026-09",
+                  brand: "GP",
+                  cfu: "EG",
+                  revenue_type: "MT",
+                  cost_element: "123",
+                  profit_center: "P1",
+                  sub_product: "SUB",
+                  uom: "EA",
+                  reference_document: "REF",
+                  amount: "-100.00",
+                  quantity: "10",
+                  currency: "PHP",
+                },
+                {
+                  period: "2026-09",
+                  brand: "GP",
+                  cfu: "CM",
+                  revenue_type: "MT",
+                  cost_element: "123",
+                  profit_center: "P1",
+                  sub_product: "SUB",
+                  uom: "EA",
+                  reference_document: "REF",
+                  amount: "100.00",
+                  quantity: "10",
+                  currency: "PHP",
+                },
+                {
+                  period: "2026-09",
+                  brand: "GP",
+                  cfu: "SG",
+                  revenue_type: "MT",
+                  cost_element: "123",
+                  profit_center: "P1",
+                  sub_product: "SUB",
+                  uom: "EA",
+                  reference_document: "REF",
+                  amount: "-60.00",
+                  quantity: "10",
+                  currency: "PHP",
+                },
+              ],
             }
-          : workflow.startsWith("load_api")
+          : workflow === "callcard_eg"
             ? {
-                loadapi: [
-                  {
-                    region: workflow.endsWith("eg") ? "eg" : "sg",
-                    amount: "12.30",
-                  },
-                ],
+                callcard: [1, 2].map(() => ({
+                  region: "eg",
+                  kind: "trade",
+                  month_no: 9,
+                  amount: "1.50",
+                })),
               }
-            : {
-                adjustment_headers: [
-                  {
-                    cycle: code.slice(4),
-                    cycleYear: "2026",
-                    cycleInstance: "9",
-                  },
-                ],
-                adjustments: [
-                  {
-                    cycle: code.slice(4),
-                    customer_type: "E",
-                    code: "ABC",
-                    amount: "-1.00",
-                    currency: "PHP",
-                  },
-                ],
-              },
+            : workflow.startsWith("load_up")
+              ? {
+                  loadup: [
+                    {
+                      region: workflow.endsWith("eg") ? "eg" : "sg",
+                      amount: "100.00",
+                    },
+                  ],
+                }
+              : workflow === "monthly_recharge"
+                ? {
+                    recharge: [
+                      {
+                        customer_type: "E",
+                        method: "PS",
+                        channel: "RP",
+                        amount: "-10.00",
+                      },
+                      {
+                        customer_type: "S",
+                        method: "PS",
+                        channel: "RP",
+                        amount: "3.00",
+                      },
+                    ],
+                  }
+                : workflow === "charges_318"
+                  ? {
+                      charge_headers: [
+                        {
+                          cycle: code.slice(4),
+                          cycleYear: "2026",
+                          cycleInstance: "9",
+                        },
+                      ],
+                      charges: [
+                        {
+                          cycle: code.slice(4),
+                          customer_type: "E",
+                          code: "AMAXCEP",
+                          amount: "5.00",
+                          currency: "PHP",
+                        },
+                      ],
+                    }
+                  : workflow === "callcard_sg"
+                    ? {
+                        callcard: ["trade", "internal"].map((kind) => ({
+                          region: "sg",
+                          kind,
+                          month_no: 9,
+                          sourcePeriod: "2026-09",
+                          amount: "12.30",
+                        })),
+                      }
+                    : workflow.startsWith("load_api")
+                      ? {
+                          loadapi: [
+                            {
+                              region: workflow.endsWith("eg") ? "eg" : "sg",
+                              amount: "12.30",
+                            },
+                          ],
+                        }
+                      : {
+                          adjustment_headers: [
+                            {
+                              cycle: code.slice(4),
+                              cycleYear: "2026",
+                              cycleInstance: "9",
+                            },
+                          ],
+                          adjustments: [
+                            {
+                              cycle: code.slice(4),
+                              customer_type: "E",
+                              code: "ABC",
+                              amount: "-1.00",
+                              currency: "PHP",
+                            },
+                          ],
+                        },
       ),
     };
     const worker = new PrepaidSourceExtractionWorker(repo, storage, runner, {
@@ -172,19 +278,17 @@ describe.skipIf(!testUrl)(
       );
       await pool.end();
     });
-    async function context() {
+    async function context(all = false) {
       const owner = randomUUID(),
         workspace = randomUUID(),
         sessionId = randomUUID(),
         id = randomUUID(),
         token = randomUUID();
-      const files = [
-        "callcard_sg",
-        "load_api_eg",
-        "load_api_sg",
-        "308_01",
-        "308_06",
-      ].map((code) => {
+      const files = (
+        all
+          ? [...sourceCodes, "308_01", "308_06", "318_01", "318_06"]
+          : ["callcard_sg", "load_api_eg", "load_api_sg", "308_01", "308_06"]
+      ).map((code) => {
         const source = randomUUID(),
           key = `prepaid_reclass/sessions/${sessionId}/sources/${source}/${code}.xlsx`,
           bytes = Buffer.from(code);
@@ -194,6 +298,10 @@ describe.skipIf(!testUrl)(
           source_code: code,
           object_key: key,
           sha256: sha256(bytes),
+          original_name: code + ".xlsx",
+          size_bytes: bytes.length,
+          uploaded_by: owner,
+          created_at: new Date().toISOString(),
         };
       });
       await pool.query("INSERT INTO app_user(id) VALUES($1)", [owner]);
@@ -238,6 +346,243 @@ describe.skipIf(!testUrl)(
       });
       return row;
     }
+    async function allReceipts(c: Context) {
+      const config = { ...settings, coverage: "all_sources" as const };
+      expect(
+        await worker.advance(c.job, c.session, config, c.token, () => false),
+      ).toBeUndefined();
+      let receipts;
+      for (let i = 0; i < 10; i++) {
+        const row = await complete(c);
+        expect(row.workflow).toBe(Object.keys(sourceWorkflows)[i]);
+        receipts = await worker.advance(
+          c.job,
+          c.session,
+          config,
+          c.token,
+          () => false,
+        );
+      }
+      expect(receipts).toHaveLength(10);
+      expect(start).toHaveBeenCalledTimes(10);
+      expect(normalizer.normalize).toHaveBeenCalledTimes(12);
+      return receipts!;
+    }
+    async function nativeConfiguration(c: Context) {
+      const bytes = Buffer.from(
+        JSON.stringify({
+          MANDT: "300",
+          BUKRS: "GLOB",
+          HKONT: "123",
+          BRAND: "GHP-PREPAID",
+          WWBRD: "GP",
+          WWSPA: "CM",
+          WWST: "MT",
+          SPB: "SUB",
+          TAXRATE: "0.12",
+          AVERATE: "10",
+          DUOM: "EA",
+        }) + "\n",
+      );
+      const key = "trusted-reference/export.jsonl";
+      s3.set(key, bytes);
+      const configuration = manualIntegrationSchema.parse({
+        preparationMode: "native_sources",
+        sourceExtraction: { ...settings, coverage: "all_sources" },
+        expectedCycles: ["01", "06"],
+        format: {
+          profile: "isolated-test",
+          approved: true,
+          delimiter: "\t",
+          lineEnding: "\r\n",
+          encoding: "utf8",
+        },
+        referenceExport: {
+          key,
+          prefix: "trusted-reference/",
+          sha256: sha256(bytes),
+          rowCount: 1,
+          approved: true,
+        },
+      });
+      await pool.query(
+        "UPDATE prepaid_upload_sessions SET configuration=$2 WHERE id=$1",
+        [c.session.id, JSON.stringify(configuration)],
+      );
+      c.session.configuration = configuration;
+      return configuration;
+    }
+    async function parent(c: Context, failManifestWrite = false) {
+      let fail = failManifestWrite;
+      const wrapped = new PrepaidStorage(
+        {
+          send: async (command: any) => {
+            const result = await s3.send(command);
+            if (
+              fail &&
+              command.constructor.name === "PutObjectCommand" &&
+              command.input.Key.endsWith("native-manifest.json")
+            ) {
+              fail = false;
+              throw Object.assign(Error("Lost manifest write response"), {
+                code: "ECONNRESET",
+              });
+            }
+            return result;
+          },
+        } as any,
+        "test-bucket",
+      );
+      const preparation = new PrepaidPreparationWorker(repo, wrapped, runner, {
+        error: vi.fn(),
+      } as any);
+      // Inject the same dependency boundary used by the child integration suite.
+      (preparation as any).sourceWorker = worker;
+      await pool.query(
+        "UPDATE prepaid_preparation_jobs SET lease_until=NULL,available_at=now() WHERE id=$1",
+        [c.job.id],
+      );
+      return preparation;
+    }
+    it("runs all ten extractors, assembles a native manifest and publishes both layouts atomically without an extra AWS adapter", async () => {
+      const c = await context(true);
+      await nativeConfiguration(c);
+      await allReceipts(c);
+      const preparation = await parent(c);
+      expect(await preparation.tick()).toBe(true);
+      const session = (
+        await pool.query("SELECT * FROM prepaid_upload_sessions WHERE id=$1", [
+          c.session.id,
+        ])
+      ).rows[0];
+      expect(session.error).toBeNull();
+      expect(session.status).toBe("ready");
+      const job = (
+        await pool.query("SELECT * FROM prepaid_preparation_jobs WHERE id=$1", [
+          c.job.id,
+        ])
+      ).rows[0];
+      expect(job.status).toBe("completed");
+      expect(job.execution_arn).toBeNull();
+      const snapshot = (
+        await pool.query(
+          "SELECT * FROM prepaid_source_snapshots WHERE run_id=$1",
+          [session.run_id],
+        )
+      ).rows[0];
+      expect(snapshot.manifest).toMatchObject({
+        producer: "backend",
+        period: "2026-09",
+        executionArn: `backend:preparation:${c.job.id}`,
+      });
+      expect(snapshot.manifest.datasets).toHaveLength(8);
+      expect(snapshot.manifest.extractionReceipts).toHaveLength(10);
+      expect(start).toHaveBeenCalledTimes(10);
+      expect(
+        start.mock.calls.every(
+          ([, input]) =>
+            JSON.stringify(input) ===
+            JSON.stringify({ env_prefix: "isg-esatp-dv" }),
+        ),
+      ).toBe(true);
+      const layout = (
+        await pool.query(
+          "SELECT l.* FROM prepaid_layout_rows l JOIN prepaid_region_revisions r ON r.id=l.revision_id WHERE r.run_id=$1 AND r.region='eg'",
+          [session.run_id],
+        )
+      ).rows;
+      expect(layout.find((r) => r.label === "CALLCARD").gp_mt_gross).toBe(
+        "4.00",
+      );
+      expect(
+        layout.find((r) => r.label === "RECHARGE INSTRUCTION (recharge report)")
+          .hy_mt_gross,
+      ).toBe("-10.00");
+      expect(layout.find((r) => r.label === "AMAXCE").hy_mt_gross).toBe(
+        "10.00",
+      );
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM prepaid_deliveries d JOIN prepaid_region_revisions r ON r.id=d.revision_id WHERE r.run_id=$1",
+            [session.run_id],
+          )
+        ).rows[0].n,
+      ).toBe(0);
+    });
+    it("recovers an acknowledged-but-lost manifest write without restarting any extractor or duplicating a run", async () => {
+      const c = await context(true);
+      await nativeConfiguration(c);
+      await allReceipts(c);
+      const preparation = await parent(c, true);
+      await preparation.tick();
+      let job = (
+        await pool.query("SELECT * FROM prepaid_preparation_jobs WHERE id=$1", [
+          c.job.id,
+        ])
+      ).rows[0];
+      expect(job.status).toBe("waiting");
+      expect(job.error).toContain("Lost manifest");
+      expect(
+        (
+          await pool.query(
+            "SELECT status FROM prepaid_upload_sessions WHERE id=$1",
+            [c.session.id],
+          )
+        ).rows[0].status,
+      ).toBe("pending");
+      await pool.query(
+        "UPDATE prepaid_preparation_jobs SET available_at=now() WHERE id=$1",
+        [c.job.id],
+      );
+      await preparation.tick();
+      job = (
+        await pool.query("SELECT * FROM prepaid_preparation_jobs WHERE id=$1", [
+          c.job.id,
+        ])
+      ).rows[0];
+      expect(job.error).toBeNull();
+      expect(job.status).toBe("completed");
+      expect(start).toHaveBeenCalledTimes(10);
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM prepaid_runs WHERE workspace_id=$1",
+            [c.session.workspace_id],
+          )
+        ).rows[0].n,
+      ).toBe(1);
+    });
+    it("fails closed on a changed approved reference without publishing a ready run", async () => {
+      const c = await context(true);
+      await nativeConfiguration(c);
+      await allReceipts(c);
+      s3.set("trusted-reference/export.jsonl", Buffer.from("{}\n"));
+      await (await parent(c)).tick();
+      const job = (
+        await pool.query("SELECT * FROM prepaid_preparation_jobs WHERE id=$1", [
+          c.job.id,
+        ])
+      ).rows[0];
+      expect(job.status).toBe("failed");
+      expect(job.error).toContain("Reference source checksum");
+      expect(
+        (
+          await pool.query(
+            "SELECT status FROM prepaid_upload_sessions WHERE id=$1",
+            [c.session.id],
+          )
+        ).rows[0].status,
+      ).toBe("failed");
+      expect(
+        (
+          await pool.query(
+            "SELECT count(*)::int n FROM prepaid_runs WHERE workspace_id=$1",
+            [c.session.workspace_id],
+          )
+        ).rows[0].n,
+      ).toBe(0);
+    });
     it("starts four native children sequentially and creates backend receipts from verified originals", async () => {
       const c = await context();
       expect(await advance(c)).toBeUndefined();

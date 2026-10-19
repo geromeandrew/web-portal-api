@@ -1,4 +1,5 @@
 import { jvHeaders, manualIntegrationSchema } from "./contracts.js";
+import { referenceRefreshJob } from "./referenceRefresh.js";
 import {
   sourceWorkflows,
   unprovidedExtractionDependencies,
@@ -15,15 +16,29 @@ export const prepaidLegacyBasis = {
     suppliedChildWorkflows: sourceWorkflows,
     remainingSourceDependencies: unprovidedExtractionDependencies,
     completeV2AdapterDefined: false,
+    backendNativePreparationImplemented: true,
+    suppliedSourceWorkflowCount: Object.keys(sourceWorkflows).length,
   },
   freeze: {
     egSqlAgentJob: "Prepaid_Reclass_Preload_P10_EG_Only_AdHoc",
     sgSqlAgentJob: "Prepaid_Reclass_Preload_P10_SG_Only_AdHoc",
     currentMode: "manual_staging",
   },
+  referenceSupply: {
+    legacySource: "dgS4HANA_TDIR1.dbo.ZTF0455S",
+    currentSource: `${referenceRefreshJob.schema}.${referenceRefreshJob.table}`,
+    refreshGlueJob: referenceRefreshJob.name,
+    backendRefreshExportImplemented: true,
+    additionalStateMachineRequired: false,
+    wholeTableOverwriteRequiresExplicitAuthorization: true,
+    exportApi: "/api/workflows/prepaid/reference-exports",
+    liveDataAndMappingApprovalVerified: false,
+  },
   billingCycles: {
     tables: ["zPARAM_ICCBS_AllBillCycles", "dczPARAM_ICCBS_AllBillCycles"],
     cycleRowsAvailable: false,
+    directPrepaidUseOfTablesVerified: false,
+    paired308And318CoverageIsPortalContract: true,
   },
   journal: {
     view: "webPrepaidSystems_JV01",
@@ -31,17 +46,23 @@ export const prepaidLegacyBasis = {
     columnCount: jvHeaders.length,
     contentRulesImplemented: true,
     transportFormatDefined: false,
+    manualReportFileType: "xlsx",
+    manualReportFileTypeBasis:
+      "User-confirmed; not recovered P10 writer settings",
   },
 } as const;
 
 export function prepaidConfigurationReadiness(stored: unknown) {
   const parsed = manualIntegrationSchema.safeParse(stored);
+  const native = (stored as any)?.preparationMode === "native_sources";
   const messages = {
     ingestStateMachine: {
-      configured:
-        "Ingestion name configured; deployment and V2 execution still require verification.",
-      required:
-        "Configure the deployed Standard V2 ingestion adapter. The legacy SQL Agent job name is not an AWS configuration.",
+      configured: native
+        ? "Backend-native preparation configured for ten workflows and an approved reference export; runtime acceptance remains unverified."
+        : "Ingestion name configured; deployment and V2 execution still require verification.",
+      required: native
+        ? "Configure all_sources coverage, shared-write approval and an approved immutable reference export for backend-native preparation."
+        : "Configure the complete Standard V2 adapter, or choose backend-native preparation with the ten source workflows and an approved reference export.",
     },
     expectedCycles: {
       configured:
@@ -53,7 +74,7 @@ export function prepaidConfigurationReadiness(stored: unknown) {
       configured:
         "Manual export format configured; SAP acceptance still requires verification.",
       required:
-        "Configure an approved delimiter, line ending and encoding. Legacy JV content is implemented, but its export job format is not supplied.",
+        'Configure the confirmed XLSX manual report format with fileType="xlsx", profile and approved=true. Existing delimited profiles remain supported for historical compatibility.',
     },
   };
   const checks = Object.entries(messages).map(([code, message]) => {

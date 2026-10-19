@@ -2,21 +2,8 @@ import { z } from "zod";
 import { convertLegacyReference } from "../domain/referenceConverter.js";
 import { PrepaidStorage, sha256 } from "../infrastructure/prepaidStorage.js";
 
-export const referenceExportSchema = z.object({
-  key: z.string().min(1),
-  prefix: z
-    .string()
-    .min(1)
-    .refine(
-      (s) =>
-        s.endsWith("/") &&
-        !s.startsWith("/") &&
-        !s.includes("..") &&
-        !s.includes("\\"),
-    ),
-  sha256: z.string().regex(/^[a-f0-9]{64}$/),
-  rowCount: z.number().int().positive(),
-});
+import { referenceExportSchema } from "../domain/contracts.js";
+export { referenceExportSchema } from "../domain/contracts.js";
 /** Adapter component for an authorized immutable DataGarage export, not a source approval. */
 export class PrepaidReferenceProvider {
   constructor(readonly storage: PrepaidStorage) {}

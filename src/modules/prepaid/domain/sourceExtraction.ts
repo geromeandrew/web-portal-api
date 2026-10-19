@@ -1,13 +1,52 @@
 import { z } from "zod";
 
-/** The four existing AWS workflows are called unchanged with {env_prefix}. */
+/** Verified read-only against the ten supplied native workflows on 18 October 2026.
+ * No portal states, script overrides or AWS definition changes are required. */
 export const sourceWorkflows = {
+  ke24: {
+    machine: "isg-esatp-dv-prcl_ke24-sf",
+    jobs: [10],
+    sources: ["ke24"],
+    inputPattern: "KE24.xlsx",
+    targets: ["dcKE24"],
+    artifacts: ["ke24"],
+    format: "xlsx",
+  },
+  callcard_eg: {
+    machine: "isg-esatp-dv-prcl_cc_eg-sf",
+    jobs: [6],
+    sources: ["callcard_eg"],
+    inputPattern: "CALLCARD_EG.xlsx",
+    targets: ["dcmanualcallcard"],
+    artifacts: ["callcard"],
+    format: "xlsx",
+  },
   callcard_sg: {
     machine: "isg-esatp-dv-prcl_cc_sg-sf",
     jobs: [1],
     sources: ["callcard_sg"],
     inputPattern: "CALLCARD_SG.xlsx",
     targets: ["dccallcard_sg"],
+    artifacts: ["callcard"],
+    format: "xlsx",
+  },
+  load_up_eg: {
+    machine: "isg-esatp-dv-prcl_lu_eg-sf",
+    jobs: [7],
+    sources: ["load_up_eg"],
+    inputPattern: "LOAD UP_EG.xlsx",
+    targets: ["dcload_up"],
+    artifacts: ["loadup"],
+    format: "xlsx",
+  },
+  load_up_sg: {
+    machine: "isg-esatp-dv-prcl_lu_sg-sf",
+    jobs: [8],
+    sources: ["load_up_sg"],
+    inputPattern: "LOAD UP_SG.xlsx",
+    targets: ["dcload_up_sg"],
+    artifacts: ["loadup"],
+    format: "xlsx",
   },
   load_api_eg: {
     machine: "isg-esatp-dv-prcl_la_eg-sf",
@@ -15,6 +54,8 @@ export const sourceWorkflows = {
     sources: ["load_api_eg"],
     inputPattern: "LOAD API_EG.xlsx",
     targets: ["dcload_api"],
+    artifacts: ["loadapi"],
+    format: "xlsx",
   },
   load_api_sg: {
     machine: "isg-esatp-dv-prcl_la_sg-sf",
@@ -22,6 +63,17 @@ export const sourceWorkflows = {
     sources: ["load_api_sg"],
     inputPattern: "LOAD API_SG.xlsx",
     targets: ["dcload_api_sg"],
+    artifacts: ["loadapi"],
+    format: "xlsx",
+  },
+  monthly_recharge: {
+    machine: "isg-esatp-dv-prcl_dl_mr-sf",
+    jobs: [9],
+    sources: ["monthly_recharge"],
+    inputPattern: "DL_Monthly_Recharge_summary_report.csv",
+    targets: ["dcmonthlyrechargesummary"],
+    artifacts: ["recharge"],
+    format: "csv",
   },
   adjustments_308: {
     machine: "isg-esatp-dv-prcl_308_ba-sf",
@@ -32,23 +84,72 @@ export const sourceWorkflows = {
       "billed_adjustments_header_cycles",
       "billed_adjustments_lineitem_cycles",
     ],
+    artifacts: ["adjustment_headers", "adjustments"],
+    format: "xlsx",
+    headerResultPath: "$.extract_4_output",
+  },
+  charges_318: {
+    machine: "isg-esatp-dv-prcl_318_bc-sf",
+    jobs: [11, 12],
+    sources: ["318_*"],
+    inputPattern: "318. Billed Charges Summary Report_G_BC**.xlsx",
+    targets: ["billed_charges_header_cycles", "billed_charges_lineitem_cycles"],
+    artifacts: ["charge_headers", "charges"],
+    format: "xlsx",
+    headerResultPath: "$.extract_11_output",
   },
 } as const;
 export type SourceWorkflow = keyof typeof sourceWorkflows;
 export const sourceWorkflowSchema = z.enum([
+  "ke24",
+  "callcard_eg",
+  "callcard_sg",
+  "load_up_eg",
+  "load_up_sg",
+  "load_api_eg",
+  "load_api_sg",
+  "monthly_recharge",
+  "adjustments_308",
+  "charges_318",
+]);
+export const legacyFourWorkflows: SourceWorkflow[] = [
   "callcard_sg",
   "load_api_eg",
   "load_api_sg",
   "adjustments_308",
-]);
+];
 export const sourceExtractionSchema = z
   .object({
     envPrefix: z.literal("isg-esatp-dv"),
-    // The unchanged Glue jobs replace shared legacy raw rows. Never silently opt
-    // an existing configuration into those side effects.
     sharedWritesApproved: z.literal(true),
+    // Preserve earlier four-source configuration; expanding shared writes requires
+    // an explicit administrator choice, not an automatic upgrade of old sessions.
+    coverage: z.enum(["legacy_four", "all_sources"]).default("legacy_four"),
   })
   .strict();
+export function selectedSourceWorkflows(settings: {
+  coverage?: string;
+}): SourceWorkflow[] {
+  return settings.coverage === "all_sources"
+    ? (Object.keys(sourceWorkflows) as SourceWorkflow[])
+    : [...legacyFourWorkflows];
+}
+export function sourceBelongsTo(workflow: SourceWorkflow, code: string) {
+  const mapping = sourceWorkflows[workflow];
+  return mapping.sources.some(
+    (pattern) =>
+      pattern === code ||
+      (pattern.endsWith("_*") &&
+        new RegExp("^" + pattern.slice(0, -1) + "[0-9]{2}$").test(code)),
+  );
+}
+export function sourceLandingName(workflow: SourceWorkflow, code: string) {
+  if (workflow === "adjustments_308")
+    return `308. Billed Adjustments Monthly Summary Report_G_BC${code.slice(4)}.xlsx`;
+  if (workflow === "charges_318")
+    return `318. Billed Charges Summary Report_G_BC${code.slice(4)}.xlsx`;
+  return sourceWorkflows[workflow].inputPattern;
+}
 export const extractedSourceSchema = z.object({
   id: z.string().uuid(),
   code: z.string(),
@@ -58,7 +159,17 @@ export const extractedSourceSchema = z.object({
 export const extractionArtifactSchema = z.object({
   sourceId: z.string().uuid(),
   sourceCode: z.string(),
-  name: z.enum(["callcard", "loadapi", "adjustments", "adjustment_headers"]),
+  name: z.enum([
+    "ke24",
+    "callcard",
+    "loadup",
+    "loadapi",
+    "recharge",
+    "adjustments",
+    "adjustment_headers",
+    "charges",
+    "charge_headers",
+  ]),
   key: z.string().min(1),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   rowCount: z.number().int().nonnegative(),
@@ -82,16 +193,15 @@ export const extractionReceiptSchema = z.object({
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
   producer: z.literal("backend").optional(),
+  accountingPeriod: z
+    .string()
+    .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+    .optional(),
   sources: z.array(extractedSourceSchema).min(1),
   artifacts: z.array(extractionArtifactSchema).min(1),
 });
 export const unprovidedExtractionDependencies = [
-  "KE24 extraction and accounting-period discovery",
-  "Call Card EG extraction",
-  "Load Up EG/SG extraction",
-  "Monthly Recharge extraction",
-  "318 billing-charge extraction",
-  "Approved SAP reference refresh",
+  "Live reference refresh authorization/data approval, required-cycle policy and real-file accounting acceptance",
 ] as const;
 
 function choiceMatches(
@@ -206,15 +316,20 @@ export function validateLegacySourceDefinition(
           "Unexpected Glue argument override in the extraction workflow.",
         );
     }
+    const headerPath =
+      "headerResultPath" in sourceWorkflows[workflow]
+        ? sourceWorkflows[workflow].headerResultPath
+        : undefined;
     if (
-      workflow === "adjustments_308" &&
+      expected.length > 1 &&
       jobs.length === 0 &&
-      state.ResultPath !== "$.extract_4_output"
+      state.ResultPath !== headerPath
     )
       throw Error(
-        "308 header output must be preserved for the existing detail handoff.",
+        "Billing header output must be preserved before the sequential detail task.",
       );
     if (
+      Object.keys(args).length &&
       workflow === "adjustments_308" &&
       jobs.length === 1 &&
       (args["--previous_job_run_id.$"] !== "$.extract_4_output.Id" ||

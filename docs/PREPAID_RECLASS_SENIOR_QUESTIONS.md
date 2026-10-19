@@ -1,18 +1,16 @@
 # Prepaid Re-Class: questions for the legacy owner
 
-Updated 16 October 2026 for backend-only native workflow integration.
+Updated 19 October 2026 for native SQL Server restoration, XLSX output and ten-source backend integration.
 
-**Current follow-up:** validation, normalization, owned-copy coordination and receipts live in the backend. Existing workflows need no portal states/parameters; they receive only `env_prefix`. No AWS definitions were edited/jobs started in this update. Read-only inspection finds three compatible workflows and the **308 `JobRunId`/`Id` handoff defect**. Ask its owner to correct that internal lookup, not add a portal-validation state.
+**Reference update (19 October):** item 4 no longer asks someone to build a missing producer. The existing `isg-esatp-dv-sap_to_pg-gljo-ztf0455s` Glue job was found and backend refresh/export/recovery is now implemented. What remains is authorization to operate its full-table overwrite, real SAP records, client/company/as-of-policy approval and a named owner. Install/deploy additive migration 009 before using the admin operation; no live job or sandbox migration was run in this implementation change.
 
-**Still ask for:** approval/coordination of shared Glue side effects, accepted files/totals, remaining producers and complete V2 adapter. Backend fragments attest exact originals, not session isolation of shared Aurora rows. See [AWS status](PREPAID_RECLASS_AWS_VERIFICATION.md) and guide Processes 8–12. Earlier portal-branch deployment notes are superseded.
+**19 October native restore:** etl_db_web.bak has now been restored and checked in native SQL Server LocalDB, without virtualization. Its 20 Prepaid procedures and 11 views match the supplied web SQL definitions; the seven configured filenames in item 2 are confirmed. The missing accounting records/job settings belong to other databases. [Restore and fixes](PREPAID_RECLASS_AWS_VERIFICATION.md#native-sql-server-restore-and-confirmed-fixes---19-october-2026) records the evidence. The 4.5 MB implementation gap is addressed across API/worker/landing/parsers with a 100 MiB ceiling and retained safety bounds; do not ask the senior to invent the already visible legacy upload limit. The user confirmed XLSX; item 9 now asks for workbook acceptance, not text delimiters.
 
-## New evidence: four AWS extractors are already available
+All ten supplied source workflows/twelve Glue jobs are now inspected and integrated without editing AWS definitions. Their native input is only env_prefix; validation, normalization, coordination and receipts are backend-owned. The old 308 handoff defect has been corrected externally and is no longer outstanding.
 
-The provided Call Card SG, Load API EG, Load API SG and 308-adjustment Step Functions and their Glue scripts were verified on 15 October. **We no longer need to ask whether any extraction code exists for those four sources.**
+A final V2 Step Function is not required in native_sources mode: nativeManifestBuilder combines ten verified original-derived source receipts with an approved immutable SAP reference export. Existing external adapters remain optional. No integration rows/approvals were auto-enabled; no live extraction/SAP jobs were started.
 
-Ask instead how to safely reuse them, fix the confirmed 308 handoff failure, cover the remaining sources and produce the portal's complete V2 outputs. They use shared inbound/target data and return Glue metadata, so none is a direct replacement for the full portal ingestion adapter. See [verified placement and evidence](PREPAID_RECLASS_AWS_VERIFICATION.md).
-
-No jobs were started or AWS/database configuration changed during verification. The other accounting/approval questions remain open.
+Still ask for shared-job coordination approval, real reference export/refresh owner, actual cycles, accepted XLSX template/cell requirements and accounting fixtures. Do not ask for the six now-supplied extractors, a 308 fix, or an unknown manual-report file type. See [current integration guide](PREPAID_RECLASS_AWS_VERIFICATION.md).
 
 ## Message you can send first
 
@@ -45,34 +43,40 @@ Current PostgreSQL functions/views are defined inside the TypeScript migration f
 
 The absolute links use this machine's paths. If sharing this document, your senior can use the visible filenames and object names to find the equivalent files in their copy.
 
-## 1. How did the legacy actually read and prepare the source files?
+## 1. Can we approve and verify how source preparation now runs?
 
-**Type: partially recovered extraction implementation + integration gaps.** The legacy trigger is present. Four migrated AWS source extractors/shared scripts are now verified; the complete original job chain, remaining source coverage and isolated portal-compatible V2 pipeline still need evidence/implementation.
+**Type: recovered source implementation + operational approval/real-file verification.** The original SQL Agent trigger is visible; ten migrated AWS extractors and their parsers are now supplied. Backend final assembly is implemented.
 
-- **Ask:** “The backend now calls native extractors without portal states and builds verified fragments itself. Can the AWS owner correct the 308 `JobRunId` lookup, confirm shared-input/raw-write coordination and provide remaining producers plus the complete V2 adapter? Can you supply accepted files/totals to certify parsing?”
-- **Legacy:** `sp_Prepaid1_Extract` → SQL Agent job `Prepaid_Reclass_Preload_P02_Extract_04Mnt`; source dependencies include `sdbTDIR1_Prepaid` and `dgS4HANA_TDIR1`.
-- **Now / process:** Processes **8–12**, automatic preparation after upload. `sourceExtractionWorker.ts` validates originals, stages owned copies, calls native children sequentially, verifies Glue metadata and creates backend receipts. Those receipts go to the complete V2 adapter. Remaining producers/that adapter and the 308 correction still block the complete flow.
-- **Need:** remaining job/source definitions and approved adaptation of the existing Glue components—not four replacement parsers built from scratch. Resolve the observed 308 `JobRunId`/`Id` handoff, source/run isolation, cycle/header association and canonical manifest output. Glue is already used by these four workflows.
+- **Ask:** “Can we approve these ten source workflows using the shared inbound/raw tables? Who coordinates manual/external starts? Can you give us one accepted month's files and legacy totals to verify all column mappings, periods, signs and rounding? Does the old 04Mnt name imply an extra selection window we must reproduce?”
+- **Legacy:** sp_Prepaid1_Extract → Prepaid_Reclass_Preload_P02_Extract_04Mnt; EG/SG Import_01_Copa consume source aggregates. The original job-step chain is not inside its trigger SP.
+- **Now / process:** Processes **8–12**. sourceExtractionWorker preflights ten machines, verifies immutable originals, normalizes locally, stages owned disposable copies, calls native jobs sequentially, verifies Glue results and writes receipts. nativeManifestBuilder adds the approved reference, emits eight datasets and publishes through existing transactional calculations.
+- **Need:** approved operating coordination, accepted real fixtures/totals and clarification of undocumented window rules. Not six new extractors, a 308 correction, portal validator states or a new final adapter.
 
-**Why this matters:** uploading a file only stores it. Something still has to read its sheets/columns, load the correct records and produce the source data used by the layouts. The job name alone does not tell us whether the old job used SQL, a package, a script or another tool.
+**Why this matters:** unchanged Glue writes shared Aurora raw data and moves/deletes disposable copies. The backend lock protects cooperating portal workers, not arbitrary external starts. Financial evidence comes independently from original uploads; Glue success is not proof those shared rows equal the session's canonical rows. Agree this boundary and the ownership before enabling sharedWritesApproved.
 
-**Request a concrete handoff:** the ordered job steps, each referenced script/package, source and destination table/view definitions, and how the job reports success/failure. Also ask whether “04Mnt” means a four-month extraction window and why it was needed—do not infer that rule from the name. We can then decide which parts to reuse and which need a new producer task.
+**Concrete handoff:** accepted files/expected outputs for one period, actual required cycles, reference refresh/export ownership, external-job coordination schedule and recovery procedure. Supply original ordered SQL Agent steps only for any selection behavior not established by the supplied workflows; do not infer a four-month rule from the name.
 
 ### Where to look in the code
 
-- **Legacy trigger:** [dbo.sp_Prepaid1_Extract.StoredProcedure.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/etl_db_web/etl_db_web/dbo.sp_Prepaid1_Extract.StoredProcedure.sql:24) — the job name; line 39 calls `sp_start_job`. This file is **not** the job-step implementation.
-- **Current caller:** [workspaceService.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/application/workspaceService.ts:266) — `enqueue()` creates the preparation request; [preparationWorker.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/application/preparationWorker.ts:22) — `tick()` starts/polls/verifies the execution. Search for `discoverPeriodFrom`, `execution_input` and `sessionManifestSchema`.
-- **AWS execution support:** [stepFunctionsRunner.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/stepFunctionsRunner.ts:64) — `startExecution()`; `describeExecution()` begins at line 105.
-- **Evidence boundary:** the original SQL Agent job steps/packages are still separate from the trigger SP. Four new AWS source extractors and inspected Glue copies are now available through [AWS verification](PREPAID_RECLASS_AWS_VERIFICATION.md). They are not a deployed complete V2 producer; ask for the missing chain and approved adaptation.
+- **Legacy trigger:** [sp_Prepaid1_Extract.StoredProcedure.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/etl_db_web/etl_db_web/dbo.sp_Prepaid1_Extract.StoredProcedure.sql:39) — sp_start_job, not job implementation.
+- **Current entry:** [workspaceService.ts](../src/modules/prepaid/application/workspaceService.ts), enqueue(); [preparationWorker.ts](../src/modules/prepaid/application/preparationWorker.ts), tick().
+- **Ten-machine mapping:** [sourceExtraction.ts](../src/modules/prepaid/domain/sourceExtraction.ts), sourceWorkflows; [sourceExtractionWorker.ts](../src/modules/prepaid/application/sourceExtractionWorker.ts), advance().
+- **Parsing and final assembly:** [normalize_source.py](../infrastructure/prepaid/normalize_source.py), normalize()/source parsers; [nativeManifestBuilder.ts](../src/modules/prepaid/application/nativeManifestBuilder.ts), build().
+- **AWS boundary:** [stepFunctionsRunner.ts](../src/stepFunctionsRunner.ts), startExecution()/describeExecution(); [sourceJobInspector.ts](../src/modules/prepaid/infrastructure/sourceJobInspector.ts), verify()/idle(). No definition updates.
+- **Evidence and setup:** [AWS integration guide](PREPAID_RECLASS_AWS_VERIFICATION.md) — exact filenames/jobs/tables, native settings and acceptance limitations.
 
 ## 2. Which files and billing cycles are really required, and how is the month chosen?
+
+**Recovered since the earlier review:** the backup's Prepaid group has KE24.xlsx, EG CALLCARD.xlsx, SG CALLCARD.xlsx, LOAD API_EG.xlsx, LOAD API_SG.xlsx, LOAD UP_EG.xlsx and LOAD UP_SG.xlsx. These are historical upload-configuration rows, not proof of the full extraction dependency list. Do not ask which names those rows contain; ask how Recharge/308/318 entered the original pipeline and which reports/cycles are required for one real month. Current supplied AWS Call Card names differ, so retain the verified current contract until any aliases are deliberately implemented/tested.
+
+**Cycle evidence limit:** the supplied AllBillCycles definitions contain no values, and no direct Prepaid use of those two tables was found. The portal currently requires both 308 and 318 for every expected cycle. Ask whether that paired coverage is intended; do not present it as a confirmed legacy rule.
 
 **Type: missing data/specification + confirmation.** Source references and some month rules exist; actual cycle values and the complete raw-file contract still need evidence.
 
 - **Ask:** “What is the complete required file list? Which billing cycles must be included? How do we choose the accounting period and the correct SG Call Card month? Are 411 and `sap_glbilled.txt` actually used for this workflow?”
 - **Legacy:** KE24/source tables; `zPARAM_ICCBS_AllBillCycles` / `dczPARAM_ICCBS_AllBillCycles`; SG Call Card source views. The supplied cycle-table definitions contain no actual cycle values.
 - **Now / process:** Processes **4, 6, 9, 11**. `contracts.ts` expects eight base uploads plus 308/318 for each configured cycle. Period comes from KE24; 411 and `sap_glbilled.txt` have no upload code.
-- **Need:** approved filenames, sample layouts/column mappings, cycle values and month-selection rules. This unblocks **producer parsing and configuration**. Do not guess cycles or truncate legacy three-character cycle values into the current two-digit contract.
+- **Need:** approved filenames, sample layouts/column mappings, cycle values and month-selection rules. Parsing for all ten workflows is implemented; this now unblocks **configuration and real-file acceptance**. Do not guess cycles or truncate legacy three-character cycle values into the current two-digit contract.
 
 **Why this matters:** the portal cannot know that uploads are complete unless the required files and cycles are correct. Choosing the wrong period or SG source month can produce apparently valid calculations using the wrong data.
 
@@ -107,23 +111,24 @@ The absolute links use this machine's paths. If sharing this document, your seni
 
 ## 4. Where should the real SAP mapping come from, and how often is it refreshed?
 
-**Type: missing live data/refresh setup + confirmation.** The legacy mapping table and field distinction are known; its approved data supply and refresh process are still needed.
+**Type: live operation/data approval + ownership confirmation.** The existing SAP-to-PostgreSQL reference job has now been found and its portal refresh/export integration is implemented. It is not another missing Step Function.
 
 - **Ask:** “Who owns the ZTF0455S mapping, and how can we obtain an approved export? Are client 300 and company GLOB the correct filters? Should we retain both BRAND and WWBRD, and what does each mean?”
 - **Legacy:** `dgS4HANA_TDIR1.dbo.ZTF0455S`. `WWBRD` is used as the allocation brand; `BRAND` is a separate category used for prepaid membership checks.
-- **Now / process:** Processes **10 and 21**. `referenceProvider.ts` and the converter already exist. Live source access/refresh wiring is not connected; missing authentic `BRAND` prevents complete membership reporting.
-- **Need:** approved source/export, field meanings, refresh schedule and owner. This unblocks **reference-source integration**. The mapping reader and membership APIs do not need to be recreated.
+- **Now / process:** Processes **4, 10 and 21**. Existing Glue job `isg-esatp-dv-sap_to_pg-gljo-ztf0455s` reads SAPPRD.ZTF0455S and overwrites `dgs4hana_tdir1_dbo.ztf0455s`. New admin `/reference-exports` APIs/worker verify, refresh when explicitly authorized, export immutable original-field JSONL and retain provenance. The existing provider/native builder use the approved descriptor. No UI or Step Function is changed.
+- **Need:** authorize the whole-table overwrite and shared-job coordination, obtain real data, confirm client 300/company GLOB and BRAND/WWBRD meanings, name the owner and approve the refresh/as-of-period policy. This unblocks **operational activation and acceptance**, not another source integration implementation.
 
 **Why this matters:** the mapping supplies accounts, classification fields, tax rates, average rates and units used in allocation. A copied or outdated mapping can change the journal even when the uploaded revenue is unchanged. BRAND and WWBRD must not be merged simply because their names are similar.
 
-**Request a concrete handoff:** an approved mapping export with field definitions, its refresh method, and who approves changes. Ask whether historical periods use the mapping available at that time or the latest mapping. Confirm how duplicate/missing mappings are handled and who corrects them. The current converter/provider can be connected after these source and ownership details are established.
+**Request a concrete handoff:** who may authorize/run the existing overwrite job, when it may run, who checks its result and who approves mapping changes. Ask whether historical periods use the mapping available at that time or the latest mapping. Confirm client 300/GLOB and duplicate/missing-mapping handling. The inspected job has no WHERE filter and overwrites the full shared table; portal export later selects only its acknowledged scope. No retained run history/trigger was returned, which is not proof there is no external scheduler. We still need an approved live execution/export and data owner, not invented seed rows. `export_existing` does not prove freshness; technical completion does not equal accounting approval.
 
 ### Where to look in the code
 
 - **Legacy reference views:** [dbo.ZTF0455S.View.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/DCSTDIR1/DCSTDIR1/dbo.ZTF0455S.View.sql:10) — reads the external table and filters client `300`; [dbo.ZTF0455S_with_revtype.View.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/DCSTDIR1/DCSTDIR1/dbo.ZTF0455S_with_revtype.View.sql:8) — reference revenue-type derivation.
 - **Current conversion:** [referenceConverter.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/domain/referenceConverter.ts:7) — `convertLegacyReference()`; inspect `MANDT`, `BUKRS`, `BRAND`, `WWBRD`, `TAXRATE` and `AVERATE`. Line 49 retains `BRAND` as `source_brand`.
 - **Current reading/tools:** [referenceProvider.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/application/referenceProvider.ts:23) — `load()` verifies an export; [convertPrepaidReference.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/convertPrepaidReference.ts:1) — offline converter entry point, not a live refresh job.
-- **Existing test:** [prepaid.reference.test.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/tests/prepaid.reference.test.ts:20) — mapping fields and provenance. The real approved export/refresh connection still has to be supplied.
+- **Current refresh/export:** [referenceRefreshService.ts](../src/modules/prepaid/application/referenceRefreshService.ts), [referenceRefreshWorker.ts](../src/modules/prepaid/application/referenceRefreshWorker.ts), [referenceRefreshRunner.ts](../src/modules/prepaid/infrastructure/referenceRefreshRunner.ts), [referenceSource.ts](../src/modules/prepaid/infrastructure/referenceSource.ts). Migration 009 adds only operation tracking; existing shared SAP rows are not seeded or overwritten by migration.
+- **Tests:** [prepaid.referenceRefresh.awsHttp.test.ts](../tests/prepaid.referenceRefresh.awsHttp.test.ts) uses real SDK clients over loopback; [prepaid.referenceRefresh.integration.test.ts](../tests/prepaid.referenceRefresh.integration.test.ts) checks isolated PostgreSQL/admin HTTP, empty-data rejection, lost-dispatch recovery and immutable retry bytes. [prepaid.reference.test.ts](../tests/prepaid.reference.test.ts) retains field/provenance checks. None is a live SAP accounting acceptance run.
 
 ## 5. Must EG top-up edits always preserve the original source total?
 
@@ -205,25 +210,25 @@ The absolute links use this machine's paths. If sharing this document, your seni
 - **Current service/routes:** [runService.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/application/runService.ts:860) — `referenceMembership()`; [router.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/api/router.ts:457) — JSON/CSV routes. Search for `REFERENCE_MEMBERSHIP_SOURCE_BRAND_UNVERIFIED`.
 - **Existing tests:** [prepaid.integration.test.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/tests/prepaid.integration.test.ts:1652) — membership populations; line 1710 tests missing `source_brand`. For actual Freeze blockers, inspect `prepaid_build_outputs` in [migrations.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/infrastructure/migrations.ts:251); membership is not silently added there.
 
-## 9. What exact file format did the SAP export use?
+## 9. Does the implemented XLSX workbook match the accepted EG/SG template?
 
-**Type: missing export-job specification + verification.** The legacy JV columns/content are provided and implemented. What is not established is how the job wrote the physical file and which file SAP accepted.
+**Type: confirmed file type + template/operating verification.** The user confirmed XLSX and the backend now generates real workbooks. File type is no longer missing; exact accepted template/cell requirements still need an example.
 
-- **Ask:** “Can you share one accepted EG and SG JV file and the export job steps? Did it use tabs, commas or pipes, which encoding/line ending, and did it include headers? What were the filename and ordering rules?”
+- **Ask:** “Can you share one accepted EG and SG XLSX workbook? Do these four sheets, the 40 JV column headers/order, filenames and text-preserved account/decimal cells meet the manual SAP process? Are any particular cells required to be numeric/date rather than text?”
 - **Legacy:** `webPrepaidSystems_JV01`, EG/SG JV views and SQL Agent jobs `Prepaid_Reclass_Preload_P10_EG_Only_AdHoc` / `Prepaid_Reclass_Preload_P10_SG_Only_AdHoc`.
-- **Now / process:** Processes **4, 22 and 24**. The 40-column content is implemented. The physical file settings still need real approval/configuration; filenames, row order and other conventions must be compared with accepted samples.
-- **Need:** export job definitions, accepted files and the approved specification. This unblocks **format configuration and acceptance tests**; additional serializer/report changes only if the evidence requires them.
+- **Now / process:** Processes **4, 22 and 24**. An explicit `fileType: "xlsx"` manual profile generates Layout, Allocation, Reconciliation and JV sheets; historical delimited profiles remain unchanged. The workbook keeps decimal strings/account codes as text to avoid precision loss. Automatic SAP delivery remains off.
+- **Need:** accepted EG/SG workbook samples and operator confirmation of the template/cell types. This unblocks **profile approval and real acceptance**, not another XLSX writer. Original P10 job steps are needed only for a separate request to reproduce historical automatic delivery.
 
-**Why this matters:** a file can have correct accounting values but still be rejected by SAP because its bytes or layout differ. A relational SQL view does not specify encoding, separators, headers, filenames or line ordering.
+**Why this matters:** valid XLSX is not automatically the accepted SAP workbook. A numerical accounting value stored as text preserves precision but may need an approved numeric-cell convention for a particular import template. That decision must come from a sample, not a guess that changes values.
 
-**Request a concrete handoff:** an actual accepted file for each region, preferably with an example containing a fractional quantity or a field needing quoting. Request the export job/script and whether it adds a BOM, uses Windows/newline conventions, or imposes record/file limits. Compare these details with the current serializer before approving configuration or deciding that additional report code is necessary.
+**Request a concrete handoff:** an accepted XLSX per region showing headers, sheet names, fractional quantities, long/zero-prefixed account codes and date/number cell formats. Confirm whether one workbook per regional revision inside the current History ZIP is appropriate. Do not request BOM, text delimiters or line endings for XLSX. Compare accepted examples before approving the profile or changing the writer.
 
 ### Where to look in the code
 
 - **Legacy field content/order:** [dbo.webPrepaidSystems_JV01.View.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/DCSTDIR1/DCSTDIR1/dbo.webPrepaidSystems_JV01.View.sql:8), [dbo.webPrepaidSystems_JV_EGHor.View.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/DCSTDIR1/DCSTDIR1/dbo.webPrepaidSystems_JV_EGHor.View.sql:8) and [dbo.webPrepaidSystems_JV_SGHor.View.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/DCSTDIR1/DCSTDIR1/dbo.webPrepaidSystems_JV_SGHor.View.sql:8). These are SQL result definitions, not the physical export script.
-- **Current format contract:** [contracts.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/domain/contracts.ts:235) — `jvHeaders`; `encodeDelimited()` follows the headers. In the same file, inspect `integrationSchema.format` for delimiter, line ending and encoding choices.
+- **Current format contract:** [contracts.ts](../src/modules/prepaid/domain/contracts.ts), manualReportFormatSchema and jvHeaders. The XLSX manual profile does not require text transport settings; integrationSchema retains historical text delivery compatibility.
 - **Current frozen-file creation:** [reportService.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/application/reportService.ts:82) — immutable/fallback format selection and JV serialization; [runService.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/application/runService.ts:771) — `freeze()` captures the reviewed format.
-- **Existing serializer test:** [prepaid.contracts.test.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/tests/prepaid.contracts.test.ts:69) — quoting, decimal strings and encoding. Actual SAP-accepted files are still required to confirm transport conventions.
+- **Workbook code/tests:** [reportWorkbook.ts](../src/modules/prepaid/infrastructure/reportWorkbook.ts), [prepaid.reportWorkbook.test.ts](../tests/prepaid.reportWorkbook.test.ts), and the XLSX Freeze/History HTTP test in [prepaid.integration.test.ts](../tests/prepaid.integration.test.ts). Generated workbook checks are not proof of SAP acceptance.
 
 ## 10. Is manual SAP execution the intended replacement for legacy automatic delivery?
 

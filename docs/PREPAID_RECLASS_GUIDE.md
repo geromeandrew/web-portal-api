@@ -1,35 +1,28 @@
 # Prepaid Re-Class: a complete user-flow and implementation walkthrough
 
-Updated: 16 October 2026. Start at the top and follow one accounting user's journey. At each stage, this guide explains the screen action, backend path, stored data, legacy equivalent and remaining work.
+Updated: 19 October 2026. Start at the top and follow one accounting user's journey. At each stage, this guide explains the screen action, backend path, stored data, legacy equivalent and remaining work.
 
-This is the main implementation guide, not a claim that production extraction or SAP acceptance is complete. The 14 October rewrite used source/documentation checks. On 15 October, the four supplied development Step Functions, five Glue job configurations, shared scripts and sampled historical executions were inspected read-only; no jobs were started and no database or AWS configuration was modified.
+This is the main implementation guide, not a claim of production accounting or SAP acceptance. The 18 October review integrates the ten supplied native source workflows without changing their AWS definitions.
 
-## Current implementation update — backend-only integration, 16 October 2026
+**19 October native restore and fixes:** etl_db_web.bak is now restored into native SQL Server LocalDB, without virtualization. CHECKDB returned no findings; the original is unchanged and a new verified backup exists. The 20 Prepaid web procedures and 11 views match the supplied scripts after whitespace/name qualification normalization. Genuine XLSX manual reports and end-to-end 100 MiB source-byte support are now implemented; historical frozen text output is preserved. The sandbox portal DB, connection and AWS definitions were not changed. See [restore, code changes and evidence limits](PREPAID_RECLASS_AWS_VERIFICATION.md#native-sql-server-restore-and-confirmed-fixes---19-october-2026).
 
-**The four AWS Step Functions are now called unchanged.** They need only `{"env_prefix":"isg-esatp-dv"}`. The backend does not send `portalExtraction`, require `PortalEntry/PortalValidate/PortalExtract`, or expect portal receipts from those machines. No AWS definitions, Glue defaults or cloud scripts were edited, and no extraction/SAP job was started in this update.
+**Still missing after the restore:** authentic SAP reference rows and complete cycle coverage. At the earlier sandbox check the reference/cycle tables were empty; restoring etl_db_web cannot restore data from its external databases. XLSX file type is confirmed, so the remaining format task is accepted workbook/template verification, not guessing text separators. Real archived files still need expanded-size/cell/time acceptance despite the raised input-byte ceiling. No configuration/approval row is auto-enabled.
 
-The backend validates/normalizes immutable originals, checks hashes/schemas, coordinates disposable shared-folder copies, runs native workflows sequentially, verifies Glue success metadata and writes its own immutable receipts. Its financial evidence is **backend-normalized originals**, not an assertion that shared Aurora rows are session-isolated or equal to those originals.
+**19 October reference-supply implementation:** the existing `isg-esatp-dv-sap_to_pg-gljo-ztf0455s` Glue job was found and its script inspected. The portal now has explicit admin refresh/export operations, durable status/recovery, read-only exact-value export, immutable S3 publication and direct compatibility with the existing reference provider. This job is **not** a missing Step Function or a SAP posting job. Install additive migration **009** and deploy/restart API/worker to enable this capability; migration 009 has been tested only in the disposable local database, not applied to sandbox in this change. Existing approved external exports remain supported on 001–008. No UI, real job, approval or sandbox data was changed. Follow Process 4 for setup, then Process 10 for the detailed reference flow.
 
-**Live read-only check:** Call Card SG, Load API EG and Load API SG are compatible. The 308 machine looks up `$.extract_4_output.JobRunId`, while the preceding Glue result has `Id`. Its owner must correct this internal defect. The backend reports it before dispatching any child; it does not edit AWS.
+## Current implementation update — ten workflows, 18 October 2026
 
-Migration **007_prepaid_backend_source_context** adds one nullable JSONB column to child execution tracking. Applied **locally only**, after backup; 38 other Prepaid/raw table fingerprints were unchanged. Inventory remains **35 portal Prepaid + 5 raw tables = 40**, **16 functions**, **7 views**. Local migrations 001–007 are current at `127.0.0.1:5432/web_portal`; Aurora was not migrated in this update.
+All ten provided source Step Functions and their twelve Glue jobs were inspected read-only and are compatible with the backend. The current 308 definition no longer contains the old JobRunId lookup. No AWS definitions, jobs or scripts were edited; no live extraction/SAP jobs were started.
 
-**Still required:** 308 correction, approval/coordination of shared Glue side effects, accepted files/totals and complete V2 adapter/remaining producers: KE24/period discovery, Call Card EG, Load Up EG/SG, Monthly Recharge, 318 charges, approved reference refresh. No approvals/integration rows were auto-enabled.
+The API `.env` now selects sandbox Aurora `postgres` / schema `web_portal`, with SSL; local settings are commented. See Process 2/database reference for migration evidence. Credentials are not documented.
 
-Earlier portal-branch deployment evidence is **historical and superseded**, not current configuration. See Processes 8–12 and [AWS status](PREPAID_RECLASS_AWS_VERIFICATION.md).
+**New path:** `preparationMode: "native_sources"` + explicit `sourceExtraction.coverage: "all_sources"` prepares KE24, Call Card EG/SG, Load Up EG/SG, Load API EG/SG, Monthly Recharge and both 308/318 cycles. The backend then combines verified immutable fragments with an **approved immutable SAP reference export**, publishes all eight canonical datasets and builds both layouts atomically. A separate final adapter Step Function is **not required in this mode**.
 
-## Historical AWS inspection — 15 October 2026
+Old external V2 adapters remain supported, and omitted coverage retains four-source behavior. No existing session/configuration is silently upgraded. No integration rows or shared-write/reference/export approvals were auto-enabled. The inspected sandbox has zero integration rows.
 
-Four supplied **active Standard source-extraction workflows** were verified in us-east-1:
+**Still needed before real use:** shared-job coordination approval, real reference export/refresh owner, actual cycles, approved JV export format, runtime access/worker operation and accepted legacy input/output comparisons. All ten are preparation workflows, not SAP delivery. UI and regional manual Freeze remain unchanged.
 
-- `isg-esatp-dv-prcl_cc_sg-sf`: Call Card SG.
-- `isg-esatp-dv-prcl_la_eg-sf`: Load API EG.
-- `isg-esatp-dv-prcl_la_sg-sf`: Load API SG.
-- `isg-esatp-dv-prcl_308_ba-sf`: 308 adjustments, header then line items.
-
-They belong to **Processes 8–12, source preparation**, not Save/Freeze/SAP delivery. At the 15 October inspection they ran shared Glue parsers into legacy-shaped Aurora source tables. The latest read-only inspection again finds the 308 handoff defect; see the current backend-only status above. The complete all-source V2 adapter remains a separate dependency.
-
-See [verified definitions, exact placement, sampled outcomes and required adaptation](PREPAID_RECLASS_AWS_VERIFICATION.md). Earlier statements that all extraction code is unavailable are superseded: these four components exist; the **complete isolated V2 parent/bridge and remaining source coverage** are still not established. No one child should be set directly as `ingestStateMachine`.
+Use the updated [AWS integration guide](PREPAID_RECLASS_AWS_VERIFICATION.md) for the ten-machine/twelve-table mapping, setup fields, code references and evidence limits. Earlier 15–16 October deployment/308-defect notes are historical, not current instructions.
 
 ## What Prepaid Re-Class is about
 
@@ -76,7 +69,7 @@ Next working cycle: Edit into a new draft, or Reset → upload new sources
 | --- | --- | --- |
 | [Before use](#1-before-the-user-opens-the-workspace) | Environment, access and operating dependencies, not accounting UI setup. | 1–4 |
 | [Upload](#2-open-the-workspace-and-upload-files) | Session ownership, exact inputs and automatic queueing. | 5–7 |
-| [Extract/transform](#3-extract-and-transform-the-real-sources) | Step Functions replacement for SQL Agent, four verified extractors and the remaining V2 integration gaps. | 8–11 |
+| [Extract/transform](#3-extract-and-transform-the-real-sources) | Step Functions replacement for SQL Agent, ten verified extractors and backend-native final assembly. | 8–11 |
 | [Build layouts](#4-verify-the-output-and-build-the-layouts) | Verification, snapshots, import, gross/net totals and source baselines. | 12–14 |
 | [Review/Save](#5-review-edit-and-save) | Allowed changes, versions, audit and recalculation. | 15–16 |
 | [Financial outputs](#6-allocate-reconcile-and-construct-journal-vouchers) | Allocation, offsets, reconciliation, membership and JV fields. | 17–22 |
@@ -95,7 +88,8 @@ Next working cycle: Edit into a new draft, or Reset → upload new sources
 | Express router | Authentication/module checks, validated commands and response/download endpoints. | [router.ts](../src/modules/prepaid/api/router.ts) |
 | Workspace service | Owned uploads, source versions, requirements, preparation queue and Reset. | [workspaceService.ts](../src/modules/prepaid/application/workspaceService.ts) |
 | Preparation worker | Durable AWS execution identity, polling and verified source publication. | [preparationWorker.ts](../src/modules/prepaid/application/preparationWorker.ts) |
-| External Step Functions tasks | Real raw parsing/normalization and reference supply. | Four source extractors/Glue scripts verified; complete isolated V2 parent/bridge and remaining sources still needed. See [AWS verification](PREPAID_RECLASS_AWS_VERIFICATION.md). |
+| External Step Functions tasks | Run twelve existing Glue extraction jobs for ten source workflows. | [Ten-workflow mapping](PREPAID_RECLASS_AWS_VERIFICATION.md); reference supply remains separate. |
+| Native manifest builder | Verify ten receipts, obtain approved immutable reference and assemble eight canonical datasets. | [nativeManifestBuilder.ts](../src/modules/prepaid/application/nativeManifestBuilder.ts), `build()`. No final AWS adapter required in native mode. |
 | Run service and repository | Owned revisions, locks, Save/Edit/Freeze and output reads. | [runService.ts](../src/modules/prepaid/application/runService.ts), [repository.ts](../src/modules/prepaid/infrastructure/repository.ts) |
 | PostgreSQL functions/views | Financial import, totals, allocation, reconciliation, JV and immutable-data guards. | [migrations.ts](../src/modules/prepaid/infrastructure/migrations.ts), [legacyRulesMigration.ts](../src/modules/prepaid/infrastructure/legacyRulesMigration.ts) |
 | S3 storage and report service | Checksummed source/output bytes and immutable frozen report ZIPs. | [prepaidStorage.ts](../src/modules/prepaid/infrastructure/prepaidStorage.ts), [reportService.ts](../src/modules/prepaid/application/reportService.ts) |
@@ -165,6 +159,8 @@ The exports do **not** establish the full contents and refresh processes of `sdb
 
 **Legacy inventory:** 20 web procedures plus 14 supporting procedures = **34 procedures**, including two historical `_BKP` variants; **32 non-backup procedures**. The modern implementation consolidates their responsibilities instead of recreating every SQL Server name.
 
+**Local restored copy (19 October):** use Windows Authentication with `(localdb)\ESATPPrepaidLegacy20261019`, database `etl_db_web`. CHECKDB has no findings, and the new verified backup/catalog/comparison evidence are under `C:/Users/rccco/Downloads/ESATP-Legacy-SQLServer/`. An initial READ_ONLY check passed, but a later read-only audit reported READ_WRITE; persistent protection is not established. Recheck/investigate before executing anything. This is a native local database, not Docker and not the portal PostgreSQL database. Only etl_db_web has been restored: external DCSTDIR1/source/SAP-reference/CranPort records and original SQL Agent jobs are not created by restoring it. Read definitions; do not execute financial/job-trigger procedures to inspect them.
+
 **Still needed — legacy/source discovery:** recover job definitions, underlying source-view SQL, report layouts, representative inputs/outputs and reference refresh rules. This is source investigation, not simply another portal API.
 
 ### Process 2 — Install and verify the current database
@@ -183,11 +179,12 @@ Current migration sources, in order:
 4. [legacyRulesMigration.ts](../src/modules/prepaid/infrastructure/legacyRulesMigration.ts): original EG source totals, optional split policy and reference membership.
 5. [rawSourceMigration.ts](../src/modules/prepaid/infrastructure/rawSourceMigration.ts): the five raw extraction targets used by the four supplied AWS workflows. Creates missing targets and validates existing column names, types, identity settings and the line-item unique index without rewriting existing source rows.
 6. [sourceExtractionMigration.ts](../src/modules/prepaid/infrastructure/sourceExtractionMigration.ts): per-preparation child tracking; previously applied locally and to Aurora.
-7. [sourceBackendMigration.ts](../src/modules/prepaid/infrastructure/sourceBackendMigration.ts): backend-private identities/artifacts/staging context, separate from native AWS input; applied locally only in this update.
+7. [sourceBackendMigration.ts](../src/modules/prepaid/infrastructure/sourceBackendMigration.ts): backend-private identities/artifacts/staging context, separate from native AWS input; now also applied to sandbox in this update.
+8. [allSourceMigration.ts](../src/modules/prepaid/infrastructure/allSourceMigration.ts): seven additional native raw targets and all ten accepted workflow codes; no financial function changes.
 
-Migrations 001–007 define **35 portal Prepaid tables (including the ledger) + 5 raw extraction tables = 40 required tables**, plus **16 portal PostgreSQL functions** and **7 portal views**. These are not one-for-one SQL Server table/SP replicas. The dated 15 October results below describe the earlier 001–005 inventory; the 16 October source-extraction follow-up adds one execution table without changing existing raw or financial rows.
+Migrations 001–008 define **35 portal Prepaid tables (including the ledger) + 12 raw extraction tables = 47 required tables**, **16 functions**, **7 views**. These are not one-for-one SQL Server replicas. The dated 15 October evidence below is historical.
 
-**Check the active target every time.** Active `.env` uses local PostgreSQL 17 at `127.0.0.1:5432`, database/schema `web_portal`, user `portal`; sandbox/RDS remain commented. Migration 007 was local only. The `:local` suffix means TypeScript execution, **not** a guarantee of a local database. Check before migrating; do not copy credentials into documentation.
+**Check the active target every time.** `.env` selects sandbox Aurora database `postgres`, schema `web_portal`, SSL enabled; saved local settings are commented. The `:local` script suffix means TypeScript execution, not local database selection. Never copy credentials into documentation.
 
 The full table/function/view inventory is in [Database reference](#database-reference) at the end, so it does not interrupt the walkthrough.
 
@@ -217,7 +214,7 @@ Existing private backups are under `docs/db-backups/`; do not delete them or com
 - **Evidence:** [Aurora object inventory and before/after fingerprints](prepaid/migration-verification/2026-10-15-aurora.json). It contains schema metadata/hashes, not source business rows or passwords.
 - **Connection boundary:** Aurora migration used the explicitly configured RDS Data API because direct PostgreSQL TCP access from this machine timed out. This does **not** fix the API/worker's TCP route to Aurora. `.env`, security groups and networking were not modified.
 
-**Still needed — deployment/setup:** resolve/verify the API and worker's database TCP connectivity for the intended runtime, deploy the approved application image and operate the workers. The ingestion bridge and remaining source coverage in Processes 8–12 are separate work; creating these tables does not complete that integration. No UI controls, source processing jobs or SAP dispatch were added or executed by this migration task.
+**Still needed — deployment/setup:** resolve/verify the API and worker's database TCP connectivity for the intended runtime, deploy the approved application image and operate the workers. Ten-source integration and backend final assembly are now implemented (Processes 8–12); creating tables alone still does not approve configuration or certify real accounting results. No UI controls, source processing jobs or SAP dispatch were added or executed by this migration task.
 
 ### Process 3 — Authenticate and authorize access
 
@@ -247,12 +244,12 @@ All Prepaid routes require authentication and module access. Run/session/report 
 
 | Setting/responsibility | What the supplied legacy actually says | Current implementation / action |
 | --- | --- | --- |
-| Trigger extraction | `sp_Prepaid1_Extract` calls SQL Agent job `Prepaid_Reclass_Preload_P02_Extract_04Mnt` and polls it. | Session preparation/worker implement triggering, durable identities and verified completion using a Standard V2 adapter. The raw job steps and deployed AWS machine are still needed. |
+| Trigger extraction | `sp_Prepaid1_Extract` calls SQL Agent job `Prepaid_Reclass_Preload_P02_Extract_04Mnt` and polls it. | All ten supplied native Step Functions are integrated. Backend preparation verifies source fragments and assembles the V2 manifest; no final adapter Step Function is required in native_sources mode. Original job steps are still useful for unverified selection/window behavior, not as a request to rebuild the supplied extractors. |
 | Trigger export/delivery | EG/SG Freeze procedures call `Prepaid_Reclass_Preload_P10_EG_Only_AdHoc` and `Prepaid_Reclass_Preload_P10_SG_Only_AdHoc`. | Intentionally replaced by regional manual staging. These SQL Agent names are evidence, not AWS settings or instructions to auto-post. |
 | JV columns/values | `webPrepaidSystems_JV01` plus EG/SG horizontal views define 40 fields, date/value expressions and amount filtering. | Already implemented in `prepaid_build_outputs` and `jvHeaders`: month-end dates, SA/GLOB/PHP, TOP-UP, regional text, posting keys, amount/quantity and classification fields. |
-| File delimiter, encoding, line ending | JV SQL defines a relational result, not how the export job writes bytes. | Must recover the export job/file specification or obtain an approved format. Layout's `Delimiter` column is not proof of a physical JV file delimiter. |
-| Required billing cycles | `zPARAM_ICCBS_AllBillCycles` and `dczPARAM_ICCBS_AllBillCycles` define cycle/month/run-date columns, but the supplied table files contain no cycle rows. | Configure approved actual `expectedCycles`. Legacy cycle column allows three characters; mapping to the current two-digit cycle contract needs source evidence, not arbitrary truncation. |
-| Producer/runtime configuration | SQL Server databases and SQL Agent are assumed available. No AWS ARN/name, bucket/role or V2 manifest appears in the supplied workflow. | Deploy/configure the real producer and runtime access for the new technology stack. |
+| Manual report file type/template | JV SQL defines relational content; the user has confirmed XLSX output. | Implemented explicit XLSX profile, retaining all 40 JV headers and exact text values. Confirm the workbook against accepted EG/SG samples; XLSX does not require delimiter/encoding/line-ending settings. Original P10 writer details remain separate historical-delivery evidence. |
+| Required billing cycles | `zPARAM_ICCBS_AllBillCycles` and `dczPARAM_ICCBS_AllBillCycles` define cycle/month/run-date columns, but the supplied table files contain no cycle rows. No direct Prepaid use of these two tables was found; the etl_db_web backup does not supply them. | Configure approved actual `expectedCycles`. Both 308 and 318 per cycle is the current portal contract, not a proven legacy rule. Legacy cycle columns allow three characters; do not arbitrarily truncate values to the current two-digit contract. |
+| Producer/runtime configuration | SQL Server databases and SQL Agent are assumed available. No AWS ARN/name, bucket/role or V2 manifest appears in the supplied workflow. | The ten provided AWS workflows are inspected/integrated, not awaiting creation. Configure runtime access, worker operation, approved data/format and coordinated shared writes; perform real-file acceptance. |
 
 **Conclusion:** do not reimplement the known JV content as a manual setup task—it is already code. Do not pretend the unknown export job bytes, cycle values or AWS deployment are specified by a job name.
 
@@ -272,6 +269,9 @@ All paths are relative to `/api/workflows/prepaid`:
 | GET | `/readiness` | Read schema/config checks and the legacy evidence; no database write or AWS dispatch. |
 | GET | `/integration` | Read saved runtime settings. |
 | PUT | `/integration` | Authorized administrator saves validated settings. |
+| POST | `/reference-exports` | Administrator explicitly queues read-only export or authorized whole-table Glue refresh followed by export; requires migration 009. |
+| GET | `/reference-exports/:referenceId` | Administrator polls operation status and retrieves its immutable `result.referenceExport` descriptor. |
+| POST | `/reference-exports/:referenceId/reconcile` | Administrator requests discovery/polling of an unknown original Glue run; never starts a replacement. |
 
 Readiness now also returns **`legacyBasis`**: the actual extraction/Freeze job names, cycle-table evidence and the implemented 40-column JV contract. Its flags explicitly say job steps, cycle rows, AWS machine definition and physical export settings are unavailable in the supplied legacy.
 
@@ -281,15 +281,14 @@ This metadata does not execute a legacy job, approve a mapping or install a gues
 
 #### What you must supply, and in what order
 
-1. Recover/implement the real raw-source producer described in Stage 3.
-2. Deploy its Standard V2 workflow. Set `ingestStateMachine` to the **actual deployed machine name**, not the old SQL Agent name unless a machine with that name was deliberately deployed.
-3. Obtain the actual required billing-cycle list from source owners and set `expectedCycles`.
-4. Recover/approve the physical JV export specification. Set `format.profile`, `format.delimiter`, `format.lineEnding`, `format.encoding` and the real approval assertion.
-5. Configure the application/worker's approved S3 bucket, AWS region and runtime role/credentials. Verify source/output access and execution Start/Describe permissions.
-6. Save configuration using the existing admin `PUT /integration`, check `GET /readiness`, then verify the pipeline using real inputs.
-7. Use a fresh preparation after configuration changes; reviewed snapshots/frozen reports retain captured settings.
+1. Review the ten-machine mapping in [AWS integration](PREPAID_RECLASS_AWS_VERIFICATION.md). Native source code is implemented; do not redeploy/modify AWS definitions.
+2. Approve shared-input/raw-write coordination, then select `preparationMode: "native_sources"` and `sourceExtraction: {envPrefix: "isg-esatp-dv", coverage: "all_sources", sharedWritesApproved: true}`.
+3. Obtain the actual required billing cycles and set `expectedCycles`; no guessed defaults.
+4. Use admin `POST /reference-exports` (Process 10) to obtain a real immutable legacy-field ZTF0455S export, or retain an already approved external export. Review the completed descriptor, then set `referenceExport: {key, prefix, sha256, rowCount, approved: true}`. Agree its refresh owner; completion does not automatically approve it or change integration settings.
+5. Accept the manual workbook template, then supply `format: {fileType: "xlsx", profile: "prepaid-manual-xlsx-v1", approved: true}`. No text transport fields are needed for XLSX. Configure S3/region/runtime access and run both API and worker; old delimited formats remain backward compatible.
+6. Save through admin `PUT /integration`, check `GET /readiness`, then upload accepted real inputs in a fresh session and compare with legacy.
 
-Manual staging requires only `ingestStateMachine`, `expectedCycles` and `format`. `deliveryStateMachine`, `target`, `upstreamPrefix` and format reversal capability are optional historical-delivery settings—not prerequisites to the refined workflow.
+Native preparation does not require `ingestStateMachine`. Existing external-adapter integrations instead retain their complete Standard V2 adapter name. No partial source extractor is a full adapter. `deliveryStateMachine`, `target`, `upstreamPrefix` and reversal support are optional historical-delivery settings, not refined UI prerequisites.
 
 `format.approved: true` must represent real approval. It is not an approval system and not proof of SAP acceptance. No ready/verified configuration is inserted automatically.
 
@@ -302,6 +301,8 @@ At the last recorded local database check, `prepaid_integrations` contained zero
 ---
 
 ## 2. Open the workspace and upload files
+
+**Upload compatibility (19 October):** Prepaid defaults to a 100 MiB per-file ceiling through `PREPAID_MAX_UPLOAD_BYTES`; other modules retain their own MAX_UPLOAD_BYTES. API upload buffers are limited to two concurrent responses per process. The frontend Nginx config allows 101m only under `/api/workflows/prepaid/` for the source plus multipart overhead, retaining the general 5m limit. Local parsers/worker/landing checks agree on the byte ceiling; expansion/cell/time limits still apply. Restart/redeploy the reviewed API/worker/proxy for changes to take effect; no live deployment was performed.
 
 **On the screen:** Open Prepaid Re-Class. In Upload file, browse/drop the required files, watch upload progress and remove a completed input when allowed.
 
@@ -357,7 +358,7 @@ There is no reference upload code, `411` upload code or `sap_glbilled.txt` uploa
 
 Files are stored with IDs, keys and SHA-256 hashes. A change advances the source version. Pending preparation restricts source changes/Reset; frozen-source replacement requires the appropriate draft/reset flow.
 
-**Still needed — producer code:** real XLSX/CSV parsing is not done by this upload endpoint. Filename validation and S3 upload do not constitute extraction.
+**Implemented boundary:** the upload endpoint validates/stores bytes; parsing is deliberately done later by the existing source worker/local Python normalizer. Filename validation and S3 upload alone are not extraction. All ten source parsers are implemented; real-file acceptance remains.
 
 Existing sample pack: `C:/Users/rccco/Downloads/Prepaid-Reclass-Samples-2026-09`. Its synthetic upload files and eight adapter fixtures exercise contracts only; they are not certified production inputs or approved reference mappings.
 
@@ -390,110 +391,89 @@ Changing files must not silently reuse a previously reviewed snapshot. Mutations
 
 ## 3. Extract and transform the real sources
 
-**On the screen:** Wait for automatic preparation. There is no Extract button, manual period selection or manifest editor in the refined UI.
+**On screen:** automatic waiting after complete uploads. No Extract button, period field or manifest editor.
 
-**Stage result:** A Standard execution produces one accounting period and eight canonical JSONL datasets plus a manifest identifying the exact execution and source bytes.
+### Process 8 — Backend preparation calls all selected native extractors
 
-**If this stage is blocked:** Four deployed source workflows and their shared XLSX parser are now verified. The main remaining gap is safe session/run isolation, missing source coverage and the complete canonical V2 parent/bridge; an individual extractor is not that adapter.
+**Legacy:** `sp_Prepaid1_Extract` triggered/waited for the SQL Agent extraction job. Its original job steps remain outside the supplied SQL export. Ten migrated source workflows now cover the portal's uploaded input families; do not infer undocumented four-month rules from the old job name.
 
-### Process 8 — Backend preparation calls existing extraction workflows
+**Current:** [sourceExtractionWorker.ts](../src/modules/prepaid/application/sourceExtractionWorker.ts), `advance()`, preflights all selected definitions and Glue input/target contracts before dispatch. Native execution input is only `{"env_prefix":"isg-esatp-dv"}`. Portal identities, normalizer revision, artifacts and shared-copy state live in `prepaid_source_extractions.context`, not AWS input.
 
-**User action:** none after all required uploads. The two-step UI is unchanged.
+With explicit all-source coverage, the order is KE24 → Call Card EG → Call Card SG → Load Up EG → Load Up SG → Load API EG → Load API SG → Monthly Recharge → 308 header/detail → 318 header/detail. KE24 establishes the accounting period before EG Call Card records are normalized. See the [exact machine/job/raw-target table](PREPAID_RECLASS_AWS_VERIFICATION.md#1-where-the-workflows-belong).
 
-**Legacy:** `sp_Prepaid1_Extract` starts/waits for SQL Agent extraction. [preparationWorker.ts](../src/modules/prepaid/application/preparationWorker.ts) coordinates AWS execution identities and a renewable preparation lease instead.
+For each child: verify original hashes → parse/validate locally → immutable JSONL → acquire conditional shared-folder lock → check running executions/Glue/foreign matching files → stage disposable owned copies → persist named request → start/poll native workflow → verify input and final Glue Id/JobName/JobRunState → wait for Glue to settle → conditional owned-copy cleanup → backend receipt.
 
-**Current code:** [sourceExtractionWorker.ts](../src/modules/prepaid/application/sourceExtractionWorker.ts), `advance()`:
+Unknown starts/outcomes keep ownership for recovery; no timeout-based lock stealing. External/manual producers do not automatically honor the portal lock. Shared Glue writes require explicit owner coordination. Original uploads are never passed to move/delete jobs. Financial evidence is backend-normalized originals, **not proof of session isolation or equality of shared Aurora raw rows**.
 
-1. Read all four definitions and Glue settings. Confirm native order, input folder/pattern and target tables. Inspect only; never deploy.
-2. Persist the child name and **only** `{env_prefix}` in `prepaid_source_extractions.execution_input`. Save portal identities, normalizer revision, outputs and staging state separately in `context`.
-3. Hash-check exact originals, parse locally, validate records and write immutable session-specific JSONL fragments. Invalid financial inputs stop that source before dispatch.
-4. Acquire the conditional S3 lock `prepaid_reclass/portal-coordination/extract.lock.json`. [legacyLanding.ts](../src/modules/prepaid/infrastructure/legacyLanding.ts) coordinates portal workers across databases.
-5. Check running workflows/Glue jobs and conflicting matching inbound files. Stage only verified **disposable copies** for this child in `prepaid_reclass/inbound/`. Never overwrite foreign files or expose originals to jobs that move/delete inputs.
-6. Start with `{"env_prefix":"isg-esatp-dv"}`. Native tasks call Glue 1 (Call Card SG), 2 (Load API EG), 3 (Load API SG), or 4 then 5 (308). One child runs at a time.
-7. Poll AWS. Recover uncertain starts with the same saved name/input, without re-staging copies Glue may have moved. Running/unknown outcomes retain the lock; no timeout-based stealing.
-8. Verify exact native input, success, final Glue `JobName/Id/JobRunState`, and backend JSONL hashes/counts. AWS does **not** return a portal receipt.
-9. Wait for active Glue work/cancellation to settle. Conditionally clean only owned/hash-verified copies and release the lock; originals stay intact. Record the verified backend receipt.
-10. Pass backend receipt descriptors to the **complete V2 adapter**. It must still supply all eight datasets/final manifest. Compare covered records before making a snapshot ready.
+The 308 owner has removed the old faulty JobRunId handoff. All ten currently pass read-only compatibility. `pnpm verify:prepaid:sources` is read-only; the former --apply deployment path is disabled. `GET /workspace/extractions` exposes owned progress.
 
-```text
-Uploads -> durable preparation -> backend validates originals/native contracts
-  -> lock/stage -> native workflow -> verify/cleanup
-       sequentially: CC SG -> Load API EG -> Load API SG -> 308
-  -> backend extractionReceipts -> complete V2 adapter + remaining producers
-  -> eight datasets/manifest -> verification -> layouts ready
-```
+**Still needed:** operational approval/access and accepted real files. No new extraction Step Function is identified as missing among these ten supplied input families.
 
-**“Portal validation” means backend checks**, not an AWS state/parameter. [sourceExtraction.ts](../src/modules/prepaid/domain/sourceExtraction.ts) maps/validates native contracts; [sourceJobInspector.ts](../src/modules/prepaid/infrastructure/sourceJobInspector.ts) reads Glue settings/activity. No AWS script override.
+### Process 9 — Normalize sources while preserving legacy calculation boundaries
 
-**Safety boundary:** unchanged jobs still move disposable copies and replace/write shared Aurora raw rows through their existing connection—even when portal PostgreSQL is local. Backend fragments are independently session-scoped; they are **not** proof of shared-row isolation/equality. Enable `sharedWritesApproved: true` only with owner approval. External/manual producers do not automatically honor the portal lock: coordinate them or arrange isolated infrastructure. Operators must inspect saved execution IDs, Glue activity and owned copies before reconciling an orphaned lock; do not simply delete it.
+[sourceNormalizer.ts](../src/modules/prepaid/infrastructure/sourceNormalizer.ts) invokes [normalize_source.py](../infrastructure/prepaid/normalize_source.py) as a bounded local subprocess. It imports pure existing parsing helpers, not an AWS/Glue entry point. No portal validator needs deployment in the supplied workflows.
 
-**Current blocker:** all four are preflighted first. The live 308 `JobRunId` defect blocks the sequence until its owner corrects it. The backend does not patch/replace the workflow.
-
-**Diagnostics:** `GET /api/workflows/prepaid/workspace/extractions` shows owned progress. `pnpm verify:prepaid:sources` checks compatibility read-only. Former `deploy:prepaid:sources -- --apply` is disabled.
-
-**Still needed:** 308 correction, shared-operation approval, accepted files/totals, complete V2 adapter and remaining producers. No child is the complete `ingestStateMachine`; the API rejects that mistake.
-
-### Process 9 — Apply source transformations, not duplicate financial SQL
-
-**Backend implementation:** [sourceNormalizer.ts](../src/modules/prepaid/infrastructure/sourceNormalizer.ts) runs [normalize_source.py](../infrastructure/prepaid/normalize_source.py) as a local bounded subprocess. It imports pure helpers in [portal_source_extract.py](../infrastructure/prepaid/portal_source_extract.py), not its historical Glue entry point. No boto3/awsglue or AWS deployment is needed. Rules follow inspected job arguments/source views/legacy imports, tested with Python fixtures and a real backend subprocess/XLSX test.
-
-| Source | Implemented parsing/normalization | Legacy connection |
-| --- | --- | --- |
-| Call Card SG | `CALLCARD` sheet; skip four rows; trade column 2/internal column 7; use the latest valid dated row, not the sum of prior months. Include `sourcePeriod` for later KE24 verification. Reject ambiguous latest-month rows. | `WebdcCallCard_SG_TotalGrossAmout` orders valid dates; `sp_Prepaid1_SGLayout_Import_01_Copa` selects `MAX(MonthNo)`. |
-| Load API EG | First sheet; skip three rows; amount column 6; select Type EG; decimal aggregate to two places. | Glue extract_2 and `WebdcLoadAPI_TotalAmount`, consumed by EG import. |
-| Load API SG | First sheet; skip two rows; amount column 9, preserving the discard-column offsets; select Type SG. | Glue extract_3 and `WebdcLoadAPI_SG_TotalAmount`, consumed by SG import. |
-| 308 | Read Cycle Code/Year/Instance first, then locate all ten detail headers. Associate both phases by the exact source UUID/key/hash and actual `308_XX` code, not wildcard discovery position. Emit PHP adjustment records and preserve cycle evidence. | Existing header/detail source views and Glue extract_4/extract_5. `Cycle Instance` is not guessed to be an accounting month. |
-
-Exact S3 key/hash checks, ZIP expansion/dimension bounds, uncached-formula rejection and immutable output writes are implemented. Parsing fails on ambiguous financial headers or malformed amounts rather than inventing a successful result. The stricter exact-header checks and decimal arithmetic are intentional safety differences from the old fuzzy/float pipeline; accepted source files and accounting totals still require verification.
-
-Output fragments deliberately omit `period`: KE24 must establish it. [sourceExtractionBridge.ts](../src/modules/prepaid/application/sourceExtractionBridge.ts) binds that verified period, checks SG source period and 308 cycle/year evidence, and compares the four sources' canonical rows as a multiset. Omitted, changed or additional covered records fail before a ready snapshot is committed. Other source families are not fabricated by this bridge.
-
-**Trace for these four sources:** immutable originals → hash check → local backend parser/source selection → session-specific JSONL. Separate unchanged AWS workflows still execute shared raw-table jobs. [contracts.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/domain/contracts.ts:50) defines the required output records; [sp_Prepaid1_EGLayout_Import_01_Copa.StoredProcedure.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/etl_db_web/etl_db_web/dbo.sp_Prepaid1_EGLayout_Import_01_Copa.StoredProcedure.sql:8) and [sp_Prepaid1_SGLayout_Import_01_Copa.StoredProcedure.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/etl_db_web/etl_db_web/dbo.sp_Prepaid1_SGLayout_Import_01_Copa.StoredProcedure.sql:8) identify legacy source consumers. Four source-specific Glue extractors/shared scripts have now been verified; their [inspection copies and compatibility gaps](PREPAID_RECLASS_AWS_VERIFICATION.md) show what can be reused. The complete portal-compatible V2 producer is still missing and is not hidden inside `prepaid_import_layout`.
-
-**Purpose:** reproduce the legacy producer's filtering, grouping, periods, signs and source amounts before PostgreSQL calculates reclassification.
-
-The distinction answers the extraction/Glue question:
-
-| Work | Where it belongs | Current position |
-| --- | --- | --- |
-| Read XLSX/CSV, obtain external source/reference data | Producer task code or recovered ETL jobs | Four source-specific Glue extractors verified; remaining families and safe V2 integration still needed. |
-| Select correct period/cycle/month, normalize columns, validate totals/signs | Producer transformations | Legacy source specifications and fixtures still needed. |
-| Layout totals, allocation, reconciliation and JV calculations | PostgreSQL functions/views | Implemented; accounting differences still need acceptance. |
-| Run tasks, pass identities, wait, fail/retry and publish a manifest | Step Functions orchestration | Caller/contract exists; deploy real workflow. |
-
-**Glue is already used by the four provided AWS workflows.** Their definitions, job defaults and shared parser scripts were verified on 15 October; do not recreate those components from scratch merely because they were absent from the original legacy export. The backend handles portal validation, owned-copy staging, normalization and receipts. The internal 308 defect remains with its owner; shared raw writes require explicit approval. Other source tasks may use an appropriate verified runtime. Do not duplicate the portal's financial SQL in Glue.
-
-Legacy source views needing verified producer equivalents:
-
-| Input family | Legacy views |
+| Source | Implemented selection / legacy relationship |
 | --- | --- |
-| COPA | `webdcKE24_EC_COPAValues` |
-| Call Card | `WebdcCallCard_TotalGrossAmout`, `WebdcCallCard_SG_TotalGrossAmout` |
-| Load Up | `WebdcLoadUp_TotalAmount`, `WebdcLoadUp_SG_TotalAmount` |
-| Load API | `WebdcLoadAPI_TotalAmount`, `WebdcLoadAPI_SG_TotalAmount` |
-| Recharge | `WebRechargeSumamry_TotalAmount`, `WebRechargeSumamry_SG_TotalAmount` |
-| AMAXCE | `WebAmaxee_TotalAmount`, `WebAmaxee_SG_TotalAmount` |
+| KE24 | Exact 16 financial headers, PHP revenue/quantity/classification; one normal fiscal period 001–012. Reproduces COPA input to regional Import_01_Copa. |
+| Call Card EG | Skip one row; business column 3/gross 9; retain individual amounts so PostgreSQL rounds each before SUM, like WebdcCallCard_TotalGrossAmout. |
+| Call Card SG | CALLCARD sheet, skip four; trade 2/internal 7. Latest valid dated row only; compare actual year-month with KE24. Legacy importer used MAX(MonthNo). |
+| Load Up EG/SG | Skip four; EG type 2/amount 10, SG type 1/amount 9; matching-region decimal sums. Legacy WebdcLoadUp_TotalAmount/SG. |
+| Load API EG/SG | EG skip three/amount 6; SG skip two/amount 9; matching-region sums. Legacy WebdcLoadAPI_TotalAmount/SG. |
+| Monthly Recharge | UTF-8 comma CSV with quoted fields; E/S, PS/RP only; retain signed amounts, no CR/DR sign flip. Legacy WebRechargeSumamry_TotalAmount/SG. |
+| 308 / 318 | Verify exact original's Cycle Code/Year/Instance and complete detail headers; retain PHP adjustment/charge records separately. Existing SQL sums AMAXCEP by E/S into AMAXCE. No guessed cycle-instance/month mapping. |
 
-SG has latest-Call-Card-month behavior. The producer must select the approved source month; portal checks alone cannot reconstruct missing raw producer rules.
+KE24 fragments include the verified period. Other financial fragments bind that period later; SG Call Card also retains sourcePeriod. [sourceExtractionBridge.ts](../src/modules/prepaid/application/sourceExtractionBridge.ts) compares covered canonical records as a multiset, including duplicate counts. Missing, additional or changed records fail before publication.
 
-#### Local parsing runtime setup
+Strict financial headers, decimal strings, ZIP/dimension limits and uncached-formula rejection are safeguards, not proof of byte-identical legacy floating-point behavior. Mixed/special KE24 periods fail rather than guessing. Accepted-file/golden-total verification remains required.
 
-The worker needs Python with pinned `infrastructure/prepaid/requirements-backend.txt`. Both Dockerfiles install/include this helper; nothing needs deploying inside the four workflows.
-
-```powershell
-python -m venv .venv-prepaid
-./.venv-prepaid/Scripts/python.exe -m pip install -r infrastructure/prepaid/requirements-backend.txt
-```
-
-The worker uses repository `.venv-prepaid`, or `PREPAID_PYTHON_EXECUTABLE` if set to another installed interpreter. XLSX bytes enter stdin; JSON leaves stdout; no AWS/database access. Missing Python/invalid inputs are errors, never guessed empty data.
+**Runtime:** install pinned `infrastructure/prepaid/requirements-backend.txt` in `.venv-prepaid`, or configure PREPAID_PYTHON_EXECUTABLE. Existing Dockerfiles include the helper. Missing Python/invalid sources fail, never create guessed zeros. The original shared Glue jobs still run unchanged; PostgreSQL retains financial calculations.
 
 ### Process 10 — Obtain and normalize the SAP reference mapping
 
-**Trace:** approved ZTF0455S export → [referenceProvider.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/application/referenceProvider.ts:23) `load()` → [referenceConverter.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/domain/referenceConverter.ts:7) `convertLegacyReference()` → canonical reference records/provenance. Legacy [ZTF0455S.View.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/DCSTDIR1/DCSTDIR1/dbo.ZTF0455S.View.sql:10) reads the external mapping database. The helper reads verified bytes; it does not schedule the real mapping refresh or invent approval.
+**Trace:** explicit admin request → existing reference Glue refresh (optional) → read-only PostgreSQL snapshot → immutable legacy-field JSONL/provenance → administrator approval in `/integration` → [referenceProvider.ts](../src/modules/prepaid/application/referenceProvider.ts) `load()` → [referenceConverter.ts](../src/modules/prepaid/domain/referenceConverter.ts) `convertLegacyReference()` → native manifest reference dataset. Legacy [ZTF0455S.View.sql](C:/Users/rccco/Downloads/DCS2_Legacy_4_RCC_DB-20260923T061118Z-1-001/DCS2_Legacy_4_RCC_DB/DCSTDIR1/DCSTDIR1/dbo.ZTF0455S.View.sql:10) reads the external mapping database. Refresh is environment preparation, not another screen or an automatic upload side effect.
 
 **Purpose:** map revenue to account, brand/CFU/sub-product, tax rate, average rate and UOM.
 
 Legacy reference depends on `dgS4HANA_TDIR1.dbo.ZTF0455S`, client `300`. Canonical mapping uses company `GLOB`; confirm this filter because the legacy view did not explicitly establish that same restriction.
+
+#### 10a. Prepare an actual reference export before the accounting user uploads
+
+The inspected AWS job is `isg-esatp-dv-sap_to_pg-gljo-ztf0455s`: **SAPPRD.ZTF0455S → dgs4hana_tdir1_dbo.ztf0455s**. Its `GlueSapToPg.py` performs a whole-table truncate/overwrite, with no client/company WHERE filter. The portal does not replace or edit that script. It calls the existing job directly when explicitly authorized. The ten prepaid Step Functions prepare other sources; none supplies this mapping or posts to SAP.
+
+1. Install migration 009 through the existing Prepaid-only migration command, using the reviewed target connection. Deploy/restart the API and worker. `GET /readiness` exposes `referenceExportsAvailable`; old external-reference preparation remains compatible without 009.
+2. As an active administrator with Prepaid access, call `POST /api/workflows/prepaid/reference-exports`. Use a new UUID for each genuinely new request; reuse the same UUID/body after an HTTP response is lost.
+
+   ```json
+   {
+     "idempotencyKey": "8cfab6d7-0bfd-4244-b6fb-9d13b8e029c0",
+     "period": "2026-09",
+     "mode": "export_existing",
+     "scopeApproved": true
+   }
+   ```
+
+   This example exports existing real rows without starting Glue. The period is an example; select the intended accounting period. `scopeApproved` acknowledges client **300** / company **GLOB**, not approval of the financial mapping. If existing data is empty, it fails—no synthetic records are inserted.
+3. When the reference owner authorizes a refresh and coordinates shared jobs, use `mode: "refresh_and_export"` and **also** `sharedWritesApproved: true`. That flag explicitly authorizes the existing job's **entire shared table** overwrite, including records outside the portal's eventual export scope. Do not send it just to clear a warning.
+4. Poll `GET /reference-exports/<id>`. A `202` response means queued, not refreshed/exported. The normal phases are queued → dispatching/running (refresh mode only) → exporting → publishing → releasing → complete. Only `status: "completed"` supplies a usable descriptor.
+5. Review `provenance` and `result.referenceExport`. Copy the descriptor into the existing integration configuration and add `approved: true` only after approval. Save the other approved cycles/shared-operation/XLSX settings through `PUT /integration`. No integration row is automatically inserted or modified.
+
+#### 10b. What the backend checks and preserves
+
+- Before dispatch, verify all **17 original fields** with exact text/decimal types, the pinned Glue job/script hash and its fixed SAP/PG targets. Read the Glue connection with `HidePassword: true`; compare database, port and resolved server address against the portal's actual PostgreSQL connection. A cluster endpoint and instance endpoint can be valid aliases. Do not use this path against an unrelated local database.
+- Acquire the same conditional S3 coordination lock used by source extraction; check all ten source workflows/twelve Glue jobs and other reference runs for activity. External/manual producers must honor the same coordination agreement; a portal lock cannot stop arbitrary external starts.
+- Start the original Glue job once. One ignored argument, `--prepaid_reference_request_id`, correlates the run for recovery; it is **not** a portal validator or a required new Glue script parameter. No Step Function is edited and no validator is required inside it.
+- For export, use a **repeatable-read, read-only** PostgreSQL transaction. Select client 300/GLOB, retain all original fields including distinct BRAND/WWBRD, cast decimals/codes to strings in SQL, sort deterministically and reject empty/invalid mappings. Bounds: 250,000 rows / 20 MiB. Excluded companies/clients are outside the explicitly acknowledged export scope, not silently repurposed mappings.
+- Persist exact snapshot bytes before S3 publication. Conditional writes produce `prepaid_reclass/reference-exports/<id>/ztf0455s.jsonl` and `provenance.json`. Hash/count and original values are retained. A lost PUT response retries the same durable bytes even if the shared table later changes. Snapshot bytes are cleared from the operation row after completion; immutable objects and metadata remain.
+- `export_existing` does **not** prove source freshness. Refresh mode verifies the marked Glue run succeeded, but technical completion is still not accounting approval. Neither mode bypasses later allocation/reference validation.
+
+#### 10c. Failure and recovery
+
+If dispatch acknowledgment is lost, status becomes **unknown** and the shared lock is retained. Call `POST /reference-exports/<id>/reconcile` with `{}` after investigation; it searches for the original marked run and never starts another overwrite. If no run is visible, the operation remains unknown. Do not manually clear its lock or create a replacement until the owner proves the original cannot still run; pruned history/multiple matching runs need operator investigation. A lease timeout is not evidence the AWS job stopped.
+
+A known failed Glue run yields failed status with a warning that the shared table may be incomplete. No export is published. The reference/data owner must inspect and recover it before another authorized refresh. A changed script hash, mismatched server, missing column or lossy type fails closed rather than modifying AWS or guessing a schema.
+
+**Implementation map:** [referenceRefresh.ts](../src/modules/prepaid/domain/referenceRefresh.ts) defines the verified job/request contract; [referenceRefreshService.ts](../src/modules/prepaid/application/referenceRefreshService.ts) queues and reads admin operations; [referenceRefreshWorker.ts](../src/modules/prepaid/application/referenceRefreshWorker.ts) handles durable phases/leases/recovery; [referenceRefreshRunner.ts](../src/modules/prepaid/infrastructure/referenceRefreshRunner.ts) calls and inspects existing Glue; [referenceSource.ts](../src/modules/prepaid/infrastructure/referenceSource.ts) reads original PostgreSQL rows; [referenceRefreshMigration.ts](../src/modules/prepaid/infrastructure/referenceRefreshMigration.ts) adds only the portal operation table/indexes. The shared SAP table already exists in the inspected sandbox and is upstream-owned; 009 neither populates nor overwrites it.
 
 Implemented utilities:
 
@@ -517,23 +497,24 @@ It writes normalized data plus report/provenance. Transport verification is not 
 
 Original metadata, including fields such as `PSTKY`, is retained in converter provenance where supplied.
 
-**Still needed — data source/producer integration/approval:** supply the real export and refresh ownership, connect the existing provider to the deployed producer and approve mapping semantics. The reader/converter themselves are implemented.
+**Still needed — operation/data/approval, not another producer implementation:** authorize and run the existing job when appropriate, approve actual client/company/BRAND semantics, assign refresh ownership/as-of-period policy and configure the completed descriptor. The latest read-only sandbox audit found no usable mapping rows. No live job was started to manufacture a successful demonstration. Native manifest assembly continues consuming only an approved immutable export, never the mutable shared table.
 
-### Process 11 — Publish the exact V2 preparation contract
+### Process 11 — Assemble and publish the exact V2 preparation contract
 
-**Additional contract when `sourceExtraction` is enabled:** the V2 input includes `extractionReceipts`, one per supplied child, containing its workflow, execution ARN, receipt key and verified artifact descriptors. The final V2 manifest must echo that array unchanged. Read the fragments, bind the accounting period discovered from KE24, and publish their records into canonical `callcard` (SG portion), `loadapi` (EG/SG) and `adjustments`. Supply the other source families from their actual producers; do not fill them with guessed empty datasets. The backend independently rereads checksummed fragments and compares all covered canonical records before committing a ready snapshot. Header Cycle Code/Year/Instance are preserved and structurally checked; the undocumented cross-year/window rules are not inferred from the old job name.
+**Native mode, implemented:** [nativeManifestBuilder.ts](../src/modules/prepaid/application/nativeManifestBuilder.ts), `build()`, verifies exactly ten unique backend receipts against the preparation/session/workspace/source version and every original UUID/key/hash. It reads immutable fragment hashes/counts, derives exactly one KE24 period, checks SG period and both 308/318 header coverage, loads the approved reference and writes eight bounded canonical JSONL datasets plus a V2 manifest using conditional immutable writes.
 
-Current **backend-only** `sourceExtraction` configuration is in [AWS status](PREPAID_RECLASS_AWS_VERIFICATION.md). Old `scriptSha256/scriptLocation` settings are not accepted for new native dispatch. No live integration row was seeded or approved automatically. A full configuration still needs the real complete adapter name, approved billing cycles and export settings. In Aurora, verification found zero integration rows, so uploads cannot yet demonstrate a full ready accounting run. This is an explicit dependency, not a hidden success state.
+The manifest has `producer: "backend"`, referenceSource and `executionArn: "backend:preparation:<id>"`; this is an explicit backend identity, not an invented AWS execution. Real child execution ARNs remain in its extractionReceipts; the parent preparation's execution_arn stays NULL. Native retries reuse completed receipts/artifacts, including after an acknowledged-but-lost manifest PUT.
 
-Worker IAM needs `states:DescribeStateMachine`, `StartExecution`, `DescribeExecution`, `ListExecutions`; `glue:GetJob`, `GetJobRuns`; S3 read/list plus conditional lock/copy write/delete and immutable preparation output writes; relevant KMS access if required. Existing Glue roles retain their original permissions. No definition-update permission is needed. IAM/AWS definitions were not changed.
+**External-adapter compatibility:** an existing complete Standard V2 adapter may still be configured. It receives persisted source identities/expectedCycles/discoverPeriodFrom and optional extractionReceipts; its output returns `{contractVersion: 2, manifestKey}` and must echo receipts/use exact covered records. Old scriptSha256/scriptLocation settings are not accepted for native dispatch. One source extractor cannot replace this complete adapter.
 
-**Follow the contract:** [preparationWorker.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/application/preparationWorker.ts:77) constructs the input; [contracts.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/domain/contracts.ts:207) defines `sessionManifestSchema`; [prepaidStorage.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/infrastructure/prepaidStorage.ts:65) verifies JSONL hashes/counts. The workflow returns a manifest key, not accounting amounts directly to the UI. Its execution ARN must be present in the manifest it produces.
+Both paths converge in [preparationWorker.ts](../src/modules/prepaid/application/preparationWorker.ts), `tick()`, for exact manifest/snapshot checks and PostgreSQL import. Reference/export/shared-write approvals are not inserted automatically; sandbox integration rows remain zero until an administrator supplies them.
 
+Worker permissions: states DescribeStateMachine/StartExecution/DescribeExecution/ListExecutions; glue GetJob/GetJobRuns; scoped S3 read/list, conditional lock/copy write/delete, immutable output writes and applicable KMS. No AWS definition-update permissions.
 **Purpose:** let the portal prove the output belongs to this session and these source bytes.
 
 Contract source: [contracts.ts](../src/modules/prepaid/domain/contracts.ts). V1 run ingestion still exists for compatibility; **new UI preparation uses V2**.
 
-Execution input has:
+For the external-adapter path only, execution input has:
 
 ```text
 contractVersion: 2
@@ -545,7 +526,7 @@ sources: [{ id, code, key, sha256 }]
 
 The input has **no user-selected period or run ID**. KE24 must determine exactly one valid period.
 
-Successful execution output is `{ contractVersion: 2, manifestKey }`. The referenced manifest carries:
+External-adapter execution output is `{ contractVersion: 2, manifestKey }`; native mode writes/reuses the manifest directly. The referenced manifest carries:
 
 ```text
 contractVersion: 2
@@ -905,9 +886,9 @@ APIs:
 - `GET /runs/:runId/reports/:snapshotFile`: `snapshotFile` is `<snapshotUUID>.zip`.
 - `GET /runs/:runId/history`: run audit/event history.
 
-ZIP includes frozen revisions' layout, allocation and reconciliation CSVs plus JV text. It excludes draft calculations, original raw uploads and proof of SAP execution. Membership CSV is a separate backend report, not a silently added historical ZIP member.
+For a new XLSX profile the ZIP contains one `<region>-r<revision>-reports.xlsx` workbook per frozen regional revision. Sheets are **Layout, Allocation, Reconciliation and JV**. JV retains the 40 legacy business headers. Decimal strings, quantities and account codes are literal Excel text, preserving all digits and leading zeros; they are never formulas or silently converted through JavaScript floating point. Confirm cell-type/template needs with an accepted workbook before SAP use. Old frozen delimited profiles retain their layout/allocation/reconciliation CSVs and JV text; no historical format is silently replaced. ZIP excludes draft calculations, raw uploads and proof of SAP posting. Membership CSV remains a separate backend report.
 
-Frozen formatting is not regenerated from today's settings. ZIP timestamp is deterministic (1980-01-01). Limits: 50,000 rows/report and 64 MiB combined uncompressed report data.
+Frozen formatting is not regenerated from today's settings. Inner XLSX and outer ZIP timestamps are deterministic (1980-01-01). Limits: 50,000 rows/report; XLSX additionally has 250,000 cells/workbook, 32 MiB cell text and 32,767 characters/cell; the archive input files total at most 64 MiB. Exceeding a bound fails without truncation.
 
 **Current code:** [reportService.ts](../src/modules/prepaid/application/reportService.ts), repository and frozen-format table.
 
@@ -1009,7 +990,7 @@ These routes are documented here so a developer does not mistake compatibility e
 
 Active new-style workspaces reject run-source/Process bypasses with `WORKSPACE_SOURCE_API_REQUIRED`. Historical upstream reuse requires period/workspace/cycle/execution/prefix evidence and exactly adjustment/charge datasets; arbitrary upstream job success is insufficient and must not double-count raw uploads.
 
-**API count:** with the 16 October extraction diagnostic, the router has **50 method/path patterns**: 23 GET, 20 POST, 4 DELETE, 2 PATCH, 1 PUT. A parameterized region counts once, not once per EG/SG; nine are compatibility aliases. Some run-based endpoints are historical-purpose. These counts do not mean every route appears as a UI button.
+**API count:** with the 19 October admin reference operations, the router has **53 method/path patterns**: 24 GET, 22 POST, 4 DELETE, 2 PATCH, 1 PUT. These counts were checked against the instantiated router without executing requests. A parameterized region counts once, not once per EG/SG; nine are compatibility aliases. Some run-based endpoints are historical-purpose. These counts do not mean every route appears as a UI button.
 
 Route truth: [router.ts](../src/modules/prepaid/api/router.ts) and [openapi.ts](../src/modules/prepaid/api/openapi.ts). Full route visibility in OpenAPI may require `OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS=true`.
 
@@ -1022,10 +1003,10 @@ This is the practical development sequence. Do not begin by copying all old proc
 | Order | Work still needed | Type and exact location | Done when |
 | --- | --- | --- | --- |
 | 1 — recover inputs | Obtain complete extraction job steps/source-view definitions and real report fixtures. | Legacy DB/job investigation; external `sdbTDIR1_Prepaid`/`dgS4HANA_TDIR1` dependencies, not a new API. | Every canonical field/filter/sign/month/cycle is traceable to an approved rule. |
-| 2 — extract | Adapt verified Call Card SG, Load API EG/SG and 308 Glue components; recover/implement remaining source families. | Existing source workflows plus new/recovered producer tasks; see AWS verification. | Isolated exact-source extraction, fixed 308 handoff and deterministic records; malformed/mixed-period sources fail. |
-| 3 — transform | Implement verified source selection/grouping/rounding and source totals. | Producer transforms; Glue only if selected for actual requirements. | Source totals match approved legacy outputs; no financial SQL duplicated in ETL. |
-| 4 — reference | Connect approved ZTF0455S source/refresh and preserve BRAND/WWBRD distinction. | Producer wiring to existing `referenceProvider.ts`/converter plus source access setup. | Approved reference data including authentic membership metadata arrives with provenance. |
-| 5 — orchestrate | Deploy Standard V2 state machine and its real tasks, output manifest and failure behavior. | AWS Step Functions + task runtime/IaC in deployment project. | Execution identity and eight datasets pass the portal's actual verification, not mocks. |
+| 2 — extract | All ten supplied workflows are integrated; approve coordinated shared operation and validate accepted files. | Existing sourceExtractionWorker/native AWS jobs; no new source workflow identified. | Real inputs and shared side effects accepted; malformed/mixed-period data fails. |
+| 3 — transform | Source parsing/grouping/signs and native final assembly are implemented; compare approved legacy fixtures. | normalize_source.py, nativeManifestBuilder.ts and existing SQL. | Real source totals match accepted outputs; no financial SQL duplicated in Glue. |
+| 4 — reference | Refresh/export wiring is implemented using the discovered existing Glue job; deploy migration 009 and perform authorized live refresh/export, then approve actual data. | Admin `/reference-exports`, referenceRefreshWorker/Runner, read-only referenceSource and existing provider. No new SFN or SAP extractor needed. | Real approved records, refresh owner/as-of policy and immutable descriptor are configured; BRAND/WWBRD remain distinct. |
+| 5 — orchestrate | Native orchestration/final assembly is implemented; deploy reviewed API/worker and prove live acceptance. External adapter remains optional. | preparationWorker.ts/sourceExtractionWorker.ts; no final SFN needed in native mode. | Real ten-child executions and eight datasets pass verification; retries and operational recovery accepted. |
 | 6 — configure | Set S3/region/runtime role and permissions to Start/Describe executions and access approved objects; configure approved cycles/format. | AWS/IAM/secrets/setup + existing admin `PUT /integration`. | Live test succeeds under least necessary approved access; no placeholders. |
 | 7 — approve source split | Decide whether to activate `legacy_eg_total`. | Accounting approval + integration setting + new preparation. Code/migration 004 already exists. | EG original-total conservation is accepted and demonstrated; SG unaffected. |
 | 8 — approve arithmetic | Decide denominator scope, fractional offset hits and final amount precision. | Accounting examples; conditional new PostgreSQL migration/output tests. | Approved golden allocation/reconciliation/JV matches intended policy. |
@@ -1034,7 +1015,7 @@ This is the practical development sequence. Do not begin by copying all old proc
 
 Existing membership reports, source-total capture, provider utilities, Save, regional Freeze, Reset and history are **not missing code items**. Their pending source data/activation/acceptance must not be reported as missing APIs.
 
-For Process 4 specifically, the legacy-derived JV content and preparation triggering are already implemented. New evidence-backed readiness metadata/diagnostics were added on 13 October without creating an executable guessed configuration. No additional unconditional SP is identified as necessary by this guide. A new migration is warranted only when evidence proves a financial rule needs changing or a required source rule belongs in PostgreSQL.
+For Process 4 specifically, JV content, source triggering and the reference-supply implementation are provided. Migration 009 adds durable administrative operation state, not a new financial formula or fabricated reference seed. Remaining financial-rule changes require approved evidence and a new reviewed migration rather than rewriting installed history.
 
 ---
 
@@ -1101,13 +1082,15 @@ The 12 October consolidation replaced the earlier documents and updated the samp
 
 ### Database reference
 
-Migration sources 001–007 define **35 portal Prepaid tables including the migration ledger, 16 functions, 7 views**, plus **5 raw source tables** in a separate schema. Installed objects alone do not establish production ingestion, complete legacy extraction coverage or accounting parity. `prepaid_source_extractions` is new in 006; the 15 October inventory record remains historical evidence for 001–005.
+Migration sources 001–009 define **36 portal Prepaid tables including the ledger + 12 raw targets**, **16 functions**, **7 views**. Table creation alone does not prove accounting acceptance. 007 adds private child context; 008 expands workflows and seven additional raw layouts; 009 adds `prepaid_reference_refreshes` with a unique active-operation guard and durable snapshot/recovery state. Financial SQL is unchanged. Migration 009 was applied/repeated only on the guarded disposable test database in this change; sandbox deployment is still required.
 
-**Current local verification:** migration 007 applied after backup `docs/db-backups/web_portal-before-backend-source-context-007-20261016.dump` (243,159 bytes). All seven IDs and nullable JSONB `context` verified; 38 other Prepaid/raw fingerprints unchanged. No remote migration/extraction. Tests cover native dispatch/recovery, conditional ownership, immutable artifacts, actual XLSX parsing and financial regressions; not real accounting acceptance.
+**18 October sandbox backup:** `docs/db-backups/prepaid-sandbox-before-007-008-20261018-0055.dump` (11,567,211 bytes).
+
+**Sandbox migration result (18 October):** 007 and 008 applied successfully over SSL; repeat run applied none. Backup archive listing was verified. Counts and paired row fingerprints were unchanged across **161 existing tables** (excluding the Prepaid ledger and new nullable context field). Existing required raw targets were retained; no business rows were rewritten. See [sanitized migration verification](prepaid/migration-verification/2026-10-18-sandbox.json). No local migration or AWS job execution was performed.
 
 **Historical early-16-October evidence:** migration 006 was applied locally/Aurora. [Earlier deployment evidence](prepaid/aws-verification/2026-10-16-deployment.json) describes portal branches/scripts at that time, not current AWS configuration. Preserve for audit/recovery, not redeployment.
 
-**Backend-only verification results:** TypeScript build passed. All 116 selected Prepaid/Step Functions/OpenAPI tests and 9 Python fixture tests passed, including real local XLSX parsing and disposable-database migrations. The complete TypeScript suite reported 166 passed / 4 failed: the four failures reproduce independently in unchanged `tests/auth.test.ts`, whose legacy-account mock treats the second parameter of the two-parameter identity-link update as an email instead of the user UUID. Authentication code/mocks were not changed in this task. No accepted-file accounting test, live extraction/SAP execution or container image build was performed.
+**18 October verification:** API/frontend builds pass. All **143 selected Prepaid/Step Functions/OpenAPI tests**, **18 Python fixtures** and **53 frontend tests** pass. The earlier full API suite passed 192 tests with four existing failures in unchanged auth.test.ts email-link mocks, outside Prepaid; authentication code/tests were not changed. No live extraction/SAP execution, accepted-file certification or container image build was performed.
 
 The tables are grouped here in the order their data enters the flow. Every name below has the `prepaid_` prefix:
 
@@ -1120,6 +1103,7 @@ The tables are grouped here in the order their data enters the flow. Every name 
 | Financial outputs | `allocations`, `validation_results`, `reconciliation_rows`, `jv_lines` |
 | Freeze/history and compatibility jobs | `frozen_report_formats`, `deliveries`, `delivery_slots`, `exports`, `jobs`, `events` |
 | Installation tracking | `schema_migrations` |
+| Administrator reference supply | `reference_refreshes` (009); immutable export/provenance in S3, no invented reference rows |
 
 Existing portal user/workspace tables are reused, not replaced.
 
@@ -1127,6 +1111,12 @@ Existing portal user/workspace tables are reused, not replaced.
 
 | Workflow | Required raw table(s) | Purpose |
 | --- | --- | --- |
+| `isg-esatp-dv-prcl_ke24-sf` | `"dcKE24"` (20 text columns) | KE24 revenue/quantity; distinct from lowercase dcke24. |
+| `isg-esatp-dv-prcl_cc_eg-sf` | `dcmanualcallcard` (30 columns) | Call Card EG. |
+| `isg-esatp-dv-prcl_lu_eg-sf` | `dcload_up` (32 columns) | Load Up EG. |
+| `isg-esatp-dv-prcl_lu_sg-sf` | `dcload_up_sg` (31 columns) | Load Up SG. |
+| `isg-esatp-dv-prcl_dl_mr-sf` | `dcmonthlyrechargesummary` (14 columns) | Monthly recharge CSV. |
+| `isg-esatp-dv-prcl_318_bc-sf` | `billed_charges_header_cycles`, `billed_charges_lineitem_cycles` (15 each) | 318 cycle header/detail. |
 | `isg-esatp-dv-prcl_cc_sg-sf` | `dccallcard_sg` (30 columns) | Spreadsheet Call Card SG extraction. |
 | `isg-esatp-dv-prcl_la_eg-sf` | `dcload_api` (30 columns) | Spreadsheet Load API EG extraction. |
 | `isg-esatp-dv-prcl_la_sg-sf` | `dcload_api_sg` (31 columns) | Spreadsheet Load API SG extraction. |
@@ -1134,7 +1124,7 @@ Existing portal user/workspace tables are reused, not replaced.
 
 Migration 005 reproduces the lowercase targets verified in Aurora. The separate existing quoted `"Billed_Adjustments_Header_Cycles"` is **not** the same table: it is left untouched, not renamed, dropped or counted as a required sixth target. Preserve legacy spellings such as `"Luke OR Referece"`, the two spaces in `"INTERNAL  (BASED ON SALES)"`, identity columns and the existing `amount double precision` type. This is compatibility, not approval of a new accounting precision rule.
 
-**Raw tables are not canonical staging.** `prepaid_stage_callcard`, `prepaid_stage_loadapi` and `prepaid_stage_adjustments` continue to store `(snapshot_id, row_number, data jsonb)` with snapshot foreign keys, composite primary keys and ready-snapshot protection. The adapter must still select the exact session inputs, normalize raw rows, produce the eight canonical datasets and attest the V2 manifest before the portal publishes a ready snapshot. Merely creating raw tables does not connect a child Step Function to the UI.
+**Raw tables are not canonical staging.** `prepaid_stage_callcard`, `prepaid_stage_loadapi` and `prepaid_stage_adjustments` continue to store `(snapshot_id, row_number, data jsonb)` with snapshot foreign keys, composite primary keys and ready-snapshot protection. The native backend now selects exact original inputs, normalizes them, produces eight datasets and attests its V2 manifest before publication. Existing external adapters must meet the same checks. Merely creating raw tables does not connect a child Step Function to the UI.
 
 The migration runner uses an advisory transaction lock, applies only missing ledger entries and checks all required tables afterward. Incompatible existing raw columns fail and roll back; migration code does not silently repair/drop/retype a populated producer table. Missing objects after an already-recorded migration are reported as schema drift rather than clearing migration history.
 
@@ -1201,19 +1191,20 @@ All 34 supplied Prepaid SPs were inspected for the relevant SQL Agent triggers. 
 
 | Legacy trigger | Legacy job | Current replacement |
 | --- | --- | --- |
-| sp_Prepaid1_Extract | Prepaid_Reclass_Preload_P02_Extract_04Mnt | Worker now calls unchanged native children, verifies Glue metadata and creates backend receipts, then calls the complete V2 adapter. Remaining source producers/complete adapter are still to supply; no undocumented job steps were invented. |
+| sp_Prepaid1_Extract | Prepaid_Reclass_Preload_P02_Extract_04Mnt | Worker calls ten unchanged native children and verifies receipts; nativeManifestBuilder assembles all eight datasets with an approved reference export. External complete V2 adapters remain optional. Undocumented extraction-window rules were not invented. |
 | sp_Prepaid1_EGLayout_Freeze | Prepaid_Reclass_Preload_P10_EG_Only_AdHoc | Current EG Freeze stages reports; no automatic delivery execution. |
 | sp_Prepaid1_SGLayout_Freeze | Prepaid_Reclass_Preload_P10_SG_Only_AdHoc | Current SG Freeze stages reports; no automatic delivery execution. |
 
-For the current manual-staging flow, **one ingestion state machine** is the required external orchestration. Import, totals, Save, allocation, reconciliation, validation, Edit, Reset and report generation run in the API/PostgreSQL and do not need one Step Function each. Historical V1 ingestion and delivery/reversal callers remain compatibility code, not proof of deployed real producers/SAP tasks.
+For the current native manual-staging flow, **ten source Step Functions plus backend assembly** replace the old extraction trigger. A separate final ingestion adapter is optional compatibility, not required native infrastructure. Reference supply uses the separately discovered existing Glue job through an explicit admin operation, not an eleventh extraction Step Function. Import, totals, Save, allocation, reconciliation, validation, Edit, Reset and reports run in API/PostgreSQL and do not need one Step Function each. Automatic SAP posting remains a separate, disabled integration path.
 
-### API inventory: 50 method/path patterns
+### API inventory: 53 method/path patterns
 
-All paths below are relative to `/api/workflows/prepaid`. These are backend capabilities, not 50 user actions. Region parameters count once; EG and SG do not double the route count. Required authentication/module access and ownership rules remain applicable; admin configuration is separately restricted. The new `GET /workspace/extractions` is a read-only, owned-session diagnostic, not an extra UI step.
+All paths below are relative to `/api/workflows/prepaid`. These are backend capabilities, not 53 user actions. Region parameters count once; EG and SG do not double the route count. Required authentication/module access and ownership rules remain applicable; admin configuration/reference operations are separately restricted. `GET /workspace/extractions` is a read-only, owned-session diagnostic, not an extra UI step.
 
 | Group | Method/path patterns |
 | --- | --- |
 | Setup | GET /readiness; GET /integration; PUT /integration |
+| Administrator reference supply (009) | POST /reference-exports; GET /reference-exports/:referenceId; POST /reference-exports/:referenceId/reconcile |
 | Current workspace | GET /workspace; POST /workspace/sources/:code; DELETE /workspace/sources/:code; POST /workspace/prepare; POST /workspace/reset |
 | Frozen report/history | GET /report-history; GET /runs/:runId/reports/:snapshotFile; GET /runs/:runId/history |
 | Regional layout commands | GET /runs/:runId/layouts/:region; PATCH /runs/:runId/layouts/:region; POST /runs/:runId/layouts/:region/import; POST /runs/:runId/layouts/:region/reset; POST /runs/:runId/layouts/:region/validate; POST /runs/:runId/layouts/:region/edit; POST /runs/:runId/layouts/:region/freeze; POST /runs/:runId/reset-workspace |
@@ -1222,7 +1213,7 @@ All paths below are relative to `/api/workflows/prepaid`. These are backend capa
 | Historical exports/delivery support | GET /runs/:runId/exports; GET /runs/:runId/exports/:exportId/download; POST /runs/:runId/jobs/:jobId/retry; POST /runs/:runId/jobs/:jobId/reconcile |
 | Nine compatibility aliases | GET /state; GET /history; DELETE /uploads; POST /process; POST /layouts/:region/reset; POST /layouts/:region/import; PATCH /layouts/:region/freeze; POST /allocation/validate; GET /report.csv |
 
-Totals: **23 GET, 20 POST, 4 DELETE, 2 PATCH, 1 PUT**. Inspect [router.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/api/router.ts:29) and [openapi.ts](C:/Users/rccco/Documents/esatp-web-portal/esatp-coreapi/src/modules/prepaid/api/openapi.ts:1) for route/request truth. The new diagnostic is `GET /workspace/extractions`. The module OpenAPI source describes 43 patterns; seven legacy aliases remain router-only. The router is the complete 50-pattern inventory; the general visibility flag does not add those missing alias descriptions. Run-based source/Process APIs must not bypass active upload-session provenance.
+Totals: **24 GET, 22 POST, 4 DELETE, 2 PATCH, 1 PUT**. Inspect [router.ts](../src/modules/prepaid/api/router.ts) and [openapi.ts](../src/modules/prepaid/api/openapi.ts) for route/request truth. The module OpenAPI source describes 46 patterns; seven legacy aliases remain router-only. The router is the complete 53-pattern inventory; the general visibility flag does not add those alias descriptions. Run-based source/Process APIs must not bypass active upload-session provenance.
 
 ### Where to change something safely
 
@@ -1232,7 +1223,7 @@ Totals: **23 GET, 20 POST, 4 DELETE, 2 PATCH, 1 PUT**. Inspect [router.ts](C:/Us
 | Required input names/record shapes | contracts + workspace requirements + real producer | Valid/invalid names, cycle coverage and canonical fixtures; revise adapter/docs together. |
 | Raw selection/filtering | External producer, using recovered source/job specifications | Real input → approved source-total comparison. |
 | Tax/total/allocation/rounding rule | New PostgreSQL migration, with service implications if necessary | Approved worked examples and isolated integration/golden tests; do not rewrite installed history. |
-| Reference sourcing | Verified provider/converter plus producer wiring | Actual approved export, metadata, duplicates/missing mappings and refresh ownership. |
+| Reference sourcing | referenceRefreshService/Worker/Runner, read-only referenceSource, existing provider/converter | Actual authorized source/job/export, durable recovery, metadata, duplicates/missing mappings and refresh ownership. |
 | Freeze/history behavior | Regional service + immutable guards/report service | Separate-region freezing, stale context, frozen predecessors and stable report bytes. |
 | Automatic SAP delivery | Separate explicitly approved operating/integration project | Real receipts, posting confirmation, duplicate prevention and uncertain-outcome handling; current default stays disabled. |
 
