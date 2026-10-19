@@ -253,6 +253,15 @@ const allOpenApiDocument: OpenAPIV3.Document = {
       },
       post: {
         ...created("Upload a pipeline file"),
+        description:
+          "Uploads up to the fixed 200 MiB (209715200 bytes) per-file limit. SAP bill-cycle feeds require .txt; spreadsheet reports retain .XLSX. Files larger than this limit return 413 FILE_TOO_LARGE.",
+        responses: {
+          "201": { description: "File uploaded." },
+          "413": {
+            description:
+              "FILE_TOO_LARGE: exceeds the fixed 200 MiB per-file upload limit.",
+          },
+        },
         parameters: [pipelineCodePath],
         requestBody: pipelineUploadBody,
       },
@@ -264,6 +273,8 @@ const allOpenApiDocument: OpenAPIV3.Document = {
     "/api/processing-pipelines/{pipelineCode}/upload-batches": {
       get: {
         ...success("List mapped pipeline upload batches"),
+        description:
+          "Returns all uploaders' batches in the selected pipeline. Requires access to that pipeline; adding files to a batch remains restricted to its owner.",
         parameters: [pipelineCodePath],
       },
       post: {
@@ -274,10 +285,7 @@ const allOpenApiDocument: OpenAPIV3.Document = {
     "/api/processing-pipelines/{pipelineCode}/files/content": {
       get: {
         ...success("Stream a pipeline file"),
-        parameters: [
-          pipelineCodePath,
-          pipelineFileKey,
-        ],
+        parameters: [pipelineCodePath, pipelineFileKey],
       },
     },
     "/api/processing-pipelines/{pipelineCode}/runs": {

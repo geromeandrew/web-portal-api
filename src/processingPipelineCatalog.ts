@@ -134,6 +134,10 @@ function add(
 add("BSS Bill Cycles - Globe", "bss_billcycle_glob", [
   ...[
     [
+      "308. Billed Adjustments Monthly Summary Report_G_01.XLSX",
+      "MyBss_Globe_308_Billed_Adjustments.dtsx",
+    ],
+    [
       "318. Billed Charges Summary Report_G_01.XLSX",
       "MyBss_Globe_318_Billed_Charges.dtsx",
     ],
@@ -141,7 +145,7 @@ add("BSS Bill Cycles - Globe", "bss_billcycle_glob", [
       "411. Bill Control_PHP_G_01.XLSX",
       "MyBss_Globe_411_Bill_Control_PHP.dtsx",
     ],
-    ["sap_glbilled_G_01.XLSX", "MyBss_Globe_sapglbilled.dtsx"],
+    ["sap_glbilled_G_01.txt", "MyBss_Globe_sapglbilled.dtsx"],
   ].flatMap(([fileName, packageName]) =>
     bayanBillCycleSuffixes.map(
       (suffix) =>
@@ -170,7 +174,7 @@ add("BSS Bill Cycles - Innove", "bss_billcycle_inov", [
       "411. Bill Control_USD_I_01.XLSX",
       "MyBss_Innove_411_Bill_Control_USD.dtsx",
     ],
-    ["sap_glbilled_I_01.XLSX", "MyBss_Innove_sapglbilled.dtsx"],
+    ["sap_glbilled_I_01.txt", "MyBss_Innove_sapglbilled.dtsx"],
   ].flatMap(([fileName, packageName]) =>
     bayanBillCycleSuffixes.map(
       (suffix) =>
@@ -192,7 +196,7 @@ const bayanBillCycleFiles = [
   ],
   ["411. Bill Control_PHP_B_01.XLSX", "MyBss_Bayan_411_Bill_Control_PHP.dtsx"],
   ["411. Bill Control_USD_B_01.XLSX", "MyBss_Bayan_411_Bill_Control_USD.dtsx"],
-  ["sap_glbilled_B_01.XLSX", "MyBss_Bayan_sapglbilled.dtsx"],
+  ["sap_glbilled_B_01.txt", "MyBss_Bayan_sapglbilled.dtsx"],
 ] as const;
 add(
   "BSS Bill Cycles - Bayan",
@@ -217,7 +221,10 @@ add("BSS EOM - Globe", "bss_eom_glob", [
     "317. Unbilled Charges Summary Report_G.XLSX",
     "MyBss_Globe_317_Unbilled_Charges_Summary.dtsx",
   ],
-  ["Unearned MSF Summary Report_G.XLSX", "MyBss_Globe_324_Unearned_MSF.dtsx"],
+  [
+    "324. Unearned MSF Summary Report_G.XLSX",
+    "MyBss_Globe_324_Unearned_MSF.dtsx",
+  ],
   [
     "Unconfirmed Advanced MSF Charges Summary Report - Monthly.XLSX",
     "MyBss_Globe_Unconfirmed_Advance_MSF.dtsx",
@@ -445,7 +452,13 @@ export function matchesBillCycleUploadFile(
   const expected = billCycleFileIdentity(requirement.fileName);
   const uploaded = billCycleFileIdentity(fileName);
 
-  return Boolean(expected && uploaded && expected.report === uploaded.report);
+  return Boolean(
+    expected &&
+    uploaded &&
+    expected.report === uploaded.report &&
+    requirement.fileName.split(".").at(-1)?.toLowerCase() ===
+      fileName.split(".").at(-1)?.toLowerCase(),
+  );
 }
 
 function billCycleFileIdentity(fileName: string) {

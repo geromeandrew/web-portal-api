@@ -1,3 +1,4 @@
+import { MAX_UPLOAD_BYTES } from "../uploadLimits.js";
 import express, { type Express, type RequestHandler } from "express";
 import multer from "multer";
 import swaggerUi from "swagger-ui-express";
@@ -19,9 +20,23 @@ export function createApplication(dependencies: AppDependencies): Express {
   const app = express();
   const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: dependencies.config.MAX_UPLOAD_BYTES, files: 1 },
+    // Busboy emits its size-limit event at equality. Allow one extra byte so
+    // a file exactly at the configured limit is accepted, then check below.
+    limits: { fileSize: MAX_UPLOAD_BYTES + 1, files: 1 },
   });
-  const singleFileUpload = upload.single("file");
+  const parseSingleFile = upload.single("file");
+  const singleFileUpload: RequestHandler = (request, response, next) => {
+    parseSingleFile(request, response, (error) => {
+      if (error) return next(error);
+      if (request.file && request.file.size > MAX_UPLOAD_BYTES)
+        return next(
+          Object.assign(new Error("File too large"), {
+            code: "LIMIT_FILE_SIZE",
+          }),
+        );
+      next();
+    });
+  };
 
   app.disable("x-powered-by");
   app.set("trust proxy", dependencies.config.TRUST_PROXY_HOPS);
