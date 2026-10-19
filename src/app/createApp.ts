@@ -12,16 +12,20 @@ import { createProcessingPipelinesRouter } from "../modules/processing-pipelines
 import {
   clientIpKey,
   createRateLimitMiddleware,
-  createSecurityHeaders,
   publicApiPolicy,
 } from "./security.js";
+import {
+  createSecurityHeaders,
+  createCorsMiddleware,
+  createGlobalRateLimiter,
+  completeCorsPreflight,
+  createHppMiddleware,
+} from "./httpSecurity.js";
 /** Build the Express app without opening a network port. */
 export function createApplication(dependencies: AppDependencies): Express {
   const app = express();
   const upload = multer({
     storage: multer.memoryStorage(),
-    // Busboy emits its size-limit event at equality. Allow one extra byte so
-    // a file exactly at the configured limit is accepted, then check below.
     limits: { fileSize: MAX_UPLOAD_BYTES + 1, files: 1 },
   });
   const parseSingleFile = upload.single("file");
@@ -40,8 +44,20 @@ export function createApplication(dependencies: AppDependencies): Express {
 
   app.disable("x-powered-by");
   app.set("trust proxy", dependencies.config.TRUST_PROXY_HOPS);
+  app.set("query parser", "simple");
   app.use(createSecurityHeaders(dependencies.config));
+  app.use(createCorsMiddleware());
+  app.use(createGlobalRateLimiter());
+  app.use(completeCorsPreflight);
   app.use(express.json({ limit: "128kb" }));
+  app.use(
+    express.urlencoded({
+      extended: false,
+      limit: "128kb",
+      parameterLimit: 100,
+    }),
+  );
+  app.use(createHppMiddleware());
   app.get("/api/healthz", (_request, response) => {
     response.status(200).json("The pod is healthy");
   });
@@ -79,7 +95,7 @@ function registerPublicRoutes(app: Express, { config }: AppDependencies) {
     swaggerUi.serve,
     swaggerUi.setup(openApiDocument, {
       customSiteTitle: "Web Portal API Documentation",
-      swaggerOptions: { persistAuthorization: false },
+      swaggerOptions: { persistAuthorization: false, validatorUrl: null },
     }),
   );
 }

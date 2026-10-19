@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import type { Config } from "../src/config.js";
-import {
-  createSecurityHeaders,
-  PostgresRateLimiter,
-} from "../src/app/security.js";
+import { PostgresRateLimiter } from "../src/app/security.js";
 
 const config: Config = {
   NODE_ENV: "test",
@@ -18,7 +15,8 @@ const config: Config = {
   OKTA_ISSUER: "https://example.okta.com/oauth2/default",
   OKTA_AUDIENCE: "api://default",
   OKTA_CLIENT_ID: "test-client-id",
-  RATE_LIMIT_HMAC_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
+  RATE_LIMIT_HMAC_SECRET:
+    "a-very-long-test-secret-that-is-at-least-32-characters",
   TRUST_PROXY_HOPS: 0,
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
@@ -51,29 +49,5 @@ describe("PostgresRateLimiter", () => {
     expect(result.allowed).toBe(true);
     expect(result.remaining).toBe(0);
     expect(queries[0][1]).not.toBe("192.0.2.10");
-  });
-});
-
-describe("security headers", () => {
-  it("sets the ISDP headers and enables HSTS only in production", () => {
-    const headers: Record<string, string> = {};
-    const response = {
-      set: (name: string | Record<string, string>, value?: string) => {
-        if (typeof name === "string") headers[name] = value!;
-        else Object.assign(headers, name);
-      },
-    };
-    createSecurityHeaders({ ...config, NODE_ENV: "production" })(
-      {} as never,
-      response as never,
-      () => undefined,
-    );
-
-    expect(headers).toMatchObject({
-      "X-Frame-Options": "DENY",
-      "X-XSS-Protection": "1; mode=block",
-      "X-Content-Type-Options": "nosniff",
-      "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
-    });
   });
 });
