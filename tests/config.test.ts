@@ -17,6 +17,14 @@ const base = {
 };
 
 describe("loadConfig", () => {
+  it("does not read the upload limit from deployment environment variables", () => {
+    expect(
+      loadConfig({ ...base, MAX_UPLOAD_BYTES: "1048576" }),
+    ).not.toHaveProperty("MAX_UPLOAD_BYTES");
+    expect(
+      loadConfig({ ...base, MAX_UPLOAD_BYTES: "invalid" }),
+    ).not.toHaveProperty("MAX_UPLOAD_BYTES");
+  });
   it("uses the dedicated Portal schema and disables database TLS by default", () => {
     expect(loadConfig(base).DATABASE_SCHEMA).toBe("web_portal");
     expect(loadConfig(base).DATABASE_SSL).toBe(false);

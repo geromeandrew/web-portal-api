@@ -1,3 +1,4 @@
+import { MAX_UPLOAD_BYTES } from "./uploadLimits.js";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { ZodError } from "zod";
 import type { Config } from "./config.js";
@@ -51,7 +52,7 @@ export const createErrorHandler =
       response.status(413).json({
         error: {
           code: "FILE_TOO_LARGE",
-          message: "The uploaded file exceeds the configured size limit.",
+          message: `The uploaded file exceeds the ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB per-file size limit.`,
         },
       });
       return;

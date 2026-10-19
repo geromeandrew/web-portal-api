@@ -10,6 +10,7 @@ import {
   processingPipelineSeedRequirements,
 } from "../src/processingPipelineCatalog.js";
 import { processingPipelineSeedRequirements as migration019Requirements } from "../src/migrationSnapshots/processingPipelineCatalogue019.js";
+import { criticalFixes024Corrections } from "../src/migrationSnapshots/criticalFixes024.js";
 
 describe("Processing Pipeline catalogue", () => {
   it("contains generic pipeline requirements", () => {
@@ -49,20 +50,49 @@ describe("Processing Pipeline catalogue", () => {
     ).toBe("308. billed adjustments monthly summary report_G_01.XLSX");
   });
   it("matches bill-cycle uploads by report identity and normalizes source entity and cycle suffixes", () => {
-    const requirements = processingPipelineSeedRequirements.filter((item) => item.pipelineCode === "bss_billcycle_bayn");
-    const adjustment = requirements.find((item) => item.fileName.startsWith("308."))!;
-    const php = requirements.find((item) => item.fileName.includes("Control_PHP_B_01"))!;
-    const usd = requirements.find((item) => item.fileName.includes("Control_USD_B_01"))!;
-    const sap = requirements.find((item) => item.fileName.startsWith("sap_glbilled_B_01"))!;
-    expect(matchesBillCycleUploadFile(adjustment, "308. revised title_b_01.xlsx")).toBe(true);
-    expect(matchesBillCycleUploadFile(adjustment, "308. revised title_b.xlsx")).toBe(true);
+    const requirements = processingPipelineSeedRequirements.filter(
+      (item) => item.pipelineCode === "bss_billcycle_bayn",
+    );
+    const adjustment = requirements.find((item) =>
+      item.fileName.startsWith("308."),
+    )!;
+    const php = requirements.find((item) =>
+      item.fileName.includes("Control_PHP_B_01"),
+    )!;
+    const usd = requirements.find((item) =>
+      item.fileName.includes("Control_USD_B_01"),
+    )!;
+    const sap = requirements.find((item) =>
+      item.fileName.startsWith("sap_glbilled_B_01"),
+    )!;
+    expect(
+      matchesBillCycleUploadFile(adjustment, "308. revised title_b_01.xlsx"),
+    ).toBe(true);
+    expect(
+      matchesBillCycleUploadFile(adjustment, "308. revised title_b.xlsx"),
+    ).toBe(true);
     expect(matchesBillCycleUploadFile(adjustment, "308.xlsx")).toBe(true);
-    expect(matchesBillCycleUploadFile(adjustment, "308. revised title_01.xlsx")).toBe(true);
-    expect(matchesBillCycleUploadFile(adjustment, "308. revised title_g_01.xlsx")).toBe(true);
-    expect(matchesBillCycleUploadFile(adjustment, "308. revised title_b_02.xlsx")).toBe(true);
-    expect(matchesBillCycleUploadFile(php, "411. any title_php_b_01.xlsx")).toBe(true);
-    expect(matchesBillCycleUploadFile(usd, "411. any title_php_b_01.xlsx")).toBe(false);
-    expect(matchesBillCycleUploadFile(sap, "SAP alternate GLBILLED_b_01.xlsx")).toBe(true);
+    expect(
+      matchesBillCycleUploadFile(adjustment, "308. revised title_01.xlsx"),
+    ).toBe(true);
+    expect(
+      matchesBillCycleUploadFile(adjustment, "308. revised title_g_01.xlsx"),
+    ).toBe(true);
+    expect(
+      matchesBillCycleUploadFile(adjustment, "308. revised title_b_02.xlsx"),
+    ).toBe(true);
+    expect(
+      matchesBillCycleUploadFile(php, "411. any title_php_b_01.xlsx"),
+    ).toBe(true);
+    expect(
+      matchesBillCycleUploadFile(usd, "411. any title_php_b_01.xlsx"),
+    ).toBe(false);
+    expect(
+      matchesBillCycleUploadFile(sap, "SAP alternate GLBILLED_b_01.txt"),
+    ).toBe(true);
+    expect(
+      matchesBillCycleUploadFile(sap, "SAP alternate GLBILLED_b_01.xlsx"),
+    ).toBe(false);
   });
   it("keeps the production pipeline and filename mappings", () => {
     expect(processingPipelineSeedRequirements).toContainEqual(
@@ -123,7 +153,7 @@ describe("Processing Pipeline catalogue", () => {
       processingPipelineSeedRequirements.filter(
         (item) => item.pipelineCode === "bss_billcycle_glob",
       ),
-    ).toHaveLength(33);
+    ).toHaveLength(44);
     expect(
       processingPipelineSeedRequirements.filter(
         (item) => item.pipelineCode === "bss_billcycle_inov",
@@ -152,7 +182,7 @@ describe("Processing Pipeline catalogue", () => {
     );
     expect(
       globeRequirements.some((item) => item.fileName.startsWith("308.")),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       processingPipelineSeedRequirements
         .filter((item) => item.pipelineCode === "memo_sst")
@@ -175,7 +205,7 @@ describe("Processing Pipeline catalogue", () => {
     expect(deltaOutputs).toHaveLength(6);
     expect(deltaOutputs.every((item) => item.match === "exact")).toBe(true);
   });
-  it("keeps the migration snapshot aligned with the live catalogue", () => {
+  it("applies only the frozen 024 corrections to the historical 019 catalogue", () => {
     const mappingKey = (item: {
       pipelineCode: string;
       fileName: string;
@@ -188,7 +218,23 @@ describe("Processing Pipeline catalogue", () => {
         item.match,
         item.legacyPackageName ?? "",
       ].join("|");
-    expect(migration019Requirements.map(mappingKey).sort()).toEqual(
+    const migrated = new Map(
+      migration019Requirements.map((item) => [
+        `${item.pipelineCode}|${item.fileName}`,
+        item,
+      ]),
+    );
+    for (const correction of criticalFixes024Corrections) {
+      migrated.delete(`${correction.pipeline}|${correction.previous}`);
+      migrated.set(`${correction.pipeline}|${correction.name}`, {
+        pipelineCode: correction.pipeline,
+        fileName: correction.name,
+        match: "exact",
+        legacyPackageName: correction.package,
+        jobName: null,
+      });
+    }
+    expect([...migrated.values()].map(mappingKey).sort()).toEqual(
       processingPipelineSeedRequirements.map(mappingKey).sort(),
     );
   });

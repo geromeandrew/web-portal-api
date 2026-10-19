@@ -1,3 +1,4 @@
+import { criticalFixes024Sql } from "./migrationSnapshots/criticalFixes024.js";
 import {
   bayanBillCycleBatchStateMachine,
   bayanBillCycleStateMachines,
@@ -1064,5 +1065,9 @@ export const migrations = [
       ('prepaid_reclass','Prepaid Re-Class','/prepaid/file-upload',15)
     ON CONFLICT (module_id) DO UPDATE SET module_name = EXCLUDED.module_name, route_path = EXCLUDED.route_path, display_order = EXCLUDED.display_order;
   `,
+  },
+  {
+    id: "024_critical_pipeline_upload_fixes",
+    sql: criticalFixes024Sql,
   },
 ];

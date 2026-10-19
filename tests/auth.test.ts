@@ -35,19 +35,33 @@ function poolWithCandidates(candidates: UserRow[]) {
       queries.push({ sql, values });
       if (sql.includes("SELECT * FROM app_user")) return { rows: candidates };
       if (sql.includes("UPDATE app_user SET okta_subject")) {
+        // Linking an existing user changes only the subject. Reconciliation
+        // updates the email and display name as well, using four parameters.
+        const updatesProfile = sql.includes("email = $2");
+        const userId = values?.[updatesProfile ? 3 : 1];
+        const user =
+          candidates.find((candidate) => candidate.id === userId) ??
+          existingUser;
         return {
           rows: [
             {
-              ...existingUser,
+              ...user,
               okta_subject: String(values?.[0]),
-              email: String(values?.[1]),
-              display_name: String(values?.[2]),
+              ...(updatesProfile
+                ? {
+                    email: String(values?.[1]),
+                    display_name:
+                      values?.[2] == null ? null : String(values[2]),
+                  }
+                : {}),
             },
           ],
         };
       }
       if (sql.includes("UPDATE app_user SET email")) {
-        const user = candidates.find((candidate) => candidate.id === values?.[1]);
+        const user = candidates.find(
+          (candidate) => candidate.id === values?.[1],
+        );
         return {
           rows: [
             {
@@ -485,9 +499,9 @@ describe("OktaAuthenticator", () => {
     );
 
     expect(result.error).toBeUndefined();
-    expect(queries.some(({ sql }) => sql.startsWith("UPDATE app_user SET"))).toBe(
-      false,
-    );
+    expect(
+      queries.some(({ sql }) => sql.startsWith("UPDATE app_user SET")),
+    ).toBe(false);
   });
 
   it("does not overwrite an existing user's portal profile during login", async () => {

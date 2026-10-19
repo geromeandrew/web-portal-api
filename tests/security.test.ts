@@ -24,7 +24,6 @@ const config: Config = {
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
   AWS_LOCAL: false,
-  MAX_UPLOAD_BYTES: 4_500_000,
   PREPAID_MAX_UPLOAD_BYTES: 104_857_600,
   OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: false,
 };

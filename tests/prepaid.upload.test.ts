@@ -81,7 +81,7 @@ describe("Bounded legacy-sized Prepaid uploads", () => {
       AWS_REGION: "us-east-1",
     };
     const config = loadConfig(env);
-    expect(config.MAX_UPLOAD_BYTES).toBe(4500000);
+    expect(config).not.toHaveProperty("MAX_UPLOAD_BYTES");
     expect(config.PREPAID_MAX_UPLOAD_BYTES).toBe(104857600);
     expect(() =>
       loadConfig({ ...env, PREPAID_MAX_UPLOAD_BYTES: "104857601" }),

@@ -40,7 +40,6 @@ const envSchema = z
       .transform((value) => value === "true"),
     AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
     AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
-    MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(4_500_000),
     PREPAID_MAX_UPLOAD_BYTES: z.coerce
       .number()
       .int()

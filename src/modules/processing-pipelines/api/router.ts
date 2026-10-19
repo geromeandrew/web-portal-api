@@ -414,8 +414,7 @@ export function createProcessingPipelinesRouter(
   });
   router.get("/:pipelineCode/upload-batches", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
-    const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
-    response.json({ batches: await getPipelineUploadBatches(pool, { pipelineCode, workspaceId }) });
+    response.json({ batches: await getPipelineUploadBatches(pool, { pipelineCode }) });
   });
   router.get("/:pipelineCode/files/content", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
@@ -516,7 +515,7 @@ export function createProcessingPipelinesRouter(
       const stored = await processingPipelineStorage.uploadFile(
         pipelineCode,
         savedName,
-        new Uint8Array(request.file.buffer),
+        request.file.buffer,
         request.file.mimetype || "application/octet-stream",
       );
       const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
