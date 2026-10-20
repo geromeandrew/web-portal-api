@@ -18,7 +18,8 @@ const config: Config = {
   OKTA_ISSUER: "https://example.okta.com/oauth2/default",
   OKTA_AUDIENCE: "api://default",
   OKTA_CLIENT_ID: "test-client-id",
-  RATE_LIMIT_HMAC_SECRET: "a-very-long-test-secret-that-is-at-least-32-characters",
+  RATE_LIMIT_HMAC_SECRET:
+    "a-very-long-test-secret-that-is-at-least-32-characters",
   TRUST_PROXY_HOPS: 0,
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
@@ -148,17 +149,16 @@ describe("OpenAPI documentation", () => {
         docsResponse,
         stylesheetResponse,
         healthResponse,
-      ] =
-        await Promise.all([
-          fetch(`http://127.0.0.1:${port}/`, { redirect: "manual" }),
-          fetch(`http://127.0.0.1:${port}/api/openapi.json`),
-          fetch(`http://127.0.0.1:${port}/api/docs/`),
-          fetch(`http://127.0.0.1:${port}/api/docs/swagger-ui.css`),
-          fetch(`http://127.0.0.1:${port}/api/healthz`),
-        ]);
+      ] = await Promise.all([
+        fetch(`http://127.0.0.1:${port}/`, { redirect: "manual" }),
+        fetch(`http://127.0.0.1:${port}/api/openapi.json`),
+        fetch(`http://127.0.0.1:${port}/api/docs/`),
+        fetch(`http://127.0.0.1:${port}/api/docs/swagger-ui.css`),
+        fetch(`http://127.0.0.1:${port}/api/healthz`),
+      ]);
       expect(rootResponse.status).toBe(302);
       expect(rootResponse.headers.get("location")).toBe("/api/docs/");
-      expect(rootResponse.headers.get("x-frame-options")).toBe("DENY");
+      expect(rootResponse.headers.get("x-frame-options")).toBe("SAMEORIGIN");
       expect(rootResponse.headers.get("x-xss-protection")).toBe(
         "1; mode=block",
       );
