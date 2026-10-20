@@ -43,6 +43,28 @@ export const createErrorHandler =
       });
       return;
     }
+    const parseType = (error as { type?: string } | null)?.type;
+    if (parseType === "entity.parse.failed") {
+      response.status(400).json({
+        error: {
+          code: "INVALID_REQUEST_BODY",
+          message: "The request body is not valid JSON.",
+        },
+      });
+      return;
+    }
+    if (
+      parseType === "entity.too.large" ||
+      parseType === "parameters.too.many"
+    ) {
+      response.status(413).json({
+        error: {
+          code: "REQUEST_BODY_TOO_LARGE",
+          message: "The request body exceeds its size or parameter limit.",
+        },
+      });
+      return;
+    }
     if (
       error &&
       typeof error === "object" &&

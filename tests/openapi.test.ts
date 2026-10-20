@@ -159,7 +159,7 @@ describe("OpenAPI documentation", () => {
       ]);
       expect(rootResponse.status).toBe(302);
       expect(rootResponse.headers.get("location")).toBe("/api/docs/");
-      expect(rootResponse.headers.get("x-frame-options")).toBe("DENY");
+      expect(rootResponse.headers.get("x-frame-options")).toBe("SAMEORIGIN");
       expect(rootResponse.headers.get("x-xss-protection")).toBe(
         "1; mode=block",
       );

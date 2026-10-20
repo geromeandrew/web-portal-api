@@ -87,9 +87,13 @@ function setRateLimitHeaders(
     Math.ceil((result.resetAt.getTime() - Date.now()) / 1_000),
   );
   response.set({
+    "RateLimit-Policy": `${policy.limit};w=${policy.windowSeconds}`,
     "RateLimit-Limit": String(policy.limit),
     "RateLimit-Remaining": String(result.remaining),
     "RateLimit-Reset": String(resetSeconds),
+    "X-RateLimit-Limit": String(policy.limit),
+    "X-RateLimit-Remaining": String(result.remaining),
+    "X-RateLimit-Reset": String(Math.ceil(result.resetAt.getTime() / 1000)),
   });
   if (!result.allowed) response.set("Retry-After", String(resetSeconds));
 }
@@ -118,22 +122,5 @@ export function createRateLimitMiddleware(
 
 export const clientIpKey = (request: Parameters<RequestHandler>[0]) =>
   request.ip ?? request.socket.remoteAddress ?? "unknown";
-
-export function createSecurityHeaders(config: Config): RequestHandler {
-  return (_request, response, next) => {
-    response.set({
-      "X-Frame-Options": "DENY",
-      "X-XSS-Protection": "1; mode=block",
-      "X-Content-Type-Options": "nosniff",
-    });
-    if (config.NODE_ENV === "production") {
-      response.set(
-        "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains",
-      );
-    }
-    next();
-  };
-}
 
 export { publicApiPolicy };

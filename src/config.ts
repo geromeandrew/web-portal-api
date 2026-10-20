@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { prepaidMaximumSourceBytes } from "./modules/prepaid/domain/limits.js";
 
+export const corsAllowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://esatp-dv.globetel.cloud",
+  "https://esatp-st.globetel.cloud",
+  "https://esatp.globetel.cloud",
+];
+
 const envSchema = z
   .object({
     NODE_ENV: z
