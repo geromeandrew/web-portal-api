@@ -1,4 +1,5 @@
 import { criticalFixes024Sql } from "./migrationSnapshots/criticalFixes024.js";
+import { workspaceFixes025Sql } from "./migrationSnapshots/workspaceFixes025.js";
 import {
   bayanBillCycleBatchStateMachine,
   bayanBillCycleStateMachines,
@@ -1069,5 +1070,9 @@ export const migrations = [
   {
     id: "024_critical_pipeline_upload_fixes",
     sql: criticalFixes024Sql,
+  },
+  {
+    id: "025_workspace_ticket_fixes",
+    sql: workspaceFixes025Sql,
   },
 ];

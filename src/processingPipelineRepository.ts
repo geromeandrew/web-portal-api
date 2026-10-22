@@ -382,12 +382,18 @@ export type PipelineUploadBatchDto = {
     originalName: string;
     objectKey: string;
     readAt: string;
+    removedAt: string | null;
   }[];
 };
 
 export async function createPipelineUploadBatch(
   pool: Pool,
-  input: { id: string; pipelineCode: string; workspaceId: string; userId: string },
+  input: {
+    id: string;
+    pipelineCode: string;
+    workspaceId: string;
+    userId: string;
+  },
 ) {
   const result = await pool.query<{ id: string; created_at: Date }>(
     `INSERT INTO processing_pipeline_upload_batches (id, pipeline_id, workspace_id, created_by_user_id)
@@ -401,7 +407,14 @@ export async function createPipelineUploadBatch(
 
 export async function recordPipelineUploadBatchFile(
   pool: Pool,
-  input: { batchId: string; pipelineCode: string; workspaceId: string; requirementId: number; originalName: string; objectKey: string },
+  input: {
+    batchId: string;
+    pipelineCode: string;
+    workspaceId: string;
+    requirementId: number;
+    originalName: string;
+    objectKey: string;
+  },
 ): Promise<boolean> {
   const result = await pool.query(
     `INSERT INTO processing_pipeline_upload_batch_files (batch_id, file_requirement_id, original_name, object_key)
@@ -410,8 +423,15 @@ export async function recordPipelineUploadBatchFile(
      JOIN processing_pipelines pipeline ON pipeline.id = batch.pipeline_id
      WHERE batch.id = $1 AND batch.workspace_id = $2 AND pipeline.code = $3
      ON CONFLICT (batch_id, file_requirement_id) DO UPDATE
-       SET original_name = EXCLUDED.original_name, object_key = EXCLUDED.object_key, read_at = now()`,
-    [input.batchId, input.workspaceId, input.pipelineCode, input.requirementId, input.originalName, input.objectKey],
+       SET original_name = EXCLUDED.original_name, object_key = EXCLUDED.object_key, read_at = now(), removed_at = NULL`,
+    [
+      input.batchId,
+      input.workspaceId,
+      input.pipelineCode,
+      input.requirementId,
+      input.originalName,
+      input.objectKey,
+    ],
   );
   return result.rowCount === 1;
 }
@@ -421,11 +441,14 @@ export async function getPipelineUploadBatches(
   input: { pipelineCode: string },
 ): Promise<PipelineUploadBatchDto[]> {
   const result = await pool.query<{
-    id: string; created_at: Date; uploaded_by: string | null; files: unknown;
+    id: string;
+    created_at: Date;
+    uploaded_by: string | null;
+    files: unknown;
   }>(
     `SELECT batch.id, batch.created_at,
        COALESCE(NULLIF(BTRIM(user_record.display_name), ''), user_record.email) AS uploaded_by,
-       COALESCE(json_agg(json_build_object('expectedFileName', requirement.file_name, 'originalName', member.original_name, 'objectKey', member.object_key, 'readAt', member.read_at) ORDER BY member.read_at) FILTER (WHERE member.id IS NOT NULL), '[]'::json) AS files
+       COALESCE(json_agg(json_build_object('expectedFileName', requirement.file_name, 'originalName', member.original_name, 'objectKey', member.object_key, 'readAt', member.read_at, 'removedAt', member.removed_at) ORDER BY member.read_at) FILTER (WHERE member.id IS NOT NULL), '[]'::json) AS files
      FROM processing_pipeline_upload_batches batch
      JOIN processing_pipelines pipeline ON pipeline.id = batch.pipeline_id
      JOIN app_user user_record ON user_record.id = batch.created_by_user_id
@@ -441,8 +464,23 @@ export async function getPipelineUploadBatches(
     id: row.id,
     createdAt: row.created_at.toISOString(),
     uploadedBy: row.uploaded_by,
-    files: jsonArray<{ expectedFileName: string; originalName: string; objectKey: string; readAt: string }>(row.files),
+    files: jsonArray<PipelineUploadBatchDto["files"][number]>(row.files),
   }));
+}
+
+export async function markPipelineUploadFileRemoved(
+  pool: Pool,
+  pipelineCode: string,
+  key: string,
+) {
+  // Retain the upload history, including the original uploader and read time.
+  await pool.query(
+    `UPDATE processing_pipeline_upload_batch_files member SET removed_at = now()
+     FROM processing_pipeline_upload_batches batch, processing_pipelines pipeline
+     WHERE member.batch_id = batch.id AND batch.pipeline_id = pipeline.id
+       AND pipeline.code = $1 AND member.object_key = $2 AND member.removed_at IS NULL`,
+    [pipelineCode, key],
+  );
 }
 
 export async function getPipelineDetail(pool: Pool, pipelineCode: string) {

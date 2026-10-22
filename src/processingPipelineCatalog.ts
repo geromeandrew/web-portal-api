@@ -7,6 +7,17 @@ export type ProcessingPipelineFileRequirement = {
   jobName: string | null;
 };
 
+/** SAP output is acquired by the downstream SFTP workflow, never the portal. */
+export function isProcessingPipelineWebUploadRequirement(
+  requirement: ProcessingPipelineFileRequirement,
+) {
+  return !(
+    ["aprm_voice_accrual", "aprm_voice_delta"].includes(
+      requirement.pipelineCode,
+    ) && /^ICEXT_.*_OUTPUT\.TXT$/i.test(requirement.fileName)
+  );
+}
+
 export const bayanBillCycleSuffixes = [
   "01",
   "06",
@@ -428,21 +439,31 @@ add("Prepaid Reclass", "prepaid_reclass", [
 
 export const processingPipelineSeedRequirements = requirements;
 
-export function matchesProcessingPipelineRequirement(
+// Reusing the collator preserves locale/accent matching without constructing
+// one for every requirement/object pair in a large workspace listing.
+const fileNameCollator = new Intl.Collator(undefined, {
+  sensitivity: "accent",
+});
+
+export function createProcessingPipelineFileMatcher(
   requirement: ProcessingPipelineFileRequirement,
-  fileName: string,
 ) {
   if (requirement.match === "exact")
-    return (
-      requirement.fileName.localeCompare(fileName, undefined, {
-        sensitivity: "accent",
-      }) === 0
-    );
+    return (fileName: string) =>
+      fileNameCollator.compare(requirement.fileName, fileName) === 0;
   const expression = requirement.fileName
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
     .replace(/\*/g, ".*")
     .replace(/\?/g, ".");
-  return new RegExp(`^${expression}$`, "i").test(fileName);
+  const pattern = new RegExp(`^${expression}$`, "i");
+  return (fileName: string) => pattern.test(fileName);
+}
+
+export function matchesProcessingPipelineRequirement(
+  requirement: ProcessingPipelineFileRequirement,
+  fileName: string,
+) {
+  return createProcessingPipelineFileMatcher(requirement)(fileName);
 }
 
 export function matchesBillCycleUploadFile(
