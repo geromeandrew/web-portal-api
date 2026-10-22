@@ -9,7 +9,7 @@ import {
 import { createAwsClientOptions } from "./aws.js";
 import type { Config } from "./config.js";
 import {
-  matchesProcessingPipelineRequirement,
+  createProcessingPipelineFileMatcher,
   type ProcessingPipelineFileRequirement,
 } from "./processingPipelineCatalog.js";
 
@@ -39,11 +39,28 @@ export class ProcessingPipelineStorage {
   ) {}
 
   inboundPrefix(pipelineCode: string) {
-    return `${pipelineCode}/inbound/`;
+    // Public pipeline identifiers are stable; storage folder names can differ.
+    const folder =
+      pipelineCode === "isms_ibob_actzn"
+        ? "isms_ibob_actualization"
+        : pipelineCode;
+    return `${folder}/inbound/`;
   }
 
   fileKey(pipelineCode: string, name: string) {
     return `${this.inboundPrefix(pipelineCode)}${name}`;
+  }
+
+  inboundFileName(pipelineCode: string, key: string) {
+    // Historical IBOB keys remain readable/removable; new writes and listings
+    // always use the corrected folder. Never move or overwrite existing data.
+    const prefixes = [this.inboundPrefix(pipelineCode)];
+    if (pipelineCode === "isms_ibob_actzn")
+      prefixes.push("isms_ibob_actzn/inbound/");
+    const prefix = prefixes.find((candidate) => key.startsWith(candidate));
+    return prefix && key !== prefix && !key.endsWith("/")
+      ? key.slice(prefix.length)
+      : null;
   }
 
   async listFiles(pipelineCode: string, cursor?: string) {
@@ -93,10 +110,10 @@ export class ProcessingPipelineStorage {
     const files = await this.listAllFiles(pipelineCode);
     return requirements.flatMap<ProcessingPipelineExpectedFile>(
       (requirement, requirementIndex) => {
+        const matchesRequirement =
+          createProcessingPipelineFileMatcher(requirement);
         const matches = files
-          .filter((file) =>
-            matchesProcessingPipelineRequirement(requirement, file.name),
-          )
+          .filter((file) => matchesRequirement(file.name))
           .sort((left, right) => left.name.localeCompare(right.name));
         if (!matches.length)
           return [
@@ -128,8 +145,7 @@ export class ProcessingPipelineStorage {
   }
 
   async getFile(pipelineCode: string, key: string) {
-    const prefix = this.inboundPrefix(pipelineCode);
-    if (!key.startsWith(prefix) || key === prefix || key.endsWith("/"))
+    if (!this.inboundFileName(pipelineCode, key))
       throw new Error(
         "Requested key is outside the selected processing pipeline folder.",
       );
@@ -139,8 +155,7 @@ export class ProcessingPipelineStorage {
   }
 
   async fileExists(pipelineCode: string, key: string) {
-    const prefix = this.inboundPrefix(pipelineCode);
-    if (!key.startsWith(prefix) || key === prefix || key.endsWith("/"))
+    if (!this.inboundFileName(pipelineCode, key))
       throw new Error(
         "Requested key is outside the selected processing pipeline folder.",
       );
@@ -165,8 +180,7 @@ export class ProcessingPipelineStorage {
   }
 
   async deleteFile(pipelineCode: string, key: string) {
-    const prefix = this.inboundPrefix(pipelineCode);
-    if (!key.startsWith(prefix) || key === prefix || key.endsWith("/"))
+    if (!this.inboundFileName(pipelineCode, key))
       throw new Error(
         "Requested key is outside the selected processing pipeline folder.",
       );

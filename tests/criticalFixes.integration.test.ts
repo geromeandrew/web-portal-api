@@ -66,7 +66,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
       await pool.query(`CREATE SCHEMA ${schema}`);
       await pool.query(`SET search_path TO ${schema}, public`);
       await pool.query("CREATE TABLE schema_migrations (id text PRIMARY KEY)");
-      for (const migration of migrations.slice(0, -1)) {
+      for (const migration of migrations.filter(
+        (migration) => migration.id < "024",
+      )) {
         await pool.query("BEGIN");
         try {
           await pool.query(migration.sql);
@@ -101,14 +103,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
         workspaceId: workspaceIds[0],
         userId: userIds[0],
       });
-      await recordPipelineUploadBatchFile(pool, {
-        batchId: historicalBatch,
-        pipelineCode: "bss_billcycle_bayn",
-        workspaceId: workspaceIds[0],
-        requirementId: old.id!,
-        originalName: "sap_glbilled_B_01.txt",
-        objectKey: legacyKey,
-      });
+      // Seed the historical row using the schema that existed before migration 025.
+      await pool.query(
+        "INSERT INTO processing_pipeline_upload_batch_files (batch_id, file_requirement_id, original_name, object_key) VALUES ($1,$2,$3,$4)",
+        [historicalBatch, old.id!, "sap_glbilled_B_01.txt", legacyKey],
+      );
       await createStepFunctionExecution(pool, {
         id: historicalExecution,
         fileMappingId: old.stepFunction!.mappingId,
@@ -120,7 +119,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
         status: "SUCCEEDED",
         startedAt: new Date().toISOString(),
       });
-      const migration = migrations.at(-1)!;
+      const migration = migrations.find(
+        (migration) => migration.id === "024_critical_pipeline_upload_fixes",
+      )!;
       await pool.query("BEGIN");
       try {
         await pool.query(migration.sql);
@@ -132,6 +133,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
         await pool.query("ROLLBACK");
         throw error;
       }
+
+      for (const nextMigration of migrations.filter(
+        (migration) => migration.id > "024_critical_pipeline_upload_fixes",
+      ))
+        await pool.query(nextMigration.sql);
 
       // Exercise the real router, multipart parser and S3 command construction.
       // Only the S3 transport is replaced; no live AWS objects are written.
@@ -216,7 +222,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
     it("is safe to rerun and maintains SAP and restored Globe 308 processing mappings", async () => {
       await pool.query("BEGIN");
       try {
-        await pool.query(migrations.at(-1)!.sql);
+        await pool.query(
+          migrations.find(
+            (migration) =>
+              migration.id === "024_critical_pipeline_upload_fixes",
+          )!.sql,
+        );
         await pool.query("COMMIT");
       } catch (error) {
         await pool.query("ROLLBACK");

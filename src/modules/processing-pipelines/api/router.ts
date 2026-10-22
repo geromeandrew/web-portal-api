@@ -8,6 +8,7 @@ import {
   canonicalizeProcessingPipelineExpectedFileName,
   matchesBillCycleUploadFile,
   matchesProcessingPipelineRequirement,
+  isProcessingPipelineWebUploadRequirement,
 } from "../../../processingPipelineCatalog.js";
 import {
   createStepFunctionExecution,
@@ -20,6 +21,7 @@ import {
   getProcessingPipelineRequirements,
   getStepFunctionExecution,
   recordPipelineUploadBatchFile,
+  markPipelineUploadFileRemoved,
   type PipelineBatchStepFunctionMapping,
   updateStepFunctionExecution,
 } from "../../../processingPipelineRepository.js";
@@ -90,17 +92,25 @@ function attachConfiguration(
   >,
   requirements: Awaited<ReturnType<typeof getProcessingPipelineRequirements>>,
   bucket: string,
-  uploadActivity: Map<string, { uploadedAt: string; uploadedBy: string | null }>,
+  uploadActivity: Map<
+    string,
+    { uploadedAt: string; uploadedBy: string | null }
+  >,
 ) {
+  const requirementsByName = new Map(
+    requirements.map((requirement) => [requirement.fileName, requirement]),
+  );
   return files.map((file) => {
-    const requirement = requirements.find(
-      (candidate) => candidate.fileName === file.expectedFileName,
-    );
+    const requirement = requirementsByName.get(file.expectedFileName);
     if (!requirement) return file;
     return {
       ...file,
-      uploadedAt: file.key ? uploadActivity.get(file.key)?.uploadedAt ?? file.lastModified : null,
-      uploadedBy: file.key ? uploadActivity.get(file.key)?.uploadedBy ?? null : null,
+      uploadedAt: file.key
+        ? (uploadActivity.get(file.key)?.uploadedAt ?? file.lastModified)
+        : null,
+      uploadedBy: file.key
+        ? (uploadActivity.get(file.key)?.uploadedBy ?? null)
+        : null,
       match: requirement.match,
       stepFunction: requirement.stepFunction
         ? {
@@ -191,8 +201,18 @@ export function createProcessingPipelinesRouter(
   });
   router.get("/:pipelineCode/requirements", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+    const { purpose } = z
+      .object({ purpose: z.literal("web-upload").optional() })
+      .parse(request.query);
+    const requirements = await getProcessingPipelineRequirements(
+      pool,
+      pipelineCode,
+    );
     response.json({
-      requirements: await getProcessingPipelineRequirements(pool, pipelineCode),
+      requirements:
+        purpose === "web-upload"
+          ? requirements.filter(isProcessingPipelineWebUploadRequirement)
+          : requirements,
     });
   });
   router.get(
@@ -376,10 +396,9 @@ export function createProcessingPipelinesRouter(
   router.get("/:pipelineCode/files", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
     try {
-      const requirements = await getProcessingPipelineRequirements(
-        pool,
-        pipelineCode,
-      );
+      const requirements = (
+        await getProcessingPipelineRequirements(pool, pipelineCode)
+      ).filter(isProcessingPipelineWebUploadRequirement);
       const files = requirements.length
         ? await processingPipelineStorage.listExpectedFiles(
             pipelineCode,
@@ -395,7 +414,12 @@ export function createProcessingPipelinesRouter(
         requirements.length
           ? {
               configured: true,
-              files: attachConfiguration(files, requirements, config.S3_BUCKET, uploadActivity),
+              files: attachConfiguration(
+                files,
+                requirements,
+                config.S3_BUCKET,
+                uploadActivity,
+              ),
             }
           : { configured: false, files: [] },
       );
@@ -424,8 +448,8 @@ export function createProcessingPipelinesRouter(
         pool,
         pipelineCode,
       );
-      const prefix = processingPipelineStorage.inboundPrefix(pipelineCode);
-      const fileName = key.startsWith(prefix) ? key.slice(prefix.length) : "";
+      const fileName =
+        processingPipelineStorage.inboundFileName(pipelineCode, key) ?? "";
       if (
         !requirements.some((requirement) =>
           matchesProcessingPipelineRequirement(requirement, fileName),
@@ -460,7 +484,9 @@ export function createProcessingPipelinesRouter(
     if (!request.file)
       throw new AppError(400, "FILE_REQUIRED", "Choose a file to upload.");
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
-    const { expectedFileName, replace, batchId } = uploadSchema.parse(request.body);
+    const { expectedFileName, replace, batchId } = uploadSchema.parse(
+      request.body,
+    );
     const extension = request.file.originalname
       .slice(request.file.originalname.lastIndexOf("."))
       .toLowerCase();
@@ -481,8 +507,25 @@ export function createProcessingPipelinesRouter(
         "PIPELINE_FILE_NOT_FOUND",
         "The selected file mapping is not available for this pipeline.",
       );
+    if (!isProcessingPipelineWebUploadRequirement(requirement))
+      throw new AppError(
+        400,
+        "PIPELINE_FILE_NOT_UPLOADABLE",
+        "SAP output files are acquired automatically and cannot be uploaded through the portal.",
+      );
     const localName =
       request.file.originalname.split(/[\\/]/).at(-1) ?? "upload.bin";
+    if (
+      !isProcessingPipelineWebUploadRequirement({
+        ...requirement,
+        fileName: localName,
+      })
+    )
+      throw new AppError(
+        400,
+        "PIPELINE_FILE_NOT_UPLOADABLE",
+        "SAP output files are acquired automatically and cannot be uploaded through the portal.",
+      );
     const normalizedLocalName =
       canonicalizeProcessingPipelineExpectedFileName(localName);
     const savedName =
@@ -521,10 +564,19 @@ export function createProcessingPipelinesRouter(
       const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
       if (batchId) {
         const recorded = await recordPipelineUploadBatchFile(pool, {
-          batchId, pipelineCode, workspaceId, requirementId: requirement.id,
-          originalName: localName, objectKey: stored.key,
+          batchId,
+          pipelineCode,
+          workspaceId,
+          requirementId: requirement.id,
+          originalName: localName,
+          objectKey: stored.key,
         });
-        if (!recorded) throw new AppError(404, "PIPELINE_UPLOAD_BATCH_NOT_FOUND", "The selected upload batch was not found.");
+        if (!recorded)
+          throw new AppError(
+            404,
+            "PIPELINE_UPLOAD_BATCH_NOT_FOUND",
+            "The selected upload batch was not found.",
+          );
       }
       await audit(pool, workspaceId, "processing-pipeline.file-uploaded", {
         pipelineCode,
@@ -545,15 +597,31 @@ export function createProcessingPipelinesRouter(
   router.delete("/:pipelineCode/files", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
     const { key } = contentQuerySchema.parse(request.query);
-    const prefix = processingPipelineStorage.inboundPrefix(pipelineCode);
-    const fileName = key.startsWith(prefix) ? key.slice(prefix.length) : "";
-    const requirements = await getProcessingPipelineRequirements(pool, pipelineCode);
-    if (!requirements.some((requirement) => matchesProcessingPipelineRequirement(requirement, fileName)))
-      throw new AppError(404, "PIPELINE_FILE_NOT_FOUND", "The requested file is not configured for this pipeline.");
+    const fileName =
+      processingPipelineStorage.inboundFileName(pipelineCode, key) ?? "";
+    const requirements = await getProcessingPipelineRequirements(
+      pool,
+      pipelineCode,
+    );
+    if (
+      !requirements.some((requirement) =>
+        matchesProcessingPipelineRequirement(requirement, fileName),
+      )
+    )
+      throw new AppError(
+        404,
+        "PIPELINE_FILE_NOT_FOUND",
+        "The requested file is not configured for this pipeline.",
+      );
     try {
-      if (!await processingPipelineStorage.fileExists(pipelineCode, key))
-        throw new AppError(404, "PIPELINE_FILE_NOT_FOUND", "The requested file was not found in storage.");
+      if (!(await processingPipelineStorage.fileExists(pipelineCode, key)))
+        throw new AppError(
+          404,
+          "PIPELINE_FILE_NOT_FOUND",
+          "The requested file was not found in storage.",
+        );
       await processingPipelineStorage.deleteFile(pipelineCode, key);
+      await markPipelineUploadFileRemoved(pool, pipelineCode, key);
       const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
       await audit(pool, workspaceId, "processing-pipeline.file-removed", {
         pipelineCode,

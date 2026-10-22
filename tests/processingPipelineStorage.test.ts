@@ -9,6 +9,50 @@ import { describe, expect, it, vi } from "vitest";
 import { ProcessingPipelineStorage } from "../src/processingPipelineStorage.js";
 
 describe("ProcessingPipelineStorage", () => {
+  it("preserves pagination, case/accent matching, glob ordering and missing rows", async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        IsTruncated: true,
+        NextContinuationToken: "page-2",
+        Contents: [
+          { Key: "alpha/inbound/report-b.csv" },
+          { Key: "alpha/inbound/CAFÉ.XLSX" },
+        ],
+      })
+      .mockResolvedValueOnce({
+        Contents: [
+          { Key: "alpha/inbound/Cafe.XLSX" },
+          { Key: "alpha/inbound/report-a.csv" },
+        ],
+      });
+    const storage = new ProcessingPipelineStorage(
+      { send } as unknown as Pick<S3Client, "send">,
+      "pipeline-files",
+    );
+    const base = {
+      pipelineCode: "alpha",
+      legacyPackageName: null,
+      jobName: null,
+    };
+    const files = await storage.listExpectedFiles("alpha", [
+      { ...base, fileName: "Café.XLSX", match: "exact" },
+      { ...base, fileName: "report-*.csv", match: "glob" },
+      { ...base, fileName: "missing.xlsx", match: "exact" },
+    ]);
+    expect(files.map((file) => file.matchedFileName)).toEqual([
+      "CAFÉ.XLSX",
+      "report-a.csv",
+      "report-b.csv",
+      null,
+    ]);
+    expect(files[3]).toMatchObject({
+      id: "2:missing",
+      availability: "missing",
+      key: null,
+    });
+    expect(send.mock.calls[1][0].input.ContinuationToken).toBe("page-2");
+  });
   it("uses the selected pipeline inbound folder as the S3 prefix", async () => {
     const send = vi.fn().mockResolvedValue({});
     const storage = new ProcessingPipelineStorage(
