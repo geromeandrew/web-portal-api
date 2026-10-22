@@ -227,7 +227,17 @@ const allOpenApiDocument: OpenAPIV3.Document = {
     "/api/processing-pipelines/{pipelineCode}/requirements": {
       get: {
         ...success("List a pipeline's configured file requirements"),
-        parameters: [pipelineCodePath],
+        description:
+          "Reads file configuration without accessing S3. Optional purpose=web-upload restricts the result to portal-uploadable requirements; omitted purpose retains all processing requirements.",
+        parameters: [
+          pipelineCodePath,
+          {
+            name: "purpose",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["web-upload"] },
+          },
+        ],
       },
     },
     "/api/processing-pipelines/{pipelineCode}/execution-details": {
@@ -249,12 +259,14 @@ const allOpenApiDocument: OpenAPIV3.Document = {
     "/api/processing-pipelines/{pipelineCode}/files": {
       get: {
         ...success("List configured pipeline files"),
+        description:
+          "Lists portal-uploadable files. APRM ICEXT output files belong to the downstream SFTP workflow and are excluded. ISMS IBOB uses the isms_ibob_actualization/inbound/ storage folder while retaining the isms_ibob_actzn pipeline identifier.",
         parameters: [pipelineCodePath],
       },
       post: {
         ...created("Upload a pipeline file"),
         description:
-          "Uploads up to the fixed 200 MiB (209715200 bytes) per-file limit. SAP bill-cycle feeds require .txt; spreadsheet reports retain .XLSX. Files larger than this limit return 413 FILE_TOO_LARGE.",
+          "Uploads up to the fixed 200 MiB (209715200 bytes) per-file limit. SAP bill-cycle feeds require .txt; spreadsheet reports retain .XLSX. Files larger than this limit return 413 FILE_TOO_LARGE. APRM ICEXT output uploads return 400 PIPELINE_FILE_NOT_UPLOADABLE.",
         responses: {
           "201": { description: "File uploaded." },
           "413": {
@@ -267,6 +279,8 @@ const allOpenApiDocument: OpenAPIV3.Document = {
       },
       delete: {
         ...noContent("Delete a stored pipeline file"),
+        description:
+          "Requires access to the selected pipeline. Removes the current inbound object and marks matching upload history entries with removedAt, retaining the original readAt and uploader.",
         parameters: [pipelineCodePath, pipelineFileKey],
       },
     },
@@ -274,7 +288,7 @@ const allOpenApiDocument: OpenAPIV3.Document = {
       get: {
         ...success("List mapped pipeline upload batches"),
         description:
-          "Returns all uploaders' batches in the selected pipeline. Requires access to that pipeline; adding files to a batch remains restricted to its owner.",
+          "Returns all uploaders' batches in the selected pipeline. Each file includes its objectKey, readAt timestamp and nullable removedAt timestamp. Requires access to that pipeline; adding files to a batch remains restricted to its owner.",
         parameters: [pipelineCodePath],
       },
       post: {
