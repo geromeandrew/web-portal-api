@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { migrations } from "../src/migrations.js";
+import {
+  CopyObjectCommand,
+  DeleteObjectCommand,
+  PutObjectCommand,
+  GetObjectCommand,
+} from "@aws-sdk/client-s3";
 import { startWorkspaceTicketApp } from "./fixtures/workspaceTicketApp.js";
 
 describe.skipIf(
@@ -329,6 +335,407 @@ describe.skipIf(
     },
   );
 
+  it("saves a shuffled Memo batch by date, retains every file, and lists/reads/removes later numbers", async () => {
+    const code = "memo_sst";
+    const selections = [
+      {
+        originalName: "3PComms_01022027.xlsx",
+        expectedFileName: "3PComms_01.XLSX",
+      },
+      {
+        originalName: "Dental_10152026.xlsx",
+        expectedFileName: "Dental_01.XLSX",
+      },
+      {
+        originalName: "3PComms_12312025.xlsx",
+        expectedFileName: "3PComms_01.XLSX",
+      },
+      {
+        originalName: "3PComms_02012026.xlsx",
+        expectedFileName: "3PComms_01.XLSX",
+      },
+    ];
+    const created = await request(
+      `/processing-pipelines/${code}/upload-batches`,
+      "admin",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: selections }),
+      },
+    );
+    expect(created.status).toBe(201);
+    const plan = await created.json();
+    expect(
+      plan.files.map(
+        (file: { originalName: string; savedFileName: string }) => [
+          file.originalName,
+          file.savedFileName,
+        ],
+      ),
+    ).toEqual([
+      ["3PComms_12312025.xlsx", "3PComms_01.XLSX"],
+      ["3PComms_02012026.xlsx", "3PComms_02.XLSX"],
+      ["3PComms_01022027.xlsx", "3PComms_03.XLSX"],
+      ["Dental_10152026.xlsx", "Dental_01.XLSX"],
+    ]);
+    // Upload in selection order to prove that the backend uses its plan.
+    for (const file of selections) {
+      const body = new FormData();
+      body.set("expectedFileName", file.expectedFileName);
+      body.set("batchId", plan.batch.id);
+      body.set(
+        "file",
+        new Blob([file.originalName], { type: "text/plain" }),
+        file.originalName,
+      );
+      const response = await request(
+        `/processing-pipelines/${code}/files`,
+        "admin",
+        { method: "POST", body },
+      );
+      expect(response.status).toBe(201);
+      expect((await response.json()).file.name).toBe(
+        plan.files.find(
+          (entry: { originalName: string }) =>
+            entry.originalName === file.originalName,
+        ).savedFileName,
+      );
+    }
+    const batches = (
+      await (
+        await request(`/processing-pipelines/${code}/upload-batches`)
+      ).json()
+    ).batches;
+    const batch = batches.find(
+      (entry: { id: string }) => entry.id === plan.batch.id,
+    );
+    expect(batch.files).toHaveLength(4);
+    const inventory = (
+      await (await request(`/processing-pipelines/${code}/files`)).json()
+    ).files;
+    expect(
+      inventory.filter(
+        (file: { expectedFileName: string }) =>
+          file.expectedFileName === "3PComms_01.XLSX",
+      ),
+    ).toHaveLength(3);
+    const key = `${code}/inbound/3PComms_02.XLSX`;
+    const query = new URLSearchParams({ key });
+    const content = await request(
+      `/processing-pipelines/${code}/files/content?${query}`,
+    );
+    expect(content.status).toBe(200);
+    expect(await content.text()).toBe("3PComms_02012026.xlsx");
+    // A foreign owner, or a file absent from the plan, cannot write any object.
+    await app.pool.query(
+      "INSERT INTO app_user_modules (user_id,module_id) VALUES ($1,'memo_sst')",
+      [app.users.business],
+    );
+    expect(
+      (
+        await upload(
+          code,
+          selections[0].expectedFileName,
+          selections[0].originalName,
+          plan.batch.id,
+          "business",
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await upload(
+          code,
+          selections[0].expectedFileName,
+          "3PComms_10272026.xlsx",
+          plan.batch.id,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await upload(
+          code,
+          selections[0].expectedFileName,
+          selections[0].originalName,
+          plan.batch.id,
+        )
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await request(`/processing-pipelines/${code}/files?${query}`, "admin", {
+          method: "DELETE",
+        })
+      ).status,
+    ).toBe(204);
+    const after = (
+      await (
+        await request(`/processing-pipelines/${code}/upload-batches`)
+      ).json()
+    ).batches.find((entry: { id: string }) => entry.id === plan.batch.id);
+    expect(after.files).toHaveLength(4);
+    expect(
+      after.files.find((file: { objectKey: string }) => file.objectKey === key)
+        .removedAt,
+    ).toEqual(expect.any(String));
+    expect(
+      after.files.filter(
+        (file: { removedAt: string | null }) => !file.removedAt,
+      ),
+    ).toHaveLength(3);
+  });
+
+  it("continues Memo numbering across batches, preserves old objects, and resets after inbound is cleared", async () => {
+    const code = "memo_sst";
+    const files = ["Fuel_01022027.xlsx", "Fuel_12312025.xlsx"].map(
+      (originalName) => ({ originalName, expectedFileName: "Fuel_01.XLSX" }),
+    );
+    const ids: string[] = [];
+    for (const attempt of [0, 1]) {
+      const created = await request(
+        `/processing-pipelines/${code}/upload-batches`,
+        "admin",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files }),
+        },
+      );
+      expect(created.status).toBe(201);
+      const plan = await created.json();
+      ids.push(plan.batch.id);
+      expect(
+        plan.files.map((file: { savedFileName: string }) => file.savedFileName),
+      ).toEqual(
+        attempt
+          ? ["Fuel_03.XLSX", "Fuel_04.XLSX"]
+          : ["Fuel_01.XLSX", "Fuel_02.XLSX"],
+      );
+      for (const file of files) {
+        const body = new FormData();
+        body.set("expectedFileName", file.expectedFileName);
+        body.set("batchId", plan.batch.id);
+        body.set("replace", attempt ? "true" : "false");
+        body.set(
+          "file",
+          new Blob([`${attempt}:${file.originalName}`], { type: "text/plain" }),
+          file.originalName,
+        );
+        const response = await request(
+          `/processing-pipelines/${code}/files`,
+          "admin",
+          { method: "POST", body },
+        );
+        expect(response.status).toBe(201);
+        expect((await response.json()).replaced).toBe(false);
+      }
+    }
+    expect(ids[0]).not.toBe(ids[1]);
+    const batches = (
+      await (
+        await request(`/processing-pipelines/${code}/upload-batches`)
+      ).json()
+    ).batches;
+    for (const id of ids) {
+      expect(
+        batches.find((batch: { id: string }) => batch.id === id).files,
+      ).toHaveLength(2);
+    }
+    const query = new URLSearchParams({ key: `${code}/inbound/Fuel_01.XLSX` });
+    const content = await request(
+      `/processing-pipelines/${code}/files/content?${query}`,
+    );
+    expect(content.status).toBe(200);
+    expect(await content.text()).toBe("0:Fuel_12312025.xlsx");
+    const later = await request(
+      `/processing-pipelines/${code}/files/content?${new URLSearchParams({ key: `${code}/inbound/Fuel_03.XLSX` })}`,
+    );
+    expect(await later.text()).toBe("1:Fuel_12312025.xlsx");
+    // Leave a gap: numbering must continue at 05, not reuse 01.
+    await request(`/processing-pipelines/${code}/files?${query}`, "admin", {
+      method: "DELETE",
+    });
+    const next = await (
+      await request(`/processing-pipelines/${code}/upload-batches`, "admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files }),
+      })
+    ).json();
+    expect(next.files[0].savedFileName).toBe("Fuel_05.XLSX");
+    // Simulate the Step Function's move to a sibling directory outside inbound.
+    for (const number of [2, 3, 4]) {
+      const key = `${code}/inbound/Fuel_0${number}.XLSX`;
+      await app.s3.send(
+        new CopyObjectCommand({
+          Bucket: app.config.S3_BUCKET,
+          Key: `${code}/processed/Fuel_0${number}.XLSX`,
+          CopySource: `${app.config.S3_BUCKET}/${key}`,
+        }),
+      );
+      await app.s3.send(
+        new DeleteObjectCommand({ Bucket: app.config.S3_BUCKET, Key: key }),
+      );
+    }
+    const reset = await (
+      await request(`/processing-pipelines/${code}/upload-batches`, "admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files }),
+      })
+    ).json();
+    expect(
+      reset.files.map((file: { savedFileName: string }) => file.savedFileName),
+    ).toEqual(["Fuel_01.XLSX", "Fuel_02.XLSX"]);
+    const resetUpload = await upload(
+      code,
+      "Fuel_01.XLSX",
+      reset.files[0].originalName,
+      reset.batch.id,
+    );
+    expect(resetUpload.status).toBe(201);
+    expect((await resetUpload.json()).file.name).toBe("Fuel_01.XLSX");
+    const single = await upload(code, "Fuel_01.XLSX", "Fuel_10272026.xlsx");
+    expect(single.status).toBe(201);
+    expect((await single.json()).file.name).toBe("Fuel_02.XLSX");
+    expect((await request("/healthz")).status).toBe(200);
+  });
+
+  it("never overwrites Memo objects even when another batch took the planned name and replace=true", async () => {
+    const code = "memo_sst",
+      expected = "Security_01.XLSX",
+      original = "Security_10272026.xlsx";
+    const create = async () =>
+      await (
+        await request(`/processing-pipelines/${code}/upload-batches`, "admin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            files: [{ originalName: original, expectedFileName: expected }],
+          }),
+        })
+      ).json();
+    const first = await create(),
+      second = await create();
+    expect(
+      (await upload(code, expected, original, first.batch.id)).status,
+    ).toBe(201);
+    const body = new FormData();
+    body.set("file", new Blob(["must not replace existing content"]), original);
+    body.set("expectedFileName", expected);
+    body.set("batchId", second.batch.id);
+    body.set("replace", "true");
+    const collision = await request(
+      `/processing-pipelines/${code}/files`,
+      "admin",
+      { method: "POST", body },
+    );
+    expect(collision.status).toBe(409);
+    const query = new URLSearchParams({ key: `${code}/inbound/${expected}` });
+    expect(
+      await (
+        await request(`/processing-pipelines/${code}/files/content?${query}`)
+      ).text(),
+    ).toBe("ticket-test-content");
+    expect((await create()).files[0].savedFileName).toBe("Security_02.XLSX");
+  });
+
+  it("protects a Memo object with an atomic conditional write during concurrent requests", async () => {
+    const Key = "memo_sst/inbound/Optical_01.XLSX";
+    const results = await Promise.allSettled(
+      ["first", "second"].map((Body) =>
+        app.s3.send(
+          new PutObjectCommand({
+            Bucket: app.config.S3_BUCKET,
+            Key,
+            Body,
+            IfNoneMatch: "*",
+          }),
+        ),
+      ),
+    );
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    const failed = results.find(
+      (result) => result.status === "rejected",
+    ) as PromiseRejectedResult;
+    expect(failed.reason.name).toBe("PreconditionFailed");
+    const object = await app.s3.send(
+      new GetObjectCommand({ Bucket: app.config.S3_BUCKET, Key }),
+    );
+    const successfulIndex = results.findIndex(
+      (result) => result.status === "fulfilled",
+    );
+    expect(await object.Body!.transformToString()).toBe(
+      ["first", "second"][successfulIndex],
+    );
+  });
+
+  it.each([
+    "AUR.xlsx",
+    "October 2026 AUR usage export.xlsx",
+    "monthly_aur_10272026.XLSX",
+  ])(
+    "accepts an APRM Accrual AUR workbook named %s and saves the canonical name",
+    async (name) => {
+      const body = new FormData();
+      body.set("file", new Blob([name]), name);
+      body.set("expectedFileName", "AUR Extract FINAL_BILLING.XLSX");
+      body.set("replace", "true");
+      const response = await request(
+        "/processing-pipelines/aprm_voice_accrual/files",
+        "admin",
+        { method: "POST", body },
+      );
+      expect(response.status).toBe(201);
+      expect((await response.json()).file.name).toBe(
+        "AUR Extract FINAL_BILLING.XLSX",
+      );
+    },
+  );
+
+  it.each(["Usage extract.xlsx", "AU_R.xlsx", "AUR.csv"])(
+    "rejects a filename outside the AUR workbook rule: %s",
+    async (name) => {
+      expect(
+        (
+          await upload(
+            "aprm_voice_accrual",
+            "AUR Extract FINAL_BILLING.XLSX",
+            name,
+          )
+        ).status,
+      ).toBe(400);
+    },
+  );
+
+  it("rejects invalid Memo batches before creating history", async () => {
+    for (const names of [
+      ["3PComms_02302026.xlsx"],
+      ["Unknown_10272026.xlsx"],
+      ["3PComms_10272026.xlsx", "3pcomms_10272026.XLSX.xlsx"],
+    ]) {
+      const response = await request(
+        "/processing-pipelines/memo_sst/upload-batches",
+        "admin",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            files: names.map((originalName) => ({
+              originalName,
+              expectedFileName: "3PComms_01.XLSX",
+            })),
+          }),
+        },
+      );
+      expect(response.status).toBe(400);
+    }
+  });
+
   it("reruns migration 025 without changing assignments or deleting audit history", async () => {
     const before = await app.pool.query(
       "SELECT * FROM app_user_modules ORDER BY user_id,module_id",
@@ -336,7 +743,11 @@ describe.skipIf(
     const historyBefore = await app.pool.query(
       "SELECT * FROM audit_actions ORDER BY id",
     );
-    await app.pool.query(migrations.at(-1)!.sql);
+    await app.pool.query(
+      migrations.find(
+        (migration) => migration.id === "025_workspace_ticket_fixes",
+      )!.sql,
+    );
     expect(
       (
         await app.pool.query(

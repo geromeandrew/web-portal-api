@@ -393,16 +393,38 @@ export async function createPipelineUploadBatch(
     pipelineCode: string;
     workspaceId: string;
     userId: string;
+    uploadPlan?: import("./memoUpload.js").MemoUploadAssignment[];
   },
 ) {
   const result = await pool.query<{ id: string; created_at: Date }>(
-    `INSERT INTO processing_pipeline_upload_batches (id, pipeline_id, workspace_id, created_by_user_id)
-     SELECT $1, pipeline.id, $2, $3 FROM processing_pipelines pipeline
+    `INSERT INTO processing_pipeline_upload_batches (id, pipeline_id, workspace_id, created_by_user_id, upload_plan)
+     SELECT $1, pipeline.id, $2, $3, $5::jsonb FROM processing_pipelines pipeline
      WHERE pipeline.code = $4 AND pipeline.is_active = true
      RETURNING id, created_at`,
-    [input.id, input.workspaceId, input.userId, input.pipelineCode],
+    [
+      input.id,
+      input.workspaceId,
+      input.userId,
+      input.pipelineCode,
+      JSON.stringify(input.uploadPlan ?? []),
+    ],
   );
   return result.rows[0] ?? null;
+}
+
+export async function getPipelineUploadBatchPlan(
+  pool: Pool,
+  input: { batchId: string; pipelineCode: string; workspaceId: string },
+) {
+  const result = await pool.query<{
+    upload_plan: import("./memoUpload.js").MemoUploadAssignment[];
+  }>(
+    `SELECT batch.upload_plan FROM processing_pipeline_upload_batches batch
+     JOIN processing_pipelines pipeline ON pipeline.id = batch.pipeline_id
+     WHERE batch.id = $1 AND batch.workspace_id = $2 AND pipeline.code = $3`,
+    [input.batchId, input.workspaceId, input.pipelineCode],
+  );
+  return result.rows[0]?.upload_plan ?? null;
 }
 
 export async function recordPipelineUploadBatchFile(
@@ -422,7 +444,7 @@ export async function recordPipelineUploadBatchFile(
      FROM processing_pipeline_upload_batches batch
      JOIN processing_pipelines pipeline ON pipeline.id = batch.pipeline_id
      WHERE batch.id = $1 AND batch.workspace_id = $2 AND pipeline.code = $3
-     ON CONFLICT (batch_id, file_requirement_id) DO UPDATE
+     ON CONFLICT (batch_id, file_requirement_id, object_key) DO UPDATE
        SET original_name = EXCLUDED.original_name, object_key = EXCLUDED.object_key, read_at = now(), removed_at = NULL`,
     [
       input.batchId,

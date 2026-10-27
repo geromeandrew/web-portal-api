@@ -97,12 +97,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
       const old = (
         await getProcessingPipelineRequirements(pool, "bss_billcycle_bayn")
       ).find((row) => row.fileName === "sap_glbilled_B_01.XLSX")!;
-      await createPipelineUploadBatch(pool, {
-        id: historicalBatch,
-        pipelineCode: "bss_billcycle_bayn",
-        workspaceId: workspaceIds[0],
-        userId: userIds[0],
-      });
+      // Seed through the historical schema, before upload plans were introduced.
+      await pool.query(
+        `INSERT INTO processing_pipeline_upload_batches (id, pipeline_id, workspace_id, created_by_user_id)
+         SELECT $1, id, $2, $3 FROM processing_pipelines WHERE code = 'bss_billcycle_bayn'`,
+        [historicalBatch, workspaceIds[0], userIds[0]],
+      );
       // Seed the historical row using the schema that existed before migration 025.
       await pool.query(
         "INSERT INTO processing_pipeline_upload_batch_files (batch_id, file_requirement_id, original_name, object_key) VALUES ($1,$2,$3,$4)",
