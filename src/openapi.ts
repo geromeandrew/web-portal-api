@@ -266,7 +266,7 @@ const allOpenApiDocument: OpenAPIV3.Document = {
       post: {
         ...created("Upload a pipeline file"),
         description:
-          "Uploads up to the fixed 200 MiB (209715200 bytes) per-file limit. SAP bill-cycle feeds require .txt; spreadsheet reports retain .XLSX. Files larger than this limit return 413 FILE_TOO_LARGE. APRM ICEXT output uploads return 400 PIPELINE_FILE_NOT_UPLOADABLE.",
+          "Uploads up to the fixed 200 MiB (209715200 bytes) per-file limit. SAP bill-cycle feeds require .txt; spreadsheet reports retain .XLSX. Files larger than this limit return 413 FILE_TOO_LARGE. APRM ICEXT output uploads return 400 PIPELINE_FILE_NOT_UPLOADABLE. Memo uploads accept any nonempty suffix after the final underscore with the mapped base and .xlsx extension. With batchId, the original filename must be in that batch's upload plan and is saved under its assigned _01, _02, etc. name, regardless of upload order. A Memo upload without batchId is assigned the next number from the current inbound inventory. Memo objects cannot be overwritten, including when replace=true; conflicting planned or concurrent writes return 409 PIPELINE_FILE_EXISTS. APRM Accrual accepts .xlsx names containing AUR (case-insensitive) and saves them as AUR Extract FINAL_BILLING.XLSX. Other pipelines retain their replace=true behavior.",
         responses: {
           "201": { description: "File uploaded." },
           "413": {
@@ -294,6 +294,39 @@ const allOpenApiDocument: OpenAPIV3.Document = {
       post: {
         ...created("Create a mapped pipeline upload batch"),
         parameters: [pipelineCodePath],
+        description:
+          "For memo_sst, requires a JSON files array containing every originalName and its configured expectedFileName (the _01 mapping). Valid MMDDYYYY suffixes sort oldest first, then other suffixes in natural order. Each mapped base continues after its highest numbered file currently in inbound; gaps are not reused. Numbering resets to _01 only when that base has no files left in inbound. Dates are sorted within each batch. A plan does not reserve names; if another batch takes a planned name before it is uploaded, the write returns 409 and the caller must create a fresh batch. Duplicate normalized names, invalid dates, unmapped bases and non-XLSX extensions return 400. The response includes batch and files (originalName, expectedFileName, savedFileName); upload the original files with that batchId. Other pipelines may omit the body.",
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["files"],
+                properties: {
+                  files: {
+                    type: "array",
+                    minItems: 1,
+                    items: {
+                      type: "object",
+                      required: ["originalName", "expectedFileName"],
+                      properties: {
+                        originalName: {
+                          type: "string",
+                          example: "3PComms_10272026.xlsx",
+                        },
+                        expectedFileName: {
+                          type: "string",
+                          example: "3PComms_01.XLSX",
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     },
     "/api/processing-pipelines/{pipelineCode}/files/content": {

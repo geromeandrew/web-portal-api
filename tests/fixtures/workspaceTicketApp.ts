@@ -96,6 +96,7 @@ export async function startWorkspaceTicketApp(port = 0) {
     users,
     config,
     baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`,
+    s3: client,
     async close() {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),

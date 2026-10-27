@@ -7,6 +7,9 @@ dist/
 !.env.example
 coverage/
 *.tsbuildinfo
+__pycache__/
+*.py[cod]
+.venv*/
 certs/
 
 # Local supporting material; application source and tracked documentation remain unaffected.
