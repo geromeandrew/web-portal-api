@@ -7,6 +7,7 @@ import type { AppDependencies } from "../../../app/dependencies.js";
 import {
   canonicalizeProcessingPipelineExpectedFileName,
   matchesBillCycleUploadFile,
+  matchesAprmAccrualAurUpload,
   matchesProcessingPipelineRequirement,
   isProcessingPipelineWebUploadRequirement,
 } from "../../../processingPipelineCatalog.js";
@@ -14,6 +15,7 @@ import {
   createStepFunctionExecution,
   createPipelineUploadBatch,
   getPipelineUploadBatches,
+  getPipelineUploadBatchPlan,
   getPipelineDetail,
   getPipelineFileUploadActivity,
   getProcessingPipelineBatchStepFunctionMapping,
@@ -26,6 +28,10 @@ import {
   updateStepFunctionExecution,
 } from "../../../processingPipelineRepository.js";
 import { AppError } from "../../../errors.js";
+import {
+  planMemoUploads,
+  type MemoUploadAssignment,
+} from "../../../memoUpload.js";
 import { assertModuleAccess, getEffectiveModules } from "../../../rbac.js";
 import { audit, ensureWorkspace } from "../../../workspace.js";
 import {
@@ -52,6 +58,16 @@ const expectedFileSchema = z.object({
 const uploadSchema = expectedFileSchema.extend({
   replace: z.enum(["true", "false"]).default("false"),
   batchId: z.string().uuid().optional(),
+});
+const memoBatchSchema = z.object({
+  files: z
+    .array(
+      z.object({
+        originalName: z.string().min(1).max(512),
+        expectedFileName: z.string().min(1).max(512),
+      }),
+    )
+    .min(1),
 });
 const executionDetailsQuerySchema = expectedFileSchema;
 const batchRunSchema = z.object({
@@ -429,12 +445,34 @@ export function createProcessingPipelinesRouter(
   });
   router.post("/:pipelineCode/upload-batches", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+    const uploadPlan =
+      pipelineCode === "memo_sst"
+        ? planMemoUploads(
+            memoBatchSchema.parse(request.body).files,
+            await getProcessingPipelineRequirements(pool, pipelineCode),
+            (await processingPipelineStorage.listAllFiles(pipelineCode)).map(
+              (file) => file.name,
+            ),
+          )
+        : undefined;
     const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
     const batch = await createPipelineUploadBatch(pool, {
-      id: randomUUID(), pipelineCode, workspaceId, userId: request.auth!.userId,
+      id: randomUUID(),
+      pipelineCode,
+      workspaceId,
+      userId: request.auth!.userId,
+      uploadPlan,
     });
-    if (!batch) throw new AppError(404, "PIPELINE_NOT_FOUND", "The selected processing pipeline was not found.");
-    response.status(201).json({ batch: { id: batch.id, createdAt: batch.created_at.toISOString() } });
+    if (!batch)
+      throw new AppError(
+        404,
+        "PIPELINE_NOT_FOUND",
+        "The selected processing pipeline was not found.",
+      );
+    response.status(201).json({
+      batch: { id: batch.id, createdAt: batch.created_at.toISOString() },
+      ...(uploadPlan ? { files: uploadPlan } : {}),
+    });
   });
   router.get("/:pipelineCode/upload-batches", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
@@ -528,20 +566,68 @@ export function createProcessingPipelinesRouter(
       );
     const normalizedLocalName =
       canonicalizeProcessingPipelineExpectedFileName(localName);
-    const savedName =
-      requirement.match === "exact"
-        ? requirement.fileName
-        : normalizedLocalName;
-    const validUploadName = pipelineCode.startsWith("bss_billcycle_")
-      ? matchesBillCycleUploadFile(requirement, localName)
-      : requirement.match === "glob"
-        ? matchesProcessingPipelineRequirement(requirement, savedName)
-        : true;
+    let savedName =
+      requirement.match === "exact" ? requirement.fileName : normalizedLocalName;
+    // Validate batch ownership and the server's immutable plan before touching S3.
+    const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
+    let uploadPlan: MemoUploadAssignment[] | null = null;
+    if (batchId) {
+      uploadPlan = await getPipelineUploadBatchPlan(pool, {
+        batchId,
+        pipelineCode,
+        workspaceId,
+      });
+      if (!uploadPlan)
+        throw new AppError(
+          404,
+          "PIPELINE_UPLOAD_BATCH_NOT_FOUND",
+          "The selected upload batch was not found.",
+        );
+    }
+    if (pipelineCode === "memo_sst") {
+      const assignment = batchId
+        ? uploadPlan!.find(
+            (file) =>
+              file.originalName === localName &&
+              file.expectedFileName === requirement.fileName,
+          )
+        : planMemoUploads(
+            [
+              {
+                originalName: localName,
+                expectedFileName: requirement.fileName,
+              },
+            ],
+            [requirement],
+            (await processingPipelineStorage.listAllFiles(pipelineCode)).map(
+              (file) => file.name,
+            ),
+          )[0];
+      if (!assignment)
+        throw new AppError(
+          400,
+          "MEMO_FILE_NOT_IN_BATCH",
+          "The selected file is not part of this Memo upload batch.",
+        );
+      savedName = assignment.savedFileName;
+    }
+    const isAurUpload =
+      pipelineCode === "aprm_voice_accrual" &&
+      requirement.fileName === "AUR Extract FINAL_BILLING.XLSX";
+    const validUploadName = isAurUpload
+      ? matchesAprmAccrualAurUpload(localName)
+      : pipelineCode.startsWith("bss_billcycle_")
+        ? matchesBillCycleUploadFile(requirement, localName)
+        : requirement.match === "glob"
+          ? matchesProcessingPipelineRequirement(requirement, savedName)
+          : true;
     if (!validUploadName)
       throw new AppError(
         400,
         "PIPELINE_FILENAME_MISMATCH",
-        `The selected filename must match ${requirement.fileName}.`,
+        isAurUpload
+          ? "Choose an .xlsx workbook whose filename contains AUR."
+          : `The selected filename must match ${requirement.fileName}.`,
       );
     const key = processingPipelineStorage.fileKey(pipelineCode, savedName);
     try {
@@ -549,19 +635,21 @@ export function createProcessingPipelinesRouter(
         pipelineCode,
         key,
       );
-      if (exists && replace !== "true")
+      if (exists && (pipelineCode === "memo_sst" || replace !== "true"))
         throw new AppError(
           409,
           "PIPELINE_FILE_EXISTS",
-          "A file already exists at this location. Confirm replacement and try again.",
+          pipelineCode === "memo_sst"
+            ? "This Memo filename is already in use. Select the files again to allocate new numbers. Existing Memo files cannot be overwritten."
+            : "A file already exists at this location. Confirm replacement and try again.",
         );
       const stored = await processingPipelineStorage.uploadFile(
         pipelineCode,
         savedName,
         request.file.buffer,
         request.file.mimetype || "application/octet-stream",
+        { preventOverwrite: pipelineCode === "memo_sst" },
       );
-      const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
       if (batchId) {
         const recorded = await recordPipelineUploadBatchFile(pool, {
           batchId,

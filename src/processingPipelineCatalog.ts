@@ -1,3 +1,5 @@
+import { matchesMemoStoredFile } from "./memoUpload.js";
+
 export type ProcessingPipelineFileRequirement = {
   id?: number;
   pipelineCode: string;
@@ -16,6 +18,10 @@ export function isProcessingPipelineWebUploadRequirement(
       requirement.pipelineCode,
     ) && /^ICEXT_.*_OUTPUT\.TXT$/i.test(requirement.fileName)
   );
+}
+
+export function matchesAprmAccrualAurUpload(fileName: string) {
+  return /aur/i.test(fileName) && /\.xlsx$/i.test(fileName);
 }
 
 export const bayanBillCycleSuffixes = [
@@ -448,6 +454,9 @@ const fileNameCollator = new Intl.Collator(undefined, {
 export function createProcessingPipelineFileMatcher(
   requirement: ProcessingPipelineFileRequirement,
 ) {
+  if (requirement.pipelineCode === "memo_sst")
+    return (fileName: string) =>
+      matchesMemoStoredFile(requirement.fileName, fileName);
   if (requirement.match === "exact")
     return (fileName: string) =>
       fileNameCollator.compare(requirement.fileName, fileName) === 0;

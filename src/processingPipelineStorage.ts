@@ -194,6 +194,7 @@ export class ProcessingPipelineStorage {
     name: string,
     body: Uint8Array,
     contentType: string,
+    options: { preventOverwrite?: boolean } = {},
   ) {
     const key = this.fileKey(pipelineCode, name);
     await this.client.send(
@@ -202,6 +203,7 @@ export class ProcessingPipelineStorage {
         Key: key,
         Body: body,
         ContentType: contentType,
+        ...(options.preventOverwrite ? { IfNoneMatch: "*" } : {}),
       }),
     );
     return { key, name, size: body.byteLength };

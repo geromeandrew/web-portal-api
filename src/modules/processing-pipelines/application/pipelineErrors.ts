@@ -30,6 +30,13 @@ export function mapStorageError(error: unknown) {
       "The pipeline storage service denied access to this file.",
     );
   }
+  if (name === "PreconditionFailed" || name === "ConditionalRequestConflict") {
+    return new AppError(
+      409,
+      "PIPELINE_FILE_EXISTS",
+      "This filename was taken by another upload. Select the files again to allocate new numbers. The existing file was not overwritten.",
+    );
+  }
   return error;
 }
 

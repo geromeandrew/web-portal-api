@@ -103,6 +103,25 @@ describe("ProcessingPipelineStorage", () => {
       "prepaid_reclass/inbound/source.xlsx",
     );
   });
+  it("uses a conditional S3 write when overwriting is prohibited", async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const storage = new ProcessingPipelineStorage(
+      { send } as unknown as Pick<S3Client, "send">,
+      "pipeline-files",
+    );
+    await storage.uploadFile(
+      "memo_sst",
+      "Fuel_03.XLSX",
+      new Uint8Array([1]),
+      "application/octet-stream",
+      { preventOverwrite: true },
+    );
+    expect(send.mock.calls[0][0].input).toMatchObject({
+      Key: "memo_sst/inbound/Fuel_03.XLSX",
+      IfNoneMatch: "*",
+    });
+  });
+
   it("rejects object keys outside the selected pipeline", async () => {
     const storage = new ProcessingPipelineStorage(
       { send: vi.fn() } as unknown as Pick<S3Client, "send">,

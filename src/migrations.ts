@@ -1075,4 +1075,22 @@ export const migrations = [
     id: "025_workspace_ticket_fixes",
     sql: workspaceFixes025Sql,
   },
+  {
+    id: "026_memo_upload_sequences",
+    sql: `
+    ALTER TABLE processing_pipeline_upload_batches
+      ADD COLUMN upload_plan jsonb NOT NULL DEFAULT '[]'::jsonb;
+    DO $$ DECLARE unique_constraint text; BEGIN
+      SELECT conname INTO unique_constraint FROM pg_constraint
+      WHERE conrelid = 'processing_pipeline_upload_batch_files'::regclass
+        AND contype = 'u' AND array_length(conkey, 1) = 2;
+      IF unique_constraint IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE processing_pipeline_upload_batch_files DROP CONSTRAINT %I', unique_constraint);
+      END IF;
+    END $$;
+    ALTER TABLE processing_pipeline_upload_batch_files
+      ADD CONSTRAINT pipeline_upload_batch_file_object_unique
+      UNIQUE (batch_id, file_requirement_id, object_key);
+    `,
+  },
 ];
