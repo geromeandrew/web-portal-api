@@ -536,9 +536,16 @@ export function createProcessingPipelinesRouter(
       );
     const canonicalExpectedFileName =
       canonicalizeProcessingPipelineExpectedFileName(expectedFileName);
+    const aurMapping =
+      pipelineCode === "aprm_voice_accrual" &&
+      /^AUR Extract FINAL(?:_BILLING)?\.XLSX$/i.test(canonicalExpectedFileName);
     const requirement = (
       await getProcessingPipelineRequirements(pool, pipelineCode)
-    ).find((candidate) => candidate.fileName === canonicalExpectedFileName);
+    ).find((candidate) =>
+      aurMapping
+        ? /^AUR Extract FINAL(?:_BILLING)?\.XLSX$/i.test(candidate.fileName)
+        : candidate.fileName === canonicalExpectedFileName,
+    );
     if (!requirement || !requirement.id)
       throw new AppError(
         404,
@@ -613,7 +620,7 @@ export function createProcessingPipelinesRouter(
     }
     const isAurUpload =
       pipelineCode === "aprm_voice_accrual" &&
-      requirement.fileName === "AUR Extract FINAL_BILLING.XLSX";
+      /^AUR Extract FINAL(?:_BILLING)?\.XLSX$/i.test(requirement.fileName);
     const validUploadName = isAurUpload
       ? matchesAprmAccrualAurUpload(localName)
       : pipelineCode.startsWith("bss_billcycle_")
@@ -626,7 +633,7 @@ export function createProcessingPipelinesRouter(
         400,
         "PIPELINE_FILENAME_MISMATCH",
         isAurUpload
-          ? "Choose an .xlsx workbook whose filename contains AUR."
+          ? 'Choose an .xlsx workbook whose filename contains "AUR Extract".'
           : `The selected filename must match ${requirement.fileName}.`,
       );
     const key = processingPipelineStorage.fileKey(pipelineCode, savedName);

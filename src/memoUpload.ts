@@ -11,7 +11,7 @@ export type MemoUploadAssignment = MemoUploadSelection & {
 
 export function memoFileIdentity(fileName: string) {
   if (/[\\/\0]/.test(fileName)) return null;
-  const match = /^(.+)_([^_]+)\.xlsx$/i.exec(
+  const match = /^(.+?)_(\d{8}(?:_.*)?|[^_]+)\.xlsx$/i.exec(
     fileName.replace(/(?:\.xlsx){2,}$/i, ".xlsx"),
   );
   return match ? { base: match[1], suffix: match[2] } : null;
@@ -39,10 +39,14 @@ export function matchesMemoStoredFile(expected: string, stored: string) {
 }
 
 function dateOrder(suffix: string) {
-  if (!/^\d{8}$/.test(suffix)) return null;
-  const month = Number(suffix.slice(0, 2));
-  const day = Number(suffix.slice(2, 4));
-  const year = Number(suffix.slice(4));
+  const dated = /^(\d{8})(?:_(.*))?$/.exec(suffix);
+  if (!dated) return null;
+  const value = dated[1];
+  // A dated suffix uses YYYYMMDD. Keep the existing MMDDYYYY-only names valid.
+  const yearFirst = dated[2] !== undefined || Number(value.slice(0, 2)) > 12;
+  const year = Number(yearFirst ? value.slice(0, 4) : value.slice(4));
+  const month = Number(yearFirst ? value.slice(4, 6) : value.slice(0, 2));
+  const day = Number(yearFirst ? value.slice(6, 8) : value.slice(2, 4));
   const date = new Date(0);
   date.setUTCFullYear(year, month - 1, day);
   if (
@@ -53,7 +57,7 @@ function dateOrder(suffix: string) {
     throw new AppError(
       400,
       "MEMO_INVALID_DATE",
-      `${suffix} must be a valid MMDDYYYY date.`,
+      `${value} must be a valid ${yearFirst ? "YYYYMMDD" : "MMDDYYYY"} date.`,
     );
   }
   return date.getTime();
@@ -110,11 +114,14 @@ export function planMemoUploads(
       return Math.max(maximum, Number(memoFileIdentity(name)!.suffix));
     }, 0);
     group.sort((left, right) => {
+      const suffixOrder = left.suffix.localeCompare(right.suffix, "en", {
+        numeric: true,
+      });
       if (left.date !== null && right.date !== null)
-        return left.date - right.date;
+        return left.date - right.date || suffixOrder;
       if (left.date !== null) return -1;
       if (right.date !== null) return 1;
-      return left.suffix.localeCompare(right.suffix, "en", { numeric: true });
+      return suffixOrder;
     });
     return group.map(({ selection }, index) => ({
       ...selection,

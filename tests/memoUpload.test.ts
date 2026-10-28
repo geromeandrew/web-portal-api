@@ -14,6 +14,100 @@ const select = (
 ) => ({ originalName, expectedFileName });
 
 describe("Memo upload numbering", () => {
+  it("sorts YYYYMMDD sources by date and natural suffix independently for each mapped base", () => {
+    const names = [
+      "NewProponent_20261023_0128.xlsx",
+      "NewProponent_20261023_0127.xlsx",
+      "NewProponent_20261022_2359.xlsx.xlsx",
+      "NewProponent_20270101_0000.xlsx",
+    ];
+    const plan = planMemoUploads(
+      names.map((name) => select(name, "NewProponent_01.XLSX")),
+      requirements,
+      ["NewProponent_04.XLSX"],
+    );
+    expect(plan.map((file) => file.originalName)).toEqual([
+      names[2],
+      names[1],
+      names[0],
+      names[3],
+    ]);
+    expect(plan.map((file) => file.savedFileName)).toEqual([
+      "NewProponent_05.XLSX",
+      "NewProponent_06.XLSX",
+      "NewProponent_07.XLSX",
+      "NewProponent_08.XLSX",
+    ]);
+  });
+
+  it("orders legacy and YYYYMMDD dates together before other suffixes", () => {
+    const names = [
+      "3PComms_revision2.xlsx",
+      "3PComms_20261023_0127.xlsx",
+      "3PComms_10232026.xlsx",
+    ];
+    expect(
+      planMemoUploads(
+        names.map((name) => select(name)),
+        requirements,
+      ).map((file) => file.originalName),
+    ).toEqual([names[2], names[1], names[0]]);
+    expect(
+      planMemoUploads([select("3PComms_20240229_2359.xlsx")], requirements),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    "20260230_0127",
+    "20250229_0127",
+    "20261301_0127",
+    "20260230_any_suffix",
+    "20260230",
+  ])("rejects an invalid YYYYMMDD date regardless of suffix: %s", (suffix) => {
+    expect(() =>
+      planMemoUploads([select(`3PComms_${suffix}.xlsx`)], requirements),
+    ).toThrow("valid YYYYMMDD date");
+  });
+
+  it.each([
+    "2400",
+    "0160",
+    "999999",
+    "revision-A",
+    "revision_2_final",
+    "",
+    undefined,
+  ])(
+    "accepts any suffix after the date without interpreting it as a time: %s",
+    (suffix) => {
+      const name = `NewProponent_20261023${suffix === undefined ? "" : `_${suffix}`}.xlsx`;
+      expect(
+        planMemoUploads(
+          [select(name, "NewProponent_01.XLSX")],
+          requirements,
+        )[0],
+      ).toEqual({
+        ...select(name, "NewProponent_01.XLSX"),
+        savedFileName: "NewProponent_01.XLSX",
+      });
+    },
+  );
+
+  it("rejects duplicate dated sources across case and hidden extensions", () => {
+    expect(() =>
+      planMemoUploads(
+        [
+          select("NewProponent_20261023_0127.xlsx", "NewProponent_01.XLSX"),
+          select(
+            "newproponent_20261023_0127.XLSX.xlsx",
+            "NewProponent_01.XLSX",
+          ),
+        ],
+        requirements,
+      ),
+    ).toThrow("Duplicate files");
+  });
+
   it("continues after the highest inbound suffix per base without filling gaps", () => {
     const plan = planMemoUploads(
       [
@@ -97,7 +191,7 @@ describe("Memo upload numbering", () => {
     "3PComms_13012026.xlsx",
   ])("rejects an invalid date: %s", (name) => {
     expect(() => planMemoUploads([select(name)], requirements)).toThrow(
-      "valid MMDDYYYY date",
+      /valid (?:MMDDYYYY|YYYYMMDD) date/,
     );
   });
 
