@@ -382,6 +382,7 @@ export type PipelineUploadBatchDto = {
     originalName: string;
     objectKey: string;
     readAt: string;
+    uploadedBy: string | null;
     removedAt: string | null;
   }[];
 };
@@ -470,7 +471,7 @@ export async function getPipelineUploadBatches(
   }>(
     `SELECT batch.id, batch.created_at,
        COALESCE(NULLIF(BTRIM(user_record.display_name), ''), user_record.email) AS uploaded_by,
-       COALESCE(json_agg(json_build_object('expectedFileName', requirement.file_name, 'originalName', member.original_name, 'objectKey', member.object_key, 'readAt', member.read_at, 'removedAt', member.removed_at) ORDER BY member.read_at) FILTER (WHERE member.id IS NOT NULL), '[]'::json) AS files
+       COALESCE(json_agg(json_build_object('expectedFileName', requirement.file_name, 'originalName', member.original_name, 'objectKey', member.object_key, 'readAt', member.read_at, 'uploadedBy', COALESCE(NULLIF(BTRIM(user_record.display_name), ''), user_record.email), 'removedAt', member.removed_at) ORDER BY member.read_at) FILTER (WHERE member.id IS NOT NULL), '[]'::json) AS files
      FROM processing_pipeline_upload_batches batch
      JOIN processing_pipelines pipeline ON pipeline.id = batch.pipeline_id
      JOIN app_user user_record ON user_record.id = batch.created_by_user_id

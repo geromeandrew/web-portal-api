@@ -1093,4 +1093,16 @@ export const migrations = [
       UNIQUE (batch_id, file_requirement_id, object_key);
     `,
   },
+  {
+    id: "027_aprm_accrual_aur_extract_final",
+    sql: `
+    UPDATE processing_pipeline_file_requirements requirement
+    SET file_name = 'AUR Extract FINAL.XLSX'
+    FROM processing_pipelines pipeline
+    WHERE pipeline.id = requirement.pipeline_id
+      AND pipeline.code = 'aprm_voice_accrual'
+      AND requirement.is_active = true
+      AND lower(requirement.file_name) = 'aur extract final_billing.xlsx';
+    `,
+  },
 ];
