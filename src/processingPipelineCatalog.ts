@@ -21,7 +21,10 @@ export function isProcessingPipelineWebUploadRequirement(
 }
 
 export function matchesAprmAccrualAurUpload(fileName: string) {
-  return /aur/i.test(fileName) && /\.xlsx$/i.test(fileName);
+  return (
+    /(?:^|[^a-z0-9])aur\s+extract(?=$|[^a-z0-9])/i.test(fileName) &&
+    /\.xlsx$/i.test(fileName)
+  );
 }
 
 export const bayanBillCycleSuffixes = [
@@ -348,7 +351,7 @@ add("ICCBS - Bayan", "iccbs_bayn", [
   ["sap_blcu_PHP.txt", "ICCBS_sap_blcu_PHP.dtsx"],
 ]);
 add("APRM Voice - Accrual", "aprm_voice_accrual", [
-  ["AUR Extract FINAL_BILLING.XLSX", "APRM_AUR_Extract_FinalBilling.dtsx"],
+  ["AUR Extract FINAL.XLSX", "APRM_AUR_Extract_FinalBilling.dtsx"],
   ["ICEXT_BYN_A_VOICE.TXT", "APRM_ICEXT_BYN_A_VOICE.dtsx"],
   ["ICEXT_GLB_A_VOICE.TXT", "APRM_ICEXT_GLB_A_VOICE.dtsx"],
   ["ICEXT_INV_A_VOICE.TXT", "APRM_ICEXT_INV_A_VOICE.dtsx"],
@@ -457,6 +460,13 @@ export function createProcessingPipelineFileMatcher(
   if (requirement.pipelineCode === "memo_sst")
     return (fileName: string) =>
       matchesMemoStoredFile(requirement.fileName, fileName);
+  // Keep previously uploaded objects available in history after the mapping rename.
+  if (
+    requirement.pipelineCode === "aprm_voice_accrual" &&
+    requirement.fileName === "AUR Extract FINAL.XLSX"
+  )
+    return (fileName: string) =>
+      /^AUR Extract FINAL(?:_BILLING)?\.xlsx$/i.test(fileName);
   if (requirement.match === "exact")
     return (fileName: string) =>
       fileNameCollator.compare(requirement.fileName, fileName) === 0;

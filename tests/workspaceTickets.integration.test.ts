@@ -302,6 +302,7 @@ describe.skipIf(
         ).json()
       ).batches[0];
       expect(Number.isNaN(Date.parse(before.files[0].readAt))).toBe(false);
+      expect(before.files[0].uploadedBy).toBe(before.uploadedBy);
       expect(
         (
           await request(
@@ -328,6 +329,7 @@ describe.skipIf(
       expect(after.uploadedBy).toBe(before.uploadedBy);
       expect(after.files[0]).toMatchObject({
         readAt: before.files[0].readAt,
+        uploadedBy: before.uploadedBy,
         objectKey: key,
         removedAt: expect.any(String),
       });
@@ -674,16 +676,117 @@ describe.skipIf(
     );
   });
 
-  it.each([
-    "AUR.xlsx",
-    "October 2026 AUR usage export.xlsx",
-    "monthly_aur_10272026.XLSX",
-  ])(
-    "accepts an APRM Accrual AUR workbook named %s and saves the canonical name",
-    async (name) => {
+  it("accepts the legacy AUR expected name after migration and keeps legacy objects removable", async () => {
+    const body = new FormData();
+    body.set("expectedFileName", "AUR Extract FINAL_BILLING.XLSX");
+    body.set(
+      "file",
+      new Blob(["synthetic workbook"]),
+      "AUR Extract_10262026.xlsx",
+    );
+    body.set("replace", "true");
+    const response = await request(
+      "/processing-pipelines/aprm_voice_accrual/files",
+      "admin",
+      { method: "POST", body },
+    );
+    expect(response.status).toBe(201);
+    expect((await response.json()).file.name).toBe("AUR Extract FINAL.XLSX");
+    const key = "aprm_voice_accrual/inbound/AUR Extract FINAL_BILLING.XLSX";
+    await app.s3.send(
+      new PutObjectCommand({
+        Bucket: app.config.S3_BUCKET,
+        Key: key,
+        Body: "legacy workbook",
+      }),
+    );
+    const query = new URLSearchParams({ key });
+    const content = await request(
+      `/processing-pipelines/aprm_voice_accrual/files/content?${query}`,
+    );
+    expect(content.status).toBe(200);
+    expect(await content.text()).toBe("legacy workbook");
+    expect(
+      (
+        await request(
+          `/processing-pipelines/aprm_voice_accrual/files?${query}`,
+          "admin",
+          { method: "DELETE" },
+        )
+      ).status,
+    ).toBe(204);
+  });
+
+  it("uploads YYYYMMDD Memo sources with unrestricted suffixes using only filenames", async () => {
+    const names = [
+      "NewProponent_20261023_revision_A_final.xlsx",
+      "NewProponent_20261023_2400.xlsx",
+      "NewProponent_20261022_999999.xlsx",
+      "NewProponent_20261023_0128.xlsx",
+    ];
+    const expectedFileName = "NewProponent_01.XLSX";
+    const response = await request(
+      "/processing-pipelines/memo_sst/upload-batches",
+      "admin",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          files: names.map((originalName) => ({
+            originalName,
+            expectedFileName,
+          })),
+        }),
+      },
+    );
+    expect(response.status).toBe(201);
+    const created = await response.json();
+    expect(
+      created.files.map((file: { originalName: string }) => file.originalName),
+    ).toEqual([names[2], names[3], names[1], names[0]]);
+    for (const name of names) {
+      const result = await upload(
+        "memo_sst",
+        expectedFileName,
+        name,
+        created.batch.id,
+      );
+      expect(result.status).toBe(201);
+      expect((await result.json()).file.name).toBe(
+        created.files.find(
+          (file: { originalName: string }) => file.originalName === name,
+        ).savedFileName,
+      );
+    }
+  });
+
+  it("retains AUR filename validation against a pre-migration database mapping", async () => {
+    const row = (
+      await app.pool.query(
+        "SELECT requirement.id FROM processing_pipeline_file_requirements requirement JOIN processing_pipelines pipeline ON pipeline.id = requirement.pipeline_id WHERE pipeline.code = 'aprm_voice_accrual' AND requirement.file_name = 'AUR Extract FINAL.XLSX' AND requirement.is_active",
+      )
+    ).rows[0];
+    await app.pool.query(
+      "UPDATE processing_pipeline_file_requirements SET file_name = 'AUR Extract FINAL_BILLING.XLSX' WHERE id = $1",
+      [row.id],
+    );
+    try {
+      expect(
+        (
+          await upload(
+            "aprm_voice_accrual",
+            "AUR Extract FINAL.XLSX",
+            "Usage export.xlsx",
+          )
+        ).status,
+      ).toBe(400);
       const body = new FormData();
-      body.set("file", new Blob([name]), name);
-      body.set("expectedFileName", "AUR Extract FINAL_BILLING.XLSX");
+      body.set("expectedFileName", "AUR Extract FINAL.XLSX");
+      body.set(
+        "file",
+        new Blob(["synthetic workbook"]),
+        "AUR Extract_10262026.xlsx",
+      );
       body.set("replace", "true");
       const response = await request(
         "/processing-pipelines/aprm_voice_accrual/files",
@@ -694,23 +797,50 @@ describe.skipIf(
       expect((await response.json()).file.name).toBe(
         "AUR Extract FINAL_BILLING.XLSX",
       );
+    } finally {
+      await app.pool.query(
+        "UPDATE processing_pipeline_file_requirements SET file_name = 'AUR Extract FINAL.XLSX' WHERE id = $1",
+        [row.id],
+      );
+    }
+  });
+
+  it.each([
+    "AUR Extract.xlsx",
+    "AUR Extract_10262026.xlsx",
+    "AUR Extract_20261026_any_suffix.XLSX",
+    "monthly_AUR Extract_10262026.xlsx",
+    "AUR Extract - Sep 1 to 30 - FINAL.xlsx",
+    "monthly AUR Extract 20261027.XLSX",
+  ])(
+    "accepts an APRM Accrual AUR workbook named %s and saves the canonical name",
+    async (name) => {
+      const body = new FormData();
+      body.set("file", new Blob([name]), name);
+      body.set("expectedFileName", "AUR Extract FINAL.XLSX");
+      body.set("replace", "true");
+      const response = await request(
+        "/processing-pipelines/aprm_voice_accrual/files",
+        "admin",
+        { method: "POST", body },
+      );
+      expect(response.status).toBe(201);
+      expect((await response.json()).file.name).toBe("AUR Extract FINAL.XLSX");
     },
   );
 
-  it.each(["Usage extract.xlsx", "AU_R.xlsx", "AUR.csv"])(
-    "rejects a filename outside the AUR workbook rule: %s",
-    async (name) => {
-      expect(
-        (
-          await upload(
-            "aprm_voice_accrual",
-            "AUR Extract FINAL_BILLING.XLSX",
-            name,
-          )
-        ).status,
-      ).toBe(400);
-    },
-  );
+  it.each([
+    "AUR.xlsx",
+    "October AUR usage export.xlsx",
+    "Usage extract.xlsx",
+    "AU_R.xlsx",
+    "AUR Extract.csv",
+  ])("rejects a filename outside the AUR workbook rule: %s", async (name) => {
+    expect(
+      (await upload("aprm_voice_accrual", "AUR Extract FINAL.XLSX", name))
+        .status,
+    ).toBe(400);
+  });
 
   it("rejects invalid Memo batches before creating history", async () => {
     for (const names of [

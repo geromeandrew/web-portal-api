@@ -5,6 +5,7 @@ import {
   bayanBillCycleSuffixes,
   canonicalizeProcessingPipelineExpectedFileName,
   matchesBillCycleUploadFile,
+  matchesAprmAccrualAurUpload,
   globeBillCycleStateMachines,
   matchesProcessingPipelineRequirement,
   processingPipelineSeedRequirements,
@@ -13,6 +14,60 @@ import { processingPipelineSeedRequirements as migration019Requirements } from "
 import { criticalFixes024Corrections } from "../src/migrationSnapshots/criticalFixes024.js";
 
 describe("Processing Pipeline catalogue", () => {
+  it.each([
+    ["AUR Extract.xlsx", true],
+    ["AUR Extract_10262026.xlsx", true],
+    ["AUR Extract_20261026_any_suffix.XLSX", true],
+    ["monthly_AUR Extract_10262026.xlsx", true],
+    ["AUR Extract - Sep 1 to 30 - FINAL.xlsx", true],
+    ["monthly aur extract 20261027.XLSX", true],
+    ["AUR.xlsx", false],
+    ["AUR Extractor.xlsx", false],
+    ["AUR usage export.xlsx", false],
+    ["AUR Extract.csv", false],
+    ["notaur extract.xlsx", false],
+  ])("validates the APRM Accrual source name %s", (name, accepted) => {
+    expect(matchesAprmAccrualAurUpload(name)).toBe(accepted);
+  });
+
+  it("uses the revised APRM Accrual canonical filename", () => {
+    expect(
+      processingPipelineSeedRequirements.find(
+        (file) =>
+          file.pipelineCode === "aprm_voice_accrual" &&
+          file.fileName.startsWith("AUR"),
+      )?.fileName,
+    ).toBe("AUR Extract FINAL.XLSX");
+  });
+
+  it("keeps legacy AUR objects accessible after the mapping rename without accepting other stored names", () => {
+    const requirement = processingPipelineSeedRequirements.find(
+      (file) =>
+        file.pipelineCode === "aprm_voice_accrual" &&
+        file.fileName.startsWith("AUR"),
+    )!;
+    expect(
+      matchesProcessingPipelineRequirement(
+        requirement,
+        "AUR Extract FINAL_BILLING.XLSX",
+      ),
+    ).toBe(true);
+    expect(
+      matchesProcessingPipelineRequirement(
+        requirement,
+        "AUR Extract FINAL.XLSX",
+      ),
+    ).toBe(true);
+    expect(
+      matchesProcessingPipelineRequirement(requirement, "AUR Extract.xlsx"),
+    ).toBe(false);
+    expect(
+      matchesProcessingPipelineRequirement(
+        { ...requirement, pipelineCode: "aprm_voice_delta" },
+        "AUR Extract FINAL_BILLING.XLSX",
+      ),
+    ).toBe(false);
+  });
   it("contains generic pipeline requirements", () => {
     expect(
       processingPipelineSeedRequirements.some(
@@ -205,7 +260,7 @@ describe("Processing Pipeline catalogue", () => {
     expect(deltaOutputs).toHaveLength(6);
     expect(deltaOutputs.every((item) => item.match === "exact")).toBe(true);
   });
-  it("applies only the frozen 024 corrections to the historical 019 catalogue", () => {
+  it("applies the frozen 024 corrections and 027 AUR rename to the historical 019 catalogue", () => {
     const mappingKey = (item: {
       pipelineCode: string;
       fileName: string;
@@ -234,6 +289,13 @@ describe("Processing Pipeline catalogue", () => {
         jobName: null,
       });
     }
+    const aur = migrated.get(
+      "aprm_voice_accrual|AUR Extract FINAL_BILLING.XLSX",
+    )!;
+    migrated.set("aprm_voice_accrual|AUR Extract FINAL_BILLING.XLSX", {
+      ...aur,
+      fileName: "AUR Extract FINAL.XLSX",
+    });
     expect([...migrated.values()].map(mappingKey).sort()).toEqual(
       processingPipelineSeedRequirements.map(mappingKey).sort(),
     );
