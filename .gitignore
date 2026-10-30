@@ -18,3 +18,10 @@ outputs/
 scripts/
 *.docx
 *.xlsx
+
+# Local security-validation output and operator settings.
+*.log
+/.playwright-cli/
+/postman/.dependencies/
+/postman/simulations/*.ndjson
+/postman/simulations/*.err

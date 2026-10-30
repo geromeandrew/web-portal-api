@@ -1,3 +1,4 @@
+import { securityAudit } from "./platform/requestAudit.js";
 import type { Pool, PoolClient } from "pg";
 import { AppError } from "./errors.js";
 
@@ -48,7 +49,11 @@ export async function assertModuleAccess(
     [userId, moduleId],
   );
   if (!result.rowCount)
-    throw new AppError(403, "MODULE_ACCESS_DENIED", "You do not have access to this workspace.");
+    throw new AppError(
+      403,
+      "MODULE_ACCESS_DENIED",
+      "You do not have access to this workspace.",
+    );
 }
 
 export async function assertAdministrator(db: Queryable, userId: string) {
@@ -57,16 +62,43 @@ export async function assertAdministrator(db: Queryable, userId: string) {
     [userId],
   );
   if (!result.rowCount)
-    throw new AppError(403, "ADMIN_REQUIRED", "Administrator permission is required.");
+    throw new AppError(
+      403,
+      "ADMIN_REQUIRED",
+      "Administrator permission is required.",
+    );
 }
 
 export async function auditRbac(
   db: Queryable,
-  input: { actorUserId: string; targetUserId?: string; moduleId?: string; action: string; detail?: unknown },
+  input: {
+    actorUserId: string;
+    targetUserId?: string;
+    moduleId?: string;
+    action: string;
+    detail?: unknown;
+  },
 ) {
   await db.query(
     `INSERT INTO app_rbac_audit_events (id, actor_user_id, target_user_id, module_id, action, detail)
      VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)`,
-    [input.actorUserId, input.targetUserId ?? null, input.moduleId ?? null, input.action, JSON.stringify(input.detail ?? {})],
+    [
+      input.actorUserId,
+      input.targetUserId ?? null,
+      input.moduleId ?? null,
+      input.action,
+      JSON.stringify(input.detail ?? {}),
+    ],
+  );
+  await securityAudit(
+    db,
+    input.action,
+    {
+      actorUserId: input.actorUserId,
+      targetUserId: input.targetUserId,
+      moduleId: input.moduleId,
+      ...(input.detail && typeof input.detail === "object" ? input.detail : {}),
+    },
+    true,
   );
 }

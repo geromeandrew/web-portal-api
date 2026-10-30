@@ -1,5 +1,5 @@
 
-# # 
+# #
 # # hmd-docker-local/docker-ansible
 # #
 # # Built with Alpine Linux
@@ -62,29 +62,29 @@ RUN AUTH_BASE64=$(printf "%s:%s" "$JFROG_USERNAME" "$JFROG_PASSWORD" | base64 | 
     echo "//${ARTIFACTORY_URL}/artifactory/api/npm/hmd-npm-virtual/:_auth=${AUTH_BASE64}" >> ~/.npmrc && \
     echo "always-auth=true" >> ~/.npmrc
 
-RUN npm install 
+RUN npm install --global pnpm@10.30.2 && pnpm install --frozen-lockfile
 
 # Set the environment to production
 ENV NODE_ENV=production
 
 #Build the typescript files
-RUN npm run build 
+RUN npm run build
 
 # Strip credentials out before finalizing this stage
 RUN rm -f ~/.npmrc
 
 
-# Step 2: Create a smaller runtime image
-FROM Builder as Runner
+# Prune only after compilation. Build credentials and source remain in builder stages.
+FROM Builder AS ProductionDependencies
+RUN pnpm prune --prod
 
-# Set working directory
+# Fresh runtime: no build registry configuration, credentials or development tools.
+FROM ${JFROG_URL}/${JFROG_REPO}/${BASE_IMAGE} AS Runner
 WORKDIR /app
-
-# Copy only the built files and necessary dependencies from the builder
-COPY --from=Builder /app ./
-
-# Expose the port your app runs on
+ENV NODE_ENV=production
+COPY --from=ProductionDependencies --chown=node:node /app/node_modules ./node_modules
+COPY --from=Builder --chown=node:node /app/dist ./dist
+COPY --from=Builder --chown=node:node /app/package.json ./package.json
+USER node
 EXPOSE 3001
-
-# Command to start the application
-CMD ["npm", "run", "start"]
+CMD ["node", "dist/index.js"]

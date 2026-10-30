@@ -17,6 +17,12 @@ const base = {
 };
 
 describe("loadConfig", () => {
+  it("needs no deployment label or migration timeout settings", () => {
+    const config = loadConfig(base);
+    expect(config).not.toHaveProperty("DEPLOYMENT_ENV");
+    expect(config.MIGRATION_LOCK_TIMEOUT_MS).toBe(60000);
+    expect(config.MIGRATION_STATEMENT_TIMEOUT_MS).toBe(300000);
+  });
   it("does not read the upload limit from deployment environment variables", () => {
     expect(
       loadConfig({ ...base, MAX_UPLOAD_BYTES: "1048576" }),

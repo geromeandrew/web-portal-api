@@ -1,3 +1,7 @@
+import {
+  publishAuditEvent,
+  transactionAuditEvents,
+} from "./platform/requestAudit.js";
 import { Pool, type PoolClient } from "pg";
 import type { Config } from "./config.js";
 import { getDatabaseErrorDiagnostics } from "./databaseErrors.js";
@@ -46,15 +50,19 @@ export async function withTransaction<T>(
   callback: (client: PoolClient) => Promise<T>,
 ) {
   const client = await pool.connect();
+  const pending: Record<string, unknown>[] = [];
+  transactionAuditEvents.set(client, pending);
   try {
     await client.query("BEGIN");
     const result = await callback(client);
     await client.query("COMMIT");
+    for (const event of pending) publishAuditEvent(event);
     return result;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
   } finally {
+    transactionAuditEvents.delete(client);
     client.release();
   }
 }

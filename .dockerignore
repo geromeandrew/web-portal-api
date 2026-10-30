@@ -6,3 +6,13 @@ dist
 coverage
 *.tsbuildinfo
 certs/
+
+# Local documentation, review evidence and tool caches are not build inputs.
+docs/
+.pnpm-store/
+.playwright-cli/
+outputs/
+__pycache__/
+*.py[cod]
+.venv*/
+*.log

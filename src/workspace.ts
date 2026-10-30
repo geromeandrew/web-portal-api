@@ -1,3 +1,4 @@
+import { securityAudit } from "./platform/requestAudit.js";
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
@@ -99,9 +100,30 @@ export async function audit(
   workspaceId: string,
   action: string,
   detail: unknown = {},
+  strict = false,
 ) {
-  await db.query(
-    "INSERT INTO audit_actions (id, workspace_id, action, detail) VALUES ($1, $2, $3, $4)",
-    [randomUUID(), workspaceId, action, JSON.stringify(detail)],
+  try {
+    await db.query(
+      "INSERT INTO audit_actions (id, workspace_id, action, detail) VALUES ($1, $2, $3, $4)",
+      [randomUUID(), workspaceId, action, JSON.stringify(detail)],
+    );
+  } catch (error) {
+    if (!strict)
+      await securityAudit(db, action, {
+        ...(detail && typeof detail === "object" ? detail : {}),
+        actionOutcome:
+          detail && typeof detail === "object" && "actionOutcome" in detail
+            ? detail.actionOutcome
+            : "success",
+      });
+    throw error;
+  }
+  await securityAudit(
+    db,
+    action,
+    detail && typeof detail === "object"
+      ? (detail as Record<string, unknown>)
+      : {},
+    strict,
   );
 }

@@ -1105,4 +1105,30 @@ export const migrations = [
       AND lower(requirement.file_name) = 'aur extract final_billing.xlsx';
     `,
   },
+  {
+    id: "028_security_audit_events",
+    sql: `
+      CREATE TABLE security_audit_events (
+        id uuid PRIMARY KEY, request_id uuid NOT NULL, occurred_at timestamptz NOT NULL DEFAULT now(),
+        actor_user_id uuid, source_ip text NOT NULL, method text NOT NULL, session_id text,
+        action text NOT NULL, detail jsonb NOT NULL DEFAULT '{}'::jsonb
+      );
+      CREATE INDEX security_audit_actor_time ON security_audit_events (actor_user_id, occurred_at DESC);
+      CREATE INDEX security_audit_request ON security_audit_events (request_id);
+      CREATE FUNCTION protect_security_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'Security audit events are append-only'; END; $$;
+      CREATE TRIGGER security_audit_immutable BEFORE UPDATE OR DELETE ON security_audit_events
+        FOR EACH STATEMENT EXECUTE FUNCTION protect_security_audit();
+      CREATE TRIGGER security_audit_no_truncate BEFORE TRUNCATE ON security_audit_events
+        FOR EACH STATEMENT EXECUTE FUNCTION protect_security_audit();
+      REVOKE ALL ON security_audit_events FROM PUBLIC;
+    `,
+  },
+  {
+    id: "029_security_audit_context",
+    sql: `ALTER TABLE security_audit_events
+      ADD COLUMN action_outcome text NOT NULL DEFAULT 'unknown',
+      ADD COLUMN access_port integer,
+      ADD COLUMN environment text NOT NULL DEFAULT 'unknown';`,
+  },
 ];
