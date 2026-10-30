@@ -418,13 +418,24 @@ const allOpenApiDocument: OpenAPIV3.Document = {
 };
 
 function tagForPath(path: string) {
-  if (path === "/api/healthz") return "Health";
+  if (path === "/api/healthz" || path === "/api/readyz") return "Health";
   if (path.startsWith("/api/auth/")) return "Authentication";
   if (path.startsWith("/api/workflows/prepaid")) return "Prepaid";
   return "Processing Pipelines";
 }
 
 Object.assign(allOpenApiDocument.paths, prepaidOpenApiPaths);
+allOpenApiDocument.paths["/api/readyz"] = {
+  get: {
+    ...success("Readiness: database and audit schema/INSERT privileges."),
+    security: [],
+    responses: {
+      "200": { description: "Ready." },
+      "503": { description: "Not ready; no sensitive diagnostics." },
+    },
+  },
+};
+
 for (const [path, pathItem] of Object.entries(allOpenApiDocument.paths)) {
   if (!pathItem || "$ref" in pathItem) continue;
   for (const operation of [
@@ -434,12 +445,41 @@ for (const [path, pathItem] of Object.entries(allOpenApiDocument.paths)) {
     pathItem.patch,
     pathItem.delete,
   ]) {
-    if (operation) operation.tags = [tagForPath(path)];
+    if (operation) {
+      operation.tags = [tagForPath(path)];
+      for (const status of ["403", "404", "500"])
+        operation.responses[status] = {
+          description:
+            "A safe message; diagnostic codes are retained only in server logs. HTTP status is preserved.",
+          headers: {
+            "X-Request-ID": {
+              schema: { type: "string", format: "uuid" },
+              description: "Server-generated request correlation identifier.",
+            },
+          },
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["error"],
+                properties: {
+                  error: {
+                    type: "object",
+                    required: ["message"],
+                    properties: { message: { type: "string" } },
+                  },
+                },
+              },
+            },
+          },
+        };
+    }
   }
 }
 
 const visibleByDefault = (path: string) =>
   path === "/api/healthz" ||
+  path === "/api/readyz" ||
   path.startsWith("/api/auth/") ||
   path.startsWith("/api/processing-pipelines");
 

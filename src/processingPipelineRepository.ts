@@ -388,7 +388,7 @@ export type PipelineUploadBatchDto = {
 };
 
 export async function createPipelineUploadBatch(
-  pool: Pool,
+  pool: Pool | import("pg").PoolClient,
   input: {
     id: string;
     pipelineCode: string;

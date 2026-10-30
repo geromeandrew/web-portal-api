@@ -21,3 +21,10 @@ scripts/
 __pycache__/
 .venv-prepaid/
 *.pyc
+
+# Local security-validation output and operator settings.
+*.log
+/.playwright-cli/
+/postman/.dependencies/
+/postman/simulations/*.ndjson
+/postman/simulations/*.err

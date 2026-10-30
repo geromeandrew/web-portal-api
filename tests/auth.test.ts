@@ -1,3 +1,4 @@
+import { fingerprint, requestContext } from "../src/platform/requestAudit.js";
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -28,11 +29,13 @@ const existingUser: UserRow = {
   created_at: new Date("2026-01-02T03:04:05.000Z"),
 };
 
-function poolWithCandidates(candidates: UserRow[]) {
+function poolWithCandidates(candidates: UserRow[], rejectAudit = false) {
   const queries: Array<{ sql: string; values?: unknown[] }> = [];
   const client = {
     query: vi.fn(async (sql: string, values?: unknown[]) => {
       queries.push({ sql, values });
+      if (rejectAudit && sql.includes("INSERT INTO security_audit_events"))
+        throw Error("audit unavailable");
       if (sql.includes("SELECT * FROM app_user")) return { rows: candidates };
       if (sql.includes("UPDATE app_user SET okta_subject")) {
         // Linking an existing user changes only the subject. Reconciliation
@@ -136,6 +139,100 @@ async function invokeMiddleware(middleware: Express.RequestHandler) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("OktaAuthenticator", () => {
+  it("audits identity provisioning with a fingerprint of the verified Okta session", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 404 })),
+    );
+    const { pool, queries } = poolWithCandidates([]);
+    const logger = { info: vi.fn(), error: vi.fn() };
+    const secret = "test-audit-secret";
+    const context = {
+      requestId: "request",
+      sourceIp: "127.0.0.1",
+      method: "GET",
+      port: 1,
+      events: [] as Record<string, unknown>[],
+      logger,
+      auditSecret: secret,
+      sessionId: "token-fingerprint",
+      sessionCorrelationType: "token" as "token" | "okta-session",
+      userId: undefined as string | undefined,
+    };
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: {
+          sub: "new-subject",
+          email: "new@example.test",
+          sid: "private-session",
+          exp: 1_900_000_000,
+        },
+      }),
+    };
+    await requestContext.run(context, async () => {
+      const result = await invoke(
+        new OktaAuthenticator(pool, config, verifier),
+        "Bearer raw-token",
+      );
+      expect(result.error).toBeUndefined();
+      expect(context.userId).toBe(result.request.auth?.userId);
+      expect(context.sessionCorrelationType).toBe("okta-session");
+      expect(context.sessionId).toBe(
+        fingerprint(`${config.OKTA_ISSUER}:private-session`, secret),
+      );
+      expect(context.events).toEqual([
+        expect.objectContaining({
+          action: "identity.provisioned",
+          actionOutcome: "success",
+        }),
+      ]);
+    });
+    const persisted = queries.find((q) =>
+      q.sql.includes("INSERT INTO security_audit_events"),
+    );
+    expect(persisted).toBeDefined();
+    expect(JSON.stringify(persisted)).not.toMatch(
+      /private-session|raw-token|new@example/,
+    );
+    expect(queries.at(-1)?.sql).toBe("COMMIT");
+  });
+  it("rolls back provisioning when its mandatory audit fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 404 })),
+    );
+    const { pool, queries } = poolWithCandidates([], true);
+    const logger = { info: vi.fn(), error: vi.fn() };
+    const verifier: AccessTokenVerifier = {
+      verifyAccessToken: vi.fn().mockResolvedValue({
+        claims: {
+          sub: "new-subject",
+          email: "new@example.test",
+          exp: 1_900_000_000,
+        },
+      }),
+    };
+    await requestContext.run(
+      {
+        requestId: "request",
+        sourceIp: "127.0.0.1",
+        method: "GET",
+        port: 1,
+        events: [],
+        logger,
+      },
+      async () => {
+        const result = await invoke(
+          new OktaAuthenticator(pool, config, verifier),
+          "Bearer raw-token",
+        );
+        expect(result.error).toMatchObject({ status: 500 });
+        expect(requestContext.getStore()?.events).toEqual([]);
+      },
+    );
+    expect(queries.at(-1)?.sql).toBe("ROLLBACK");
+  });
+
   it("rejects requests without a bearer token", async () => {
     const { pool } = poolWithCandidates([]);
     const verifier = { verifyAccessToken: vi.fn() } as AccessTokenVerifier;

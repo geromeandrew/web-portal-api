@@ -59,7 +59,8 @@ describe("OpenAPI documentation", () => {
         ).length,
       0,
     );
-    expect(operationCount).toBe(16);
+    expect(operationCount).toBe(17);
+    expect(openApiDocument.paths["/api/readyz"]?.get?.security).toEqual([]);
     expect(
       openApiDocument.paths["/api/workflows/prepaid/report.csv"],
     ).toBeUndefined();

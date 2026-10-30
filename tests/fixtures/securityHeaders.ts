@@ -5,7 +5,10 @@ import { AppError } from "../../src/errors.js";
 import type { AppDependencies } from "../../src/app/dependencies.js";
 
 /** Test-only app: no .env, remote database, AWS or Okta access. All features deny auth. */
-export function securityHeadersApp(overrides: Partial<Config> = {}) {
+export function securityHeadersApp(
+  overrides: Partial<Config> = {},
+  startupReady?: () => boolean,
+) {
   const config = {
     ...loadConfig({
       NODE_ENV: "test",
@@ -30,6 +33,7 @@ export function securityHeadersApp(overrides: Partial<Config> = {}) {
   };
   const app = createApplication({
     config,
+    startupReady,
     pool: {
       query: async () => {
         calls.database++;
