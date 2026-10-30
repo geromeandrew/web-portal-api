@@ -1,0 +1,6 @@
+simulation: security-regression
+routing: path
+mocks:
+  - name: s3-security
+    routeKey: s3
+    path: postman/mocks/s3-security/config.yaml

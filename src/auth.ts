@@ -1,3 +1,9 @@
+import {
+  fingerprint,
+  securityAudit,
+  requestContext,
+} from "./platform/requestAudit.js";
+import { createLogger } from "./platform/logger.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { RequestHandler } from "express";
 import OktaJwtVerifier from "@okta/jwt-verifier";
@@ -170,6 +176,18 @@ export class OktaAuthenticator {
 
     try {
       const subject = getIdentitySubject(verified.claims);
+      const context = requestContext.getStore();
+      if (
+        context &&
+        typeof verified.claims.sid === "string" &&
+        context.auditSecret
+      ) {
+        context.sessionId = fingerprint(
+          `${this.config.OKTA_ISSUER}:${verified.claims.sid}`,
+          context.auditSecret,
+        );
+        context.sessionCorrelationType = "okta-session";
+      }
       const expiration = z.coerce
         .number()
         .int()
@@ -184,8 +202,14 @@ export class OktaAuthenticator {
         verified.claims,
       );
       const user = await this.findOrCreateUser(subject, profile);
+      const auditContext = requestContext.getStore();
+      if (auditContext) auditContext.userId = user.id;
       if (!user.is_active) {
-        throw new AppError(403, "ACCOUNT_INACTIVE", "This portal account is inactive.");
+        throw new AppError(
+          403,
+          "ACCOUNT_INACTIVE",
+          "This portal account is inactive.",
+        );
       }
       request.auth = {
         userId: user.id,
@@ -199,7 +223,7 @@ export class OktaAuthenticator {
       next();
     } catch (error) {
       if (!(error instanceof AppError)) {
-        console.error("Okta user provisioning failed.", error);
+        createLogger().error("auth.provisioning_failed");
       }
       next(
         error instanceof AppError
@@ -303,23 +327,37 @@ export class OktaAuthenticator {
             [subject, profile.email, profile.displayName, emailUser.id],
           );
           await ensureWorkspace(client, linked.rows[0].id);
+          if (requestContext.getStore()) {
+            requestContext.getStore()!.userId = linked.rows[0].id;
+            await securityAudit(
+              client,
+              "identity.reconciled",
+              { targetUserId: linked.rows[0].id },
+              true,
+            );
+          }
           return linked.rows[0];
         }
         throw identityConflict();
       }
 
+      let identityAction: string | undefined;
       let user: AppUserRow;
       if (subjectUser) {
         // A synthetic email is a placeholder produced when no usable email
         // was available at first login. Repair only that placeholder. For a
         // real, already-linked account, the portal remains the owner of its
         // profile fields; logging in must not overwrite them from Okta.
-        if (isSyntheticEmail(subjectUser.email) && !isSyntheticEmail(profile.email)) {
+        if (
+          isSyntheticEmail(subjectUser.email) &&
+          !isSyntheticEmail(profile.email)
+        ) {
           const updated = await client.query<AppUserRow>(
             "UPDATE app_user SET email = $1, last_login_at = now(), updated_at = now() WHERE id = $2 RETURNING *",
             [profile.email, subjectUser.id],
           );
           user = updated.rows[0];
+          identityAction = "identity.profile_reconciled";
         } else {
           user = subjectUser;
         }
@@ -332,14 +370,25 @@ export class OktaAuthenticator {
           [subject, emailUser.id],
         );
         user = linked.rows[0];
+        identityAction = "identity.linked";
       } else {
         const created = await client.query<AppUserRow>(
           "INSERT INTO app_user (id, email, okta_subject, display_name, last_login_at) VALUES ($1, $2, $3, $4, now()) RETURNING *",
           [randomUUID(), profile.email, subject, profile.displayName],
         );
         user = created.rows[0];
+        identityAction = "identity.provisioned";
       }
       await ensureWorkspace(client, user.id);
+      if (identityAction && requestContext.getStore()) {
+        requestContext.getStore()!.userId = user.id;
+        await securityAudit(
+          client,
+          identityAction,
+          { targetUserId: user.id },
+          true,
+        );
+      }
       return user;
     }).catch((error: unknown) => {
       if (
@@ -380,7 +429,11 @@ export class TemporaryAuthenticator {
     try {
       const user = await this.findOrCreateUser();
       if (!user.is_active) {
-        throw new AppError(403, "ACCOUNT_INACTIVE", "This portal account is inactive.");
+        throw new AppError(
+          403,
+          "ACCOUNT_INACTIVE",
+          "This portal account is inactive.",
+        );
       }
       request.auth = {
         userId: user.id,
@@ -422,6 +475,8 @@ export function createAuthMiddleware(
   config: Config,
   verifier?: AccessTokenVerifier,
 ) {
+  if (config.NODE_ENV === "production" && !ENABLE_OKTA_AUTH)
+    throw new Error("Production requires Okta authentication.");
   if (!ENABLE_OKTA_AUTH) return new TemporaryAuthenticator(pool).middleware;
   return new OktaAuthenticator(pool, config, verifier).middleware;
 }

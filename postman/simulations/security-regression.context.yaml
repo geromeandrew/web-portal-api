@@ -1,0 +1,60 @@
+purpose:
+  stands_in_for: The S3 REST subset used by ESATP's real AWS SDK in local regression tests.
+  unblocks: Offline security, storage and upload-boundary verification without real AWS changes.
+assumptions:
+  - id: local-caller-storage-regression
+    status: supported
+    claim: The API's existing storage behavior and security changes pass the local HTTP stand-in scenarios in the full 199-test suite, including the 33 workspace cases and 200 MiB boundaries.
+    reason: The real Express application, PostgreSQL and AWS SDK ran; the stand-in received actual SDK traffic. This is scoped to the modeled operations, not a live AWS guarantee.
+    verification: '2026-10-30 final run: 199 tests passed, no skips; latest full run recorded 129 requests on routeKey s3 (258 in the capture across two full runs), including {"GET": 31, "HEAD": 46, "PUT": 40, "DELETE": 12}. The prior review also passed all workspace cases; this entry retains that historical evidence.'
+    source: tests/workspaceTickets.integration.test.ts; tests/criticalFixes.integration.test.ts; tests/securityAudit.integration.test.ts; postman/mocks/s3-security/default.js
+    updated_at: "2026-10-30"
+  - id: model-provenance-and-scope
+    status: supported
+    claim: The local model implements only the caller's path-style S3 REST operations and returns 501 for unsupported operations.
+    reason: No trusted owning-team mock was identified locally. The locally authored handler follows the documented AWS REST subset; it is not a provider implementation.
+    verification: Handler and simulation wiring inspected; SDK GET/list, HEAD, PUT/copy and DELETE request events observed in the final run. Unsupported operations remain deliberately unmodeled.
+    source: postman/mocks/s3-security/default.js; postman/simulations/security-regression.sim.yaml; https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html; https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html; https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
+    updated_at: "2026-10-30"
+  - id: live-provider-permissions-and-resilience
+    status: unknown
+    claim: The actual deployment's IAM, signing, bucket policies, encryption, latency and remote workflow behavior satisfy the production acceptance criteria.
+    reason: Local simulation cannot establish these live infrastructure facts; Step Functions is not a simulation member.
+    verification: No production storage/workflow mutation was performed. Validate these facts in the correct deployed environment using the approved release process.
+    source: README.md; tests/securityAudit.integration.test.ts; tests/workspaceTickets.integration.test.ts
+    updated_at: "2026-10-30"
+  - id: full-security-recheck
+    status: supported
+    claim: The real API and AWS SDK preserve the modeled storage cases in the final 202-test local security recheck, including all 33 workspace cases.
+    reason: All tests passed after the new audit fixes; the S3 member received actual SDK requests. This is local caller evidence, not a live provider guarantee.
+    verification: "2026-10-30 final run at 05:43 UTC: 202 passed with no skips; 129 S3 requests (GET 31, HEAD 46, PUT 40, DELETE 12), no simulation transport errors. The original review capture contained 632 requests across successful and earlier startup/diagnostic runs; machine-local logs are not shipped."
+    source: README.md; tests/workspaceTickets.integration.test.ts; tests/securityAudit.test.ts
+    updated_at: "2026-10-30"
+  - id: wait-for-simulation-readiness
+    status: supported
+    claim: Integration tests must wait until the local S3 simulation is listening and answers a real ListObjectsV2 request.
+    reason: Starting the test suite before the local dependency exists produces storage errors that do not establish an application regression.
+    verification: "2026-10-30: the initial test run began at 05:23:32 UTC; the simulation listening event appeared at 05:23:42 UTC. Four early file cases failed without reaching the S3 member. After readiness, the isolated 33-case suite and full suites passed without relaxing application behavior or test assertions."
+    source: README.md
+    updated_at: "2026-10-30"
+  - id: combined-security-startup-review
+    status: supported
+    claim: The local API/storage cases pass together with automatic startup migrations in the 213-test combined review.
+    reason: Real PostgreSQL, actual compiled replica startup and real AWS SDK traffic to the local S3 model were exercised. This is not live-provider certification.
+    verification: "2026-10-30: 213 API tests passed without skips; the final SDK run recorded 129 S3 requests (GET 31, HEAD 46, PUT 40, DELETE 12) without simulation transport errors. The unchanged frontend passed 137 tests."
+    source: README.md; tests/startup.integration.test.ts; tests/migrationRunner.integration.test.ts; tests/workspaceTickets.integration.test.ts
+    updated_at: "2026-10-30"
+  - id: optional-artifact-cleanup-review
+    status: supported
+    claim: Removing optional deployment-check artifacts preserves the locally verified security, storage and automatic-startup behavior.
+    reason: No application source changed during cleanup. Full retained API and frontend suites, compiled startup integration and native Nginx checks passed.
+    verification: "2026-10-30: final run passed 212 API tests with no skips across 20 files; frontend passed 137 tests. Both builds and audits passed. Two helper-only tests were removed with their optional preflight tool. The simulation captured 259 requests across the initial and final runs including readiness (GET 63, HEAD 92, PUT 80, DELETE 24), with no stderr or transport errors."
+    source: README.md; tests/startup.integration.test.ts; tests/migrationRunner.integration.test.ts; tests/securityAudit.integration.test.ts; tests/workspaceTickets.integration.test.ts
+    updated_at: "2026-10-30"
+fingerprints:
+  - id: security-audit-completion-local
+    date: "2026-10-30"
+    commit: "aa0f7b5fab7e35a3358a6139d4a044e45d88eca2 (security-implementation working tree with uncommitted security changes)"
+    cli: "Postman CLI 1.75.0; pnpm 10.30.2"
+
+  # Historical observations remain above; current reproduction steps are in README.md. Historical supporting reports are retained locally under ignored docs/security-reference/.

@@ -108,7 +108,7 @@ describe("API error handling", () => {
       "database.request_failed",
       expect.objectContaining({
         method: "GET",
-        path: "/api/docs/",
+        route: "unmatched",
         errorCode: "ETIMEDOUT",
         databaseSsl: true,
       }),

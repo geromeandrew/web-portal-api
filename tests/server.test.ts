@@ -1,123 +1,85 @@
 import { EventEmitter } from "node:events";
 import type { Server } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Config } from "../src/config.js";
-
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   createPool: vi.fn(),
   createApp: vi.fn(),
+  migrate: vi.fn(),
   logger: { info: vi.fn(), error: vi.fn() },
 }));
-
 vi.mock("../src/config.js", () => ({ loadConfig: mocks.loadConfig }));
 vi.mock("../src/db.js", () => ({ createPool: mocks.createPool }));
 vi.mock("../src/routes.js", () => ({ createApp: mocks.createApp }));
+vi.mock("../src/migrationRunner.js", () => ({ runMigrations: mocks.migrate }));
 vi.mock("../src/platform/logger.js", () => ({
   createLogger: () => mocks.logger,
 }));
-
 import { startServer } from "../src/app/server.js";
-
-const config = {
-  NODE_ENV: "production",
-  PORT: 3001,
-  DATABASE_HOST: "10.220.179.25",
-  DATABASE_PORT: 1769,
-  DATABASE_NAME: "isgesatpdv",
-  DATABASE_USER: "esatp_adm",
-  DATABASE_PASSWORD: "must-never-appear-in-logs",
-  DATABASE_SSL: true,
-  DATABASE_SCHEMA: "web_portal",
-} as Config;
-
+let server: Server;
+let pool: { query: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
 beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.loadConfig.mockReturnValue(config);
-});
-
-describe("API startup diagnostics", () => {
-  function mockHttpServer() {
-    const server = new EventEmitter() as Server;
-    const listen = vi.fn(
-      (_port: number, _host: string, callback: () => void) => {
-        queueMicrotask(callback);
-        return server;
-      },
-    );
-    mocks.createApp.mockReturnValue({ listen });
-    return { server, listen };
-  }
-
-  it("continues listening and logs actionable database timeout details", async () => {
-    const error = Object.assign(
-      new Error("connect ETIMEDOUT 10.220.179.25:1769"),
-      {
-        code: "ETIMEDOUT",
-        syscall: "connect",
-        address: "10.220.179.25",
-        port: 1769,
-      },
-    );
-    error.stack = `${error.stack}\n/app/node_modules/pg-pool/index.js:45`;
-    const pool = {
-      query: vi.fn().mockRejectedValue(error),
-      end: vi.fn().mockResolvedValue(undefined),
-    };
-    mocks.createPool.mockReturnValue(pool);
-    const { server, listen } = mockHttpServer();
-
-    await expect(startServer()).resolves.toBe(server);
-
-    expect(mocks.logger.info).toHaveBeenCalledWith(
-      "database.connection_attempt",
-      expect.objectContaining({
-        databaseHost: "10.220.179.25",
-        databasePort: 1769,
-        databaseSsl: true,
-        connectionTimeoutMs: 10_000,
-      }),
-    );
-    expect(mocks.logger.error).toHaveBeenCalledWith(
-      "database.connection_failed",
-      expect.objectContaining({
-        startupPhase: "database_connection",
-        errorCode: "ETIMEDOUT",
-        diagnosis: expect.stringContaining("NetworkPolicy"),
-        apiStartupContinues: true,
-      }),
-    );
-    expect(JSON.stringify(mocks.logger.error.mock.calls)).not.toContain(
-      config.DATABASE_PASSWORD,
-    );
-    expect(mocks.createApp).toHaveBeenCalledWith(pool, config);
-    expect(listen).toHaveBeenCalledWith(3001, "0.0.0.0", expect.any(Function));
-    expect(pool.end).not.toHaveBeenCalled();
-    expect(mocks.logger.info).toHaveBeenCalledWith("api.listening", {
-      port: 3001,
-    });
+  vi.resetAllMocks();
+  mocks.loadConfig.mockReturnValue({
+    PORT: 3001,
+    DATABASE_SCHEMA: "test",
+    DATABASE_PASSWORD: "private-password",
   });
-
-  it("verifies a successful database connection before listening", async () => {
-    const pool = {
-      query: vi.fn().mockResolvedValue({ rows: [{ "?column?": 1 }] }),
-      end: vi.fn().mockResolvedValue(undefined),
-    };
-    mocks.createPool.mockReturnValue(pool);
-    const { server, listen } = mockHttpServer();
-
-    await expect(startServer()).resolves.toBe(server);
-
-    expect(pool.query).toHaveBeenCalledWith("SELECT 1");
-    expect(mocks.logger.info).toHaveBeenCalledWith(
-      "database.connection_succeeded",
-      expect.objectContaining({
-        databaseHost: "10.220.179.25",
-        databasePort: 1769,
-        databaseSsl: true,
-      }),
+  pool = {
+    query: vi.fn().mockResolvedValue({ rows: [{ ready: true }] }),
+    end: vi.fn().mockResolvedValue(undefined),
+  };
+  mocks.createPool.mockReturnValue(pool);
+  server = new EventEmitter() as Server;
+  server.close = vi.fn((callback) => {
+    server.emit("close");
+    callback?.();
+    return server;
+  });
+  server.closeAllConnections = vi.fn();
+  mocks.createApp.mockReturnValue({
+    listen: (_port: number, _host: string, callback: () => void) => {
+      queueMicrotask(callback);
+      return server;
+    },
+  });
+});
+describe("automatic startup migrations", () => {
+  it("holds business readiness false until migrations and audit permission checks succeed", async () => {
+    mocks.migrate.mockImplementation(async () => {
+      expect(mocks.createApp.mock.calls[0][4]()).toBe(false);
+    });
+    expect(await startServer()).toBe(server);
+    expect(mocks.migrate).toHaveBeenCalledOnce();
+    expect(mocks.createApp.mock.calls[0][4]()).toBe(true);
+    expect(pool.end).not.toHaveBeenCalled();
+    server.emit("close");
+  });
+  it("closes the listener and DB on migration failure without logging private errors", async () => {
+    mocks.migrate.mockRejectedValue(Error("private-password private-sql"));
+    await expect(startServer()).rejects.toThrow("private-password");
+    expect(server.close).toHaveBeenCalledOnce();
+    expect(pool.end).toHaveBeenCalledOnce();
+    expect(mocks.createApp.mock.calls[0][4]()).toBe(false);
+    expect(JSON.stringify(mocks.logger.error.mock.calls)).not.toMatch(
+      /private-password|private-sql/,
     );
-    expect(mocks.logger.error).not.toHaveBeenCalled();
-    expect(listen).toHaveBeenCalledOnce();
+  });
+  it("does not mark a stopped API ready if shutdown arrives during the final database check", async () => {
+    pool.query.mockImplementation(async () => {
+      process.emit("SIGTERM");
+      return { rows: [{ ready: true }] };
+    });
+    await expect(startServer()).rejects.toThrow();
+    expect(mocks.createApp.mock.calls[0][4]()).toBe(false);
+    expect(pool.end).toHaveBeenCalledOnce();
+    expect(
+      mocks.logger.info.mock.calls.some(([event]) => event === "api.ready"),
+    ).toBe(false);
+  });
+  it("refuses readiness when audit INSERT permission is missing", async () => {
+    pool.query.mockResolvedValue({ rows: [{ ready: false }] });
+    await expect(startServer()).rejects.toThrow("INSERT permission");
+    expect(pool.end).toHaveBeenCalledOnce();
   });
 });

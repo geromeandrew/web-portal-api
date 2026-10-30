@@ -1,3 +1,5 @@
+import { withTransaction } from "../../../db.js";
+import { securityAudit, fingerprint, recordSecurityEffect } from "../../../platform/requestAudit.js";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { randomUUID } from "node:crypto";
@@ -456,12 +458,16 @@ export function createProcessingPipelinesRouter(
           )
         : undefined;
     const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
-    const batch = await createPipelineUploadBatch(pool, {
-      id: randomUUID(),
-      pipelineCode,
-      workspaceId,
-      userId: request.auth!.userId,
-      uploadPlan,
+    const batch = await withTransaction(pool, async (db) => {
+      const created = await createPipelineUploadBatch(db, {
+        id: randomUUID(),
+        pipelineCode,
+        workspaceId,
+        userId: request.auth!.userId,
+        uploadPlan,
+      });
+      if (created) await securityAudit(db, "upload.batch.created", { pipelineCode }, true);
+      return created;
     });
     if (!batch)
       throw new AppError(
@@ -513,6 +519,10 @@ export function createProcessingPipelinesRouter(
       });
       if (file.ContentLength !== undefined)
         response.set("Content-Length", String(file.ContentLength));
+      await securityAudit(pool, "file.read", {
+        pipelineCode,
+        resourceId: fingerprint(key, config.RATE_LIMIT_HMAC_SECRET),
+      });
       await pipeline(file.Body as Readable, response);
     } catch (error) {
       throw mapStorageError(error);
@@ -657,6 +667,7 @@ export function createProcessingPipelinesRouter(
         request.file.mimetype || "application/octet-stream",
         { preventOverwrite: pipelineCode === "memo_sst" },
       );
+      recordSecurityEffect("file.uploaded", { pipelineCode, objectKey: stored.key });
       if (batchId) {
         const recorded = await recordPipelineUploadBatchFile(pool, {
           batchId,
@@ -716,6 +727,7 @@ export function createProcessingPipelinesRouter(
           "The requested file was not found in storage.",
         );
       await processingPipelineStorage.deleteFile(pipelineCode, key);
+      recordSecurityEffect("file.deleted", { pipelineCode, objectKey: key });
       await markPipelineUploadFileRemoved(pool, pipelineCode, key);
       const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
       await audit(pool, workspaceId, "processing-pipeline.file-removed", {
@@ -790,6 +802,7 @@ export function createProcessingPipelinesRouter(
           requirement.stepFunction.stateMachineName,
           requirement.stepFunction.executionInput,
         );
+        recordSecurityEffect("processing.started", { pipelineCode, runId, objectKey: key });
         const sourceFiles = [
           {
             expectedFileName: requirement.fileName,
@@ -925,6 +938,7 @@ export function createProcessingPipelinesRouter(
                 stepFunction.executionInput,
               );
               const runId = randomUUID();
+              recordSecurityEffect("processing.started", { pipelineCode, runId, objectKey: file.key });
               const run = {
                 runId,
                 expectedFileName: file.expectedFileName,
@@ -975,6 +989,7 @@ export function createProcessingPipelinesRouter(
               workspaceId,
               "processing-pipeline.partial-batch-started",
               {
+                actionOutcome: failedFiles.length ? "partial" : "success",
                 pipelineCode,
                 batchCycle,
                 sourceFiles,
@@ -1019,6 +1034,7 @@ export function createProcessingPipelinesRouter(
           mapping.stateMachineName,
           mapping.executionInput,
         );
+        recordSecurityEffect("processing.batch_started", { pipelineCode, runId });
         await createStepFunctionExecution(pool, {
           id: runId,
           batchMappingId: mapping.mappingId,

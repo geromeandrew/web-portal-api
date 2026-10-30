@@ -13,6 +13,16 @@ const envSchema = z
     NODE_ENV: z
       .enum(["development", "test", "production"])
       .default("development"),
+    MIGRATION_LOCK_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(60000),
+    MIGRATION_STATEMENT_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(300000),
     PORT: z.coerce.number().int().positive().default(3001),
     DATABASE_HOST: z.string().min(1),
     DATABASE_PORT: z.coerce.number().int().positive(),

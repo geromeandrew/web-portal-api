@@ -1,110 +1,87 @@
 import type { Server } from "node:http";
-import type { Pool } from "pg";
-import type { Config } from "../config.js";
+import type { Pool, QueryConfig } from "pg";
 import { loadConfig } from "../config.js";
-import { getDatabaseErrorDiagnostics } from "../databaseErrors.js";
 import { createPool } from "../db.js";
+import { getDatabaseErrorDiagnostics } from "../databaseErrors.js";
 import { createLogger } from "../platform/logger.js";
 import { createApp } from "../routes.js";
+import { runMigrations } from "../migrationRunner.js";
 
-/** Starts the HTTP server and wires process shutdown to database cleanup. */
+/** Expose probes while migrating, but never serve business traffic on a partial schema. */
 export async function startServer(): Promise<Server> {
   const logger = createLogger();
-  let config: Config | undefined;
+  let config: ReturnType<typeof loadConfig> | undefined;
   let pool: Pool | undefined;
-  let startupPhase = "configuration";
-
+  let server: Server | undefined;
+  let ready = false;
+  const cancellation = new AbortController();
+  let cleanup: Promise<void> | undefined;
+  let migrationInFlight: Promise<void> | undefined;
+  const close = () => {
+    ready = false;
+    cancellation.abort();
+    return (cleanup ??= (async () => {
+      if (server)
+        await new Promise<void>((resolve) => {
+          server!.close(() => resolve());
+          server!.closeIdleConnections?.();
+        });
+      if (migrationInFlight) await migrationInFlight.catch(() => {});
+      if (pool) await pool.end();
+    })());
+  };
+  const onSignal = () => {
+    void close().catch(() => {
+      process.exitCode = 1;
+    });
+  };
   try {
     config = loadConfig();
-    startupPhase = "database_connection";
     pool = createPool(config, true, logger);
-    logger.info("database.connection_attempt", {
-      databaseHost: config.DATABASE_HOST,
-      databasePort: config.DATABASE_PORT,
-      databaseName: config.DATABASE_NAME,
-      databaseUser: config.DATABASE_USER,
-      databaseSsl: config.DATABASE_SSL,
-      connectionTimeoutMs: 10_000,
-    });
-    const connectionStartedAt = Date.now();
-    try {
-      await pool.query("SELECT 1");
-      logger.info("database.connection_succeeded", {
-        databaseHost: config.DATABASE_HOST,
-        databasePort: config.DATABASE_PORT,
-        databaseName: config.DATABASE_NAME,
-        databaseUser: config.DATABASE_USER,
-        databaseSsl: config.DATABASE_SSL,
-        durationMs: Date.now() - connectionStartedAt,
-      });
-    } catch (error) {
-      logger.error("database.connection_failed", {
-        startupPhase,
-        ...(getDatabaseErrorDiagnostics(error, config) ?? {}),
-        errorName: error instanceof Error ? error.name : undefined,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : undefined,
-        apiStartupContinues: true,
-      });
-    }
-
-    startupPhase = "http_listener";
-    const activeConfig = config;
-    const activePool = pool;
-    const server = await new Promise<Server>((resolve, reject) => {
-      const httpServer = createApp(activePool, activeConfig).listen(
-        activeConfig.PORT,
-        "0.0.0.0",
-        () => {
-          logger.info("api.listening", { port: activeConfig.PORT });
-          resolve(httpServer);
-        },
+    const app = createApp(pool, config, undefined, undefined, () => ready);
+    server = await new Promise<Server>((resolve, reject) => {
+      const listener = app.listen(config!.PORT, "0.0.0.0", () =>
+        resolve(listener),
       );
-      httpServer.once("error", reject);
+      listener.once("error", reject);
     });
-    let closing = false;
-    const close = async () => {
-      if (closing) return;
-      closing = true;
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
-      await pool!.end();
-    };
-    process.on("SIGTERM", () => void close());
-    process.on("SIGINT", () => void close());
+    process.once("SIGTERM", onSignal);
+    process.once("SIGINT", onSignal);
+    server.once("close", () => {
+      process.removeListener("SIGTERM", onSignal);
+      process.removeListener("SIGINT", onSignal);
+    });
+    logger.info("api.listening", { port: config.PORT });
+    migrationInFlight = runMigrations(
+      pool,
+      config,
+      logger,
+      cancellation.signal,
+    );
+    await migrationInFlight;
+    cancellation.signal.throwIfAborted();
+    const result = await pool.query({
+      text: `SELECT
+        (SELECT count(*) = 3 FROM pg_attribute WHERE attrelid=to_regclass('security_audit_events') AND attname IN ('action_outcome','access_port','environment') AND NOT attisdropped)
+        AND has_table_privilege(to_regclass('security_audit_events'), 'INSERT') AS ready`,
+      query_timeout: 2000,
+    } as QueryConfig & { query_timeout: number });
+    cancellation.signal.throwIfAborted();
+    if (result.rows[0]?.ready !== true)
+      throw new Error("Required audit schema or INSERT permission is missing.");
+    ready = true;
+    logger.info("api.ready", {
+      port: config.PORT,
+    });
     return server;
   } catch (error) {
-    logger.error(
-      startupPhase === "database_connection"
-        ? "database.connection_failed"
-        : "api.startup_failed",
-      {
-        startupPhase,
-        ...(config ? (getDatabaseErrorDiagnostics(error, config) ?? {}) : {}),
-        errorName: error instanceof Error ? error.name : undefined,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack : undefined,
-      },
-    );
-    if (pool) {
-      try {
-        await pool.end();
-      } catch (closeError) {
-        logger.error("database.pool_close_failed", {
-          ...(config
-            ? (getDatabaseErrorDiagnostics(closeError, config) ?? {})
-            : {}),
-          errorName: closeError instanceof Error ? closeError.name : undefined,
-          errorMessage:
-            closeError instanceof Error
-              ? closeError.message
-              : String(closeError),
-          errorStack:
-            closeError instanceof Error ? closeError.stack : undefined,
-        });
-      }
-    }
+    logger.error("api.startup_failed", {
+      startupPhase: "database_migrations",
+      ...(config ? (getDatabaseErrorDiagnostics(error, config) ?? {}) : {}),
+      errorName: error instanceof Error ? error.name : undefined,
+    });
+    server?.closeAllConnections?.();
+    await close().catch(() => {});
     throw error;
   }
 }

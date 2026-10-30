@@ -169,7 +169,7 @@ describe("API security middleware over real HTTP", () => {
       assertBaseline(response.headers);
       expect(response.headers.get("access-control-allow-origin")).toBeNull();
       expect(await response.json()).toMatchObject({
-        error: { code: "CORS_ORIGIN_DENIED" },
+        error: { message: "This browser origin is not allowed." },
       });
       expect(f.calls.database).toBe(0);
     });

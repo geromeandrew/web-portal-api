@@ -1,0 +1,9 @@
+version: 1
+name: S3 security regression stand-in
+slug: s3-security
+protocol: http
+port: 4500
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

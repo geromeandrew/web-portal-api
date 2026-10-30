@@ -13,6 +13,7 @@ import type { RequestHandler } from "express";
  * fake storage or job-runner implementations without starting AWS clients.
  */
 export type AppDependencies = {
+  startupReady?: () => boolean;
   pool: Pool;
   config: Config;
   processingPipelineStorage: ProcessingPipelineStorage;

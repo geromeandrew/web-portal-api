@@ -1,3 +1,4 @@
+import { withTransaction } from "../../../db.js";
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { z } from "zod";
@@ -14,13 +15,27 @@ const createUserSchema = z.object({
   isActive: z.boolean().default(true),
   isAdmin: z.boolean().default(false),
 });
-const updateUserSchema = createUserSchema.omit({ email: true }).partial();
+// Update flags must stay absent when omitted. Zod 4 applies defaults even
+// inside optional fields, so deriving these from creation defaults can silently
+// change administrator/active state during a name-only update.
+const updateUserSchema = createUserSchema
+  .omit({ email: true, isActive: true, isAdmin: true })
+  .partial()
+  .extend({
+    isActive: z.boolean().optional(),
+    isAdmin: z.boolean().optional(),
+  });
 
 export function createAdminRouter({ pool, authenticate }: AppDependencies) {
   const router = express.Router();
   router.use(authenticate);
   router.use(async (request, _response, next) => {
-    try { await assertAdministrator(pool, request.auth!.userId); next(); } catch (error) { next(error); }
+    try {
+      await assertAdministrator(pool, request.auth!.userId);
+      next();
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.get("/modules", async (_request, response) => {
@@ -47,55 +62,148 @@ export function createAdminRouter({ pool, authenticate }: AppDependencies) {
   });
 
   router.post("/users", async (request, response) => {
-    const body = createUserSchema.parse(request.body);
-    const email = body.email.toLowerCase();
-    const displayName = [body.firstName, body.lastName].filter(Boolean).join(" ") || null;
-    const created = await pool.query(
-      `INSERT INTO app_user (id, email, first_name, last_name, display_name, is_active, is_admin, created_by_user_id, updated_by_user_id)
+    const result = await withTransaction(pool, async (db) => {
+      await db.query("SELECT pg_advisory_xact_lock(280028)");
+      await assertAdministrator(db, request.auth!.userId);
+      const body = createUserSchema.parse(request.body);
+      const email = body.email.toLowerCase();
+      const displayName =
+        [body.firstName, body.lastName].filter(Boolean).join(" ") || null;
+      const created = await db
+        .query(
+          `INSERT INTO app_user (id, email, first_name, last_name, display_name, is_active, is_admin, created_by_user_id, updated_by_user_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) RETURNING id, email`,
-      [randomUUID(), email, body.firstName ?? null, body.lastName ?? null, displayName, body.isActive, body.isAdmin, request.auth!.userId],
-    ).catch((error: { code?: string }) => {
-      if (error.code === "23505") throw new AppError(409, "EMAIL_EXISTS", "An account with that email already exists.");
-      throw error;
+          [
+            randomUUID(),
+            email,
+            body.firstName ?? null,
+            body.lastName ?? null,
+            displayName,
+            body.isActive,
+            body.isAdmin,
+            request.auth!.userId,
+          ],
+        )
+        .catch((error: { code?: string }) => {
+          if (error.code === "23505")
+            throw new AppError(
+              409,
+              "EMAIL_EXISTS",
+              "An account with that email already exists.",
+            );
+          throw error;
+        });
+      await auditRbac(db, {
+        actorUserId: request.auth!.userId,
+        targetUserId: created.rows[0].id,
+        action: "user.created",
+        detail: { isActive: body.isActive, isAdmin: body.isAdmin },
+      });
+      return { user: created.rows[0] };
     });
-    await auditRbac(pool, { actorUserId: request.auth!.userId, targetUserId: created.rows[0].id, action: "user.created" });
-    response.status(201).json({ user: created.rows[0] });
+    response.status(201).json(result);
   });
 
   router.patch("/users/:userId", async (request, response) => {
-    const userId = userIdSchema.parse(request.params.userId);
-    const body = updateUserSchema.parse(request.body);
-    if (userId === request.auth!.userId && (body.isAdmin === false || body.isActive === false))
-      throw new AppError(409, "SELF_ADMIN_CHANGE_DENIED", "You cannot deactivate yourself or remove your own administrator access.");
-    if (body.isAdmin === false || body.isActive === false) {
-      const target = await pool.query<{ is_admin: boolean }>("SELECT is_admin FROM app_user WHERE id = $1", [userId]);
-      if (target.rows[0]?.is_admin) {
-        const admins = await pool.query("SELECT 1 FROM app_user WHERE is_active AND is_admin");
-        if ((admins.rowCount ?? 0) <= 1) throw new AppError(409, "LAST_ADMIN_DENIED", "At least one active administrator is required.");
+    const result = await withTransaction(pool, async (db) => {
+      await db.query("SELECT pg_advisory_xact_lock(280028)");
+      await assertAdministrator(db, request.auth!.userId);
+      const userId = userIdSchema.parse(request.params.userId);
+      const body = updateUserSchema.parse(request.body);
+      if (
+        userId === request.auth!.userId &&
+        (body.isAdmin === false || body.isActive === false)
+      )
+        throw new AppError(
+          409,
+          "SELF_ADMIN_CHANGE_DENIED",
+          "You cannot deactivate yourself or remove your own administrator access.",
+        );
+      if (body.isAdmin === false || body.isActive === false) {
+        const target = await db.query<{ is_admin: boolean }>(
+          "SELECT is_admin FROM app_user WHERE id = $1",
+          [userId],
+        );
+        if (target.rows[0]?.is_admin) {
+          const admins = await db.query(
+            "SELECT 1 FROM app_user WHERE is_active AND is_admin",
+          );
+          if ((admins.rowCount ?? 0) <= 1)
+            throw new AppError(
+              409,
+              "LAST_ADMIN_DENIED",
+              "At least one active administrator is required.",
+            );
+        }
       }
-    }
-    const updated = await pool.query(
-      `UPDATE app_user SET first_name = COALESCE($1, first_name), last_name = COALESCE($2, last_name),
+      const updated = await db.query(
+        `UPDATE app_user SET first_name = COALESCE($1, first_name), last_name = COALESCE($2, last_name),
          is_active = COALESCE($3, is_active), is_admin = COALESCE($4, is_admin), updated_by_user_id = $5, updated_at = now()
        WHERE id = $6 RETURNING id, email, first_name AS "firstName", last_name AS "lastName", is_active AS "isActive", is_admin AS "isAdmin"`,
-      [body.firstName, body.lastName, body.isActive, body.isAdmin, request.auth!.userId, userId],
-    );
-    if (!updated.rowCount) throw new AppError(404, "USER_NOT_FOUND", "The account was not found.");
-    await auditRbac(pool, { actorUserId: request.auth!.userId, targetUserId: userId, action: "user.updated", detail: body });
-    response.json({ user: updated.rows[0] });
+        [
+          body.firstName,
+          body.lastName,
+          body.isActive,
+          body.isAdmin,
+          request.auth!.userId,
+          userId,
+        ],
+      );
+      if (!updated.rowCount)
+        throw new AppError(404, "USER_NOT_FOUND", "The account was not found.");
+      await auditRbac(db, {
+        actorUserId: request.auth!.userId,
+        targetUserId: userId,
+        action: "user.updated",
+        detail: { ...body, changedFields: Object.keys(body).sort().join(",") },
+      });
+      return { user: updated.rows[0] };
+    });
+    response.json(result);
   });
 
   router.put("/users/:userId/modules/:moduleId", async (request, response) => {
-    const userId = userIdSchema.parse(request.params.userId); const moduleId = moduleIdSchema.parse(request.params.moduleId);
-    await pool.query(`INSERT INTO app_user_modules (user_id, module_id, assigned_by_user_id) VALUES ($1, $2, $3) ON CONFLICT (user_id, module_id) DO NOTHING`, [userId, moduleId, request.auth!.userId]);
-    await auditRbac(pool, { actorUserId: request.auth!.userId, targetUserId: userId, moduleId, action: "module.assigned" });
+    await withTransaction(pool, async (db) => {
+      await db.query("SELECT pg_advisory_xact_lock(280028)");
+      await assertAdministrator(db, request.auth!.userId);
+      const userId = userIdSchema.parse(request.params.userId);
+      const moduleId = moduleIdSchema.parse(request.params.moduleId);
+      await db.query(
+        `INSERT INTO app_user_modules (user_id, module_id, assigned_by_user_id) VALUES ($1, $2, $3) ON CONFLICT (user_id, module_id) DO NOTHING`,
+        [userId, moduleId, request.auth!.userId],
+      );
+      await auditRbac(db, {
+        actorUserId: request.auth!.userId,
+        targetUserId: userId,
+        moduleId,
+        action: "module.assigned",
+      });
+      return;
+    });
     response.status(204).end();
   });
-  router.delete("/users/:userId/modules/:moduleId", async (request, response) => {
-    const userId = userIdSchema.parse(request.params.userId); const moduleId = moduleIdSchema.parse(request.params.moduleId);
-    await pool.query("DELETE FROM app_user_modules WHERE user_id = $1 AND module_id = $2", [userId, moduleId]);
-    await auditRbac(pool, { actorUserId: request.auth!.userId, targetUserId: userId, moduleId, action: "module.removed" });
-    response.status(204).end();
-  });
+  router.delete(
+    "/users/:userId/modules/:moduleId",
+    async (request, response) => {
+      await withTransaction(pool, async (db) => {
+        await db.query("SELECT pg_advisory_xact_lock(280028)");
+        await assertAdministrator(db, request.auth!.userId);
+        const userId = userIdSchema.parse(request.params.userId);
+        const moduleId = moduleIdSchema.parse(request.params.moduleId);
+        await db.query(
+          "DELETE FROM app_user_modules WHERE user_id = $1 AND module_id = $2",
+          [userId, moduleId],
+        );
+        await auditRbac(db, {
+          actorUserId: request.auth!.userId,
+          targetUserId: userId,
+          moduleId,
+          action: "module.removed",
+        });
+        return;
+      });
+      response.status(204).end();
+    },
+  );
   return router;
 }

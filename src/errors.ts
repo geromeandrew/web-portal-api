@@ -1,3 +1,4 @@
+import { requestContext } from "./platform/requestAudit.js";
 import { MAX_UPLOAD_BYTES } from "./uploadLimits.js";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { ZodError } from "zod";
@@ -24,6 +25,24 @@ export const notFound: RequestHandler = (_request, _response, next) =>
 export const createErrorHandler =
   (logger: Logger, config: Config): ErrorRequestHandler =>
   (error, request, response, _next) => {
+    const context = requestContext.getStore();
+    if (context)
+      context.reason =
+        error instanceof AppError
+          ? error.code
+          : error instanceof ZodError
+            ? "VALIDATION_ERROR"
+            : "REQUEST_ERROR";
+    if (response.headersSent) {
+      // Express's fallback logs raw exception stacks; keep stream errors sanitized.
+      logger.error("api.response_stream_failed", {
+        method: request.method,
+        route: request.route?.path ?? "unmatched",
+        errorName: error instanceof Error ? error.name : undefined,
+      });
+      response.destroy();
+      return;
+    }
     if (error instanceof ZodError) {
       response.status(400).json({
         error: {
@@ -36,9 +55,16 @@ export const createErrorHandler =
     if (error instanceof AppError) {
       response.status(error.status).json({
         error: {
-          code: error.code,
-          message: error.message,
-          ...(error.fields ? { fields: error.fields } : {}),
+          ...([403, 404, 500].includes(error.status)
+            ? {}
+            : { code: error.code }),
+          message:
+            error.status === 500
+              ? "An unexpected server error occurred."
+              : error.message,
+          ...(![403, 404, 500].includes(error.status) && error.fields
+            ? { fields: error.fields }
+            : {}),
         },
       });
       return;
@@ -84,11 +110,9 @@ export const createErrorHandler =
       databaseDiagnostics ? "database.request_failed" : "api.request_failed",
       {
         method: request.method,
-        path: request.originalUrl.split("?", 1)[0],
+        route: request.route?.path ?? "unmatched",
         ...(databaseDiagnostics ?? {
           errorName: error instanceof Error ? error.name : undefined,
-          errorMessage: error instanceof Error ? error.message : String(error),
-          errorStack: error instanceof Error ? error.stack : undefined,
         }),
       },
     );
@@ -103,7 +127,6 @@ export const createErrorHandler =
     }
     response.status(500).json({
       error: {
-        code: "INTERNAL_ERROR",
         message: "An unexpected server error occurred.",
       },
     });

@@ -25,10 +25,12 @@ export function createApp(
     config,
   ),
   stepFunctionsRunner: StepFunctionsRunner = createStepFunctionsRunner(config),
+  startupReady?: () => boolean,
 ): Express {
   return createApplication({
     pool,
     config,
+    startupReady,
     processingPipelineStorage,
     stepFunctionsRunner,
     logger: createLogger(),

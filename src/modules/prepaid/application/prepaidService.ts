@@ -1,3 +1,5 @@
+import { recordSecurityEffect } from "../../../platform/requestAudit.js";
+import { withTransaction } from "../../../db.js";
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { AppError } from "../../../errors.js";
@@ -86,11 +88,13 @@ export class PrepaidService {
       );
     }
     const id = randomUUID();
-    await this.pool.query(
-      "INSERT INTO workflow_runs (id, workspace_id, workflow, status) VALUES ($1, $2, 'prepaid', 'completed')",
-      [id, workspaceId],
-    );
-    await audit(this.pool, workspaceId, "prepaid.processed", { runId: id });
+    await withTransaction(this.pool, async (db) => {
+      await db.query(
+        "INSERT INTO workflow_runs (id, workspace_id, workflow, status) VALUES ($1, $2, 'prepaid', 'completed')",
+        [id, workspaceId],
+      );
+      await audit(db, workspaceId, "prepaid.processed", { runId: id }, true);
+    });
     return { id, status: "completed", completedAt: new Date().toISOString() };
   }
 
@@ -153,6 +157,10 @@ export class PrepaidService {
         await this.processingPipelineStorage.fileExists("prepaid_reclass", key)
       ) {
         await this.processingPipelineStorage.deleteFile("prepaid_reclass", key);
+        recordSecurityEffect("file.deleted", {
+          pipelineCode: "prepaid_reclass",
+          objectKey: key,
+        });
         removedCount += 1;
       }
     }
@@ -174,14 +182,10 @@ export class PrepaidService {
       `${region}-layout`,
     );
     const layout = { ...current, frozen: false };
-    await setState(
-      this.pool,
-      workspaceId,
-      "prepaid",
-      `${region}-layout`,
-      layout,
-    );
-    await audit(this.pool, workspaceId, "prepaid.layout.reset", { region });
+    await withTransaction(this.pool, async (db) => {
+      await setState(db, workspaceId, "prepaid", `${region}-layout`, layout);
+      await audit(db, workspaceId, "prepaid.layout.reset", { region }, true);
+    });
     return layout;
   }
 
@@ -206,10 +210,18 @@ export class PrepaidService {
       `${region}-layout`,
     );
     const next = { ...layout, frozen };
-    await setState(this.pool, workspaceId, "prepaid", `${region}-layout`, next);
-    await audit(this.pool, workspaceId, "prepaid.layout.freeze", {
-      region,
-      frozen,
+    await withTransaction(this.pool, async (db) => {
+      await setState(db, workspaceId, "prepaid", `${region}-layout`, next);
+      await audit(
+        db,
+        workspaceId,
+        "prepaid.layout.freeze",
+        {
+          region,
+          frozen,
+        },
+        true,
+      );
     });
     return next;
   }
@@ -229,8 +241,10 @@ export class PrepaidService {
         validatedAt: new Date().toISOString(),
       },
     };
-    await setState(this.pool, workspaceId, "prepaid", "allocation", next);
-    await audit(this.pool, workspaceId, "prepaid.allocation.validated");
+    await withTransaction(this.pool, async (db) => {
+      await setState(db, workspaceId, "prepaid", "allocation", next);
+      await audit(db, workspaceId, "prepaid.allocation.validated", {}, true);
+    });
     return next.lastValidation;
   }
 

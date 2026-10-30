@@ -114,8 +114,6 @@ export function getDatabaseErrorDiagnostics(
     diagnosis: diagnosisFor(code, message),
     errorName: stringField(candidate.name),
     errorCode: code,
-    errorMessage: message,
-    errorStack: stack,
     syscall: stringField(candidate.syscall),
     remoteAddress: stringField(candidate.address) ?? config.DATABASE_HOST,
     remotePort: port ?? config.DATABASE_PORT,
@@ -125,8 +123,6 @@ export function getDatabaseErrorDiagnostics(
     databaseUser: config.DATABASE_USER,
     databaseSsl: config.DATABASE_SSL,
     severity: stringField(candidate.severity),
-    detail: stringField(candidate.detail),
-    hint: stringField(candidate.hint),
     routine: stringField(candidate.routine),
   };
 }
