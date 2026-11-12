@@ -10,7 +10,7 @@ ARG LABEL_MAINTAINER="ceso-isg-platengr@globe.com.ph"
 ARG LABEL_VERSION="v3.0.0"
 ARG JFROG_URL="globe.pe.jfrog.io"
 ARG JFROG_REPO="hmd-docker-virtual"
-ARG BASE_IMAGE="node:22.14.0-alpine"
+ARG BASE_IMAGE="node:24.22.1-alpine"
 FROM ${JFROG_URL}/${JFROG_REPO}/${BASE_IMAGE} as Builder
 
 ###############
