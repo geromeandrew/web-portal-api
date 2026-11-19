@@ -3,17 +3,34 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import type { SourceWorkflow } from "../domain/sourceExtraction.js";
+import type {
+  SourceWorkflow,
+  EgReportMapping,
+} from "../domain/sourceExtraction.js";
 import { prepaidMaximumSourceBytes } from "../domain/limits.js";
 
 export interface SourceNormalizer {
+  normalizeRaw?(
+    workflow: SourceWorkflow,
+    code: string,
+    tables: Record<string, Record<string, string | null>[]>,
+    period?: string,
+  ): Promise<Record<string, unknown[]>>;
   revision(): Promise<string>;
   normalize(
     workflow: SourceWorkflow,
     code: string,
     bytes: Buffer,
     period?: string,
+    mapping?: EgReportMapping,
   ): Promise<Record<string, unknown[]>>;
+  prepare?(
+    workflow: SourceWorkflow,
+    code: string,
+    bytes: Buffer,
+    period?: string,
+    mapping?: EgReportMapping,
+  ): Promise<{ datasets: Record<string, unknown[]>; landing?: Buffer }>;
 }
 
 /** Python is a local parsing helper, not another Step Function/Glue deployment. */
@@ -28,8 +45,32 @@ export class BackendSourceNormalizer implements SourceNormalizer {
   );
   async revision() {
     return createHash("sha256")
+      .update(
+        await readFile(
+          new URL(
+            "../../../../infrastructure/prepaid/normalize_raw_source.py",
+            import.meta.url,
+          ),
+        ),
+      )
       .update(await readFile(this.helper))
       .update(await readFile(this.core))
+      .update(
+        await readFile(
+          new URL(
+            "../../../../infrastructure/prepaid/workbook_stream.py",
+            import.meta.url,
+          ),
+        ),
+      )
+      .update(
+        await readFile(
+          new URL(
+            "../../../../infrastructure/prepaid/eg_report_adapter.py",
+            import.meta.url,
+          ),
+        ),
+      )
       .digest("hex");
   }
   async normalize(
@@ -37,6 +78,70 @@ export class BackendSourceNormalizer implements SourceNormalizer {
     code: string,
     bytes: Buffer,
     period?: string,
+    mapping?: EgReportMapping,
+  ) {
+    return this.execute(
+      workflow,
+      code,
+      bytes,
+      period,
+      mapping,
+      false,
+    ) as Promise<Record<string, unknown[]>>;
+  }
+  async normalizeRaw(
+    workflow: SourceWorkflow,
+    code: string,
+    tables: Record<string, Record<string, string | null>[]>,
+    period?: string,
+  ) {
+    return this.execute(
+      workflow,
+      code,
+      Buffer.from(JSON.stringify(tables)),
+      period,
+      undefined,
+      false,
+      true,
+    ) as Promise<Record<string, unknown[]>>;
+  }
+  async prepare(
+    workflow: SourceWorkflow,
+    code: string,
+    bytes: Buffer,
+    period?: string,
+    mapping?: EgReportMapping,
+  ) {
+    const result = (await this.execute(
+      workflow,
+      code,
+      bytes,
+      period,
+      mapping,
+      true,
+    )) as any;
+    const landing =
+      result.landing === undefined
+        ? undefined
+        : Buffer.from(result.landing, "base64");
+    if (
+      landing &&
+      (!landing.length || landing.length > prepaidMaximumSourceBytes)
+    )
+      throw Error("Invalid adapted source size.");
+    return {
+      datasets: result.datasets as Record<string, unknown[]>,
+      ...(landing ? { landing } : {}),
+    };
+  }
+  private async execute(
+    workflow: SourceWorkflow,
+    code: string,
+    bytes: Buffer,
+    period: string | undefined,
+    mapping: EgReportMapping | undefined,
+    prepare: boolean,
+    raw = false,
   ) {
     if (bytes.length > prepaidMaximumSourceBytes)
       throw Error("Source exceeds portal upload limit.");
@@ -55,7 +160,7 @@ export class BackendSourceNormalizer implements SourceNormalizer {
         : process.platform === "win32"
           ? "python"
           : "python3");
-    return new Promise<Record<string, unknown[]>>((resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
       const child = spawn(
         executable,
         [
@@ -64,7 +169,9 @@ export class BackendSourceNormalizer implements SourceNormalizer {
           fileURLToPath(this.helper),
           workflow,
           code,
-          ...(period ? [period] : []),
+          period ?? "",
+          mapping ? JSON.stringify(mapping) : "",
+          ...(raw ? ["raw"] : prepare ? ["prepare"] : []),
         ],
         { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
       );
@@ -72,7 +179,7 @@ export class BackendSourceNormalizer implements SourceNormalizer {
         errors: Buffer[] = [];
       let size = 0,
         settled = false;
-      const finish = (error?: Error, value?: Record<string, unknown[]>) => {
+      const finish = (error?: Error, value?: unknown) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
@@ -111,11 +218,16 @@ export class BackendSourceNormalizer implements SourceNormalizer {
           );
         try {
           const value = JSON.parse(Buffer.concat(output).toString());
+          const datasets = prepare ? value?.datasets : value;
           if (
-            !value ||
-            typeof value !== "object" ||
-            Array.isArray(value) ||
-            Object.values(value).some((v) => !Array.isArray(v))
+            !datasets ||
+            typeof datasets !== "object" ||
+            Array.isArray(datasets) ||
+            Object.values(datasets).some((v) => !Array.isArray(v)) ||
+            (prepare &&
+              value.landing !== undefined &&
+              (typeof value.landing !== "string" ||
+                !/^[A-Za-z0-9+/]+={0,2}$/.test(value.landing)))
           )
             throw Error("Invalid normalized source output.");
           finish(undefined, value);

@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  sourceResourcesSchema,
+  sourceGlueJobName,
+  type SourceResources,
+} from "./sourceResources.js";
 
 /** Verified read-only against the ten supplied native workflows on 18 October 2026.
  * No portal states, script overrides or AWS definition changes are required. */
@@ -118,15 +123,45 @@ export const legacyFourWorkflows: SourceWorkflow[] = [
   "load_api_sg",
   "adjustments_308",
 ];
+export const egReportMappingSchema = z
+  .object({
+    profile: z.literal("provided-eg-reports-v1"),
+    approved: z.literal(true),
+    callcardScope: z.literal("eg_report").optional(),
+    loadupAmount: z.enum(["gross", "net_top_up"]).optional(),
+  })
+  .strict();
+export type EgReportMapping = z.infer<typeof egReportMappingSchema>;
 export const sourceExtractionSchema = z
   .object({
-    envPrefix: z.literal("isg-esatp-dv"),
+    envPrefix: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{1,49}$/),
+    resources: sourceResourcesSchema.optional(),
     sharedWritesApproved: z.literal(true),
     // Preserve earlier four-source configuration; expanding shared writes requires
     // an explicit administrator choice, not an automatic upgrade of old sessions.
     coverage: z.enum(["legacy_four", "all_sources"]).default("legacy_four"),
+    egReportMapping: egReportMappingSchema.optional(),
+    // Omitted preserves existing serial sessions. New reviewed sessions can run
+    // disjoint workflows in bounded waves under ONE preparation-owned lock.
+    parallelism: z.number().int().min(1).max(3).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((settings, ctx) => {
+    if (settings.envPrefix !== "isg-esatp-dv" && !settings.resources)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["resources"],
+        message:
+          "A new extraction environment must supply its script bucket and prefix explicitly.",
+      });
+    const names = Object.values(settings.resources?.stateMachines ?? {});
+    if (new Set(names).size !== names.length)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["resources", "stateMachines"],
+        message: "Source workflow names must be distinct.",
+      });
+  });
 export function selectedSourceWorkflows(settings: {
   coverage?: string;
 }): SourceWorkflow[] {
@@ -193,6 +228,30 @@ export const extractionReceiptSchema = z.object({
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
   producer: z.literal("backend").optional(),
+  financialSource: z.literal("glue_raw_v1").optional(),
+  rawCapture: z
+    .object({ key: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/) })
+    .strict()
+    .optional(),
+  egReportMapping: egReportMappingSchema.optional(),
+  nativeInputs: z
+    .array(
+      z
+        .object({
+          sourceId: z.string().uuid(),
+          sourceCode: z.enum(["callcard_eg", "load_up_eg"]),
+          key: z.string(),
+          sha256: z.string().regex(/^[a-f0-9]{64}$/),
+          size: z
+            .number()
+            .int()
+            .positive()
+            .max(100 * 1024 * 1024),
+        })
+        .strict(),
+    )
+    .max(2)
+    .optional(),
   accountingPeriod: z
     .string()
     .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
@@ -236,11 +295,12 @@ export function validateLegacySourceDefinition(
   workflow: SourceWorkflow,
   definition: string,
   envPrefix: string,
+  resources?: SourceResources,
 ) {
   const input = { env_prefix: envPrefix },
     actual = JSON.parse(definition);
-  const expected = sourceWorkflows[workflow].jobs.map(
-    (job) => `${envPrefix}-prep_reclass-gljo-extract_${job}`,
+  const expected = sourceWorkflows[workflow].jobs.map((job) =>
+    sourceGlueJobName(job, envPrefix, resources),
   );
   let next = actual.StartAt;
   const jobs: string[] = [],

@@ -1,10 +1,30 @@
 import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
 import { vi } from "vitest";
+import nativeJobs from "./prepaidNativeJobs.json" with { type: "json" };
 import {
   sourceWorkflows,
   type SourceWorkflow,
 } from "../../src/modules/prepaid/domain/sourceExtraction.js";
+
+// Redacted read-only GetJob snapshot; independent of the production contract.
+export function nativeJobFixture(number: number) {
+  return structuredClone(
+    (
+      nativeJobs as Record<
+        string,
+        {
+          command: { Name: string; ScriptLocation: string };
+          arguments: Record<string, string>;
+        }
+      >
+    )[String(number)]!,
+  );
+}
+
+export function nativeJobColumnArguments(workflow: SourceWorkflow, index = 0) {
+  return nativeJobFixture(sourceWorkflows[workflow].jobs[index]!).arguments;
+}
 
 export function legacyDefinition(workflow: SourceWorkflow) {
   const numbers = [...sourceWorkflows[workflow].jobs];
@@ -71,6 +91,8 @@ export function fakeS3() {
           ETag: existing.etag,
         };
       case "PutObjectCommand":
+        if (IfMatch && existing?.etag !== IfMatch)
+          throw error(412, "PreconditionFailed");
         if (IfNoneMatch === "*" && existing)
           throw error(412, "PreconditionFailed");
         set(Key, Buffer.from(Body), Metadata);

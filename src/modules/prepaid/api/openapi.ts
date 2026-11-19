@@ -193,7 +193,7 @@ for (const path of [
         "Requires authentication, Prepaid module access, active administrator permission and migration 009; no run is needed. Explicit opt-in operation, never triggered by uploads. export_existing only reads PostgreSQL. refresh_and_export calls the inspected existing ZTF0455S Glue job, not a Step Function, after shared-job coordination and destination/script checks. Poll status; unknown dispatch must be reconciled and is never blindly retried. Completion returns result.referenceExport {key,prefix,sha256,rowCount}, without an approval flag. An administrator must review/approve this descriptor in PUT /integration. No cycle values or business approvals are invented. Source rows, credentials and durable snapshot bytes are not returned.";
 }
 paths["/api/workflows/prepaid/readiness"]!.get!.description =
-  "Requires authentication and Prepaid module access, not run ownership. Returns schemaInstalled, integrationConfigured, readyForUploads, actionable checks, legacyBasis and externalVerification=not_verified. legacyBasis distinguishes supplied SQL Agent/JV evidence from unavailable job steps, cycle data and physical export settings. It is not executable AWS configuration. Configuration is not proof of deployed ingestion or SAP acceptance.";
+  "Requires authentication and Prepaid module access, not run ownership. readyForUploads means upload-session schema is installed; it no longer requires financial processing configuration. readyForPreparation additionally requires valid complete effective integration configuration. configurationSource distinguishes a database override, approved built-in dev/sandbox defaults, or missing settings. An invalid explicit database row never falls back to defaults. Neither certifies runtime storage access or accounting/SAP acceptance. legacyBasis describes evidence, not executable or approved AWS settings.";
 (
   paths["/api/workflows/prepaid/readiness"]!.get!.responses[
     "200"
@@ -205,7 +205,9 @@ paths["/api/workflows/prepaid/readiness"]!.get!.description =
       required: [
         "schemaInstalled",
         "integrationConfigured",
+        "configurationSource",
         "readyForUploads",
+        "readyForPreparation",
         "externalVerification",
         "checks",
       ],
@@ -217,7 +219,12 @@ paths["/api/workflows/prepaid/readiness"]!.get!.description =
             "Migration 009 admin reference capability is installed. Independent of existing approved external-reference upload readiness.",
         },
         integrationConfigured: { type: "boolean" },
+        configurationSource: {
+          type: "string",
+          enum: ["database", "built_in", "missing"],
+        },
         readyForUploads: { type: "boolean" },
+        readyForPreparation: { type: "boolean" },
         externalVerification: { type: "string", enum: ["not_verified"] },
         legacyBasis: {
           type: "object",
@@ -253,6 +260,56 @@ paths["/api/workflows/prepaid/readiness"]!.get!.description =
 };
 add("/integration", "get", "Read Prepaid integration configuration");
 add(
+  "/reference-versions",
+  "get",
+  "Administrator: list immutable PostgreSQL reference versions",
+);
+add(
+  "/reference-versions",
+  "post",
+  "Administrator: import an approved reference version into PostgreSQL",
+  {
+    required: true,
+    content: {
+      "multipart/form-data": {
+        schema: {
+          type: "object",
+          required: ["file", "metadata"],
+          properties: {
+            file: {
+              type: "string",
+              format: "binary",
+              description:
+                "Original 17-field SAP reference JSONL, at most 20 MiB.",
+            },
+            metadata: {
+              type: "string",
+              description:
+                "JSON object: period, label, sha256, rowCount, approved=true, approvalScope (development-testing or accounting-accepted), provenance. Approval is explicit; period is a validation label, not evidence of historical applicability.",
+            },
+          },
+        },
+      },
+    },
+  },
+  "201",
+);
+add(
+  "/reference-versions/{checksum}/file",
+  "get",
+  "Administrator: export the exact original reference bytes for database transfer",
+);
+for (const path of [
+  "/reference-versions",
+  "/reference-versions/{checksum}/file",
+])
+  for (const method of ["get", "post"] as const) {
+    const operation = paths[`/api/workflows/prepaid${path}`]?.[method];
+    if (operation)
+      operation.description =
+        "Requires active administrator permission and Prepaid module access; migration 013 must be installed. Import validates original bytes, checksum, row count and SAP fields, then seals an append-only version. Existing versions and historical runs are never overwritten. No S3, Glue, SAP or Step Functions call is made. Import does not activate an integration configuration.";
+  }
+add(
   "/integration",
   "put",
   "Configure approved ingestion and manual report format (administrator only)",
@@ -267,7 +324,11 @@ add(
         },
       },
       {
-        required: ["preparationMode", "sourceExtraction", "referenceExport"],
+        required: ["preparationMode", "sourceExtraction"],
+        oneOf: [
+          { required: ["referenceVersion"] },
+          { required: ["referenceExport"] },
+        ],
         properties: {
           preparationMode: { type: "string", enum: ["native_sources"] },
           sourceExtraction: {
@@ -302,20 +363,72 @@ add(
         description:
           "Native mode uses an explicitly approved immutable legacy ZTF0455S JSONL export. Its hash/count and fields are validated; approval is not inferred.",
       },
+      referenceVersion: {
+        type: "object",
+        additionalProperties: false,
+        required: ["sha256", "rowCount", "approved"],
+        properties: {
+          sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+          rowCount: { type: "integer", minimum: 1, maximum: 250000 },
+          approved: { type: "boolean", enum: [true] },
+        },
+        description:
+          "Preferred for new native preparations. Pins an approved sealed version in this PostgreSQL database; no reference S3 dependency or automatic S3 fallback. Import the version before activation. Mutually exclusive with referenceExport.",
+      },
       sourceExtraction: {
         type: "object",
         required: ["envPrefix", "sharedWritesApproved"],
         additionalProperties: false,
         description:
-          "Optional unchanged native source extraction using only env_prefix. The backend validates/normalizes originals and creates receipts; no Portal* states or script deployment required. Requires explicit approval for shared legacy raw-table writes and coordinated input folders. all_sources plus native_sources mode supplies the canonical backend producer; external_adapter mode still requires its V2 adapter.",
+          "Optional unchanged native source extraction using only env_prefix. The backend validates/adapts uploaded inputs, then snapshots verified Glue raw-table output for the accounting calculations. No Portal* states or AWS script deployment required. The worker needs read access to the configured Glue database connection and its credential secret. Requires explicit approval for shared legacy raw-table writes and coordinated input folders. all_sources plus native_sources mode supplies the canonical backend producer; external_adapter mode still requires its V2 adapter.",
         properties: {
-          envPrefix: { type: "string", enum: ["isg-esatp-dv"] },
+          envPrefix: {
+            type: "string",
+            pattern: "^[A-Za-z][A-Za-z0-9_-]{1,49}$",
+          },
+          resources: {
+            type: "object",
+            additionalProperties: false,
+            required: ["scriptsBucket", "scriptsPrefix"],
+            properties: {
+              scriptsBucket: { type: "string" },
+              scriptsPrefix: { type: "string" },
+              stateMachines: {
+                type: "object",
+                additionalProperties: { type: "string" },
+              },
+              jobNamePrefix: { type: "string" },
+              connectionName: { type: "string" },
+            },
+            description:
+              "Required for a new envPrefix. Points to existing script copies and optional workflow/job/connection names in the target AWS account and AWS_REGION. Reviewed script hashes, source parsing, target-table and execution ownership checks remain enforced. Does not deploy or edit AWS definitions.",
+          },
           coverage: {
             type: "string",
             enum: ["legacy_four", "all_sources"],
             default: "legacy_four",
           },
           sharedWritesApproved: { type: "boolean", enum: [true] },
+          parallelism: {
+            type: "integer",
+            minimum: 1,
+            maximum: 3,
+            description:
+              "Omitted retains serial extraction. Values 2 or 3 run disjoint native workflows in preparation-owned waves with verified script/library isolation and Glue run-ID ownership. Step Functions remain unchanged.",
+          },
+          egReportMapping: {
+            type: "object",
+            additionalProperties: false,
+            required: ["profile", "approved"],
+            description:
+              "Optional mapping for the supplied sales-order Call Card EG and CFU Load Up EG layouts. No defaults: callcardScope explicitly authorizes EG report scope; loadupAmount selects the accounting basis. The backend adapts a checksummed working copy for unchanged Glue readers and retains originals. This is not accounting/output acceptance.",
+            properties: {
+              profile: { type: "string", enum: ["provided-eg-reports-v1"] },
+              approved: { type: "boolean", enum: [true] },
+              callcardScope: { type: "string", enum: ["eg_report"] },
+              loadupAmount: { type: "string", enum: ["gross", "net_top_up"] },
+            },
+          },
         },
       },
       sourceSplitPolicy: {
@@ -323,6 +436,18 @@ add(
         enum: ["independent", "legacy_eg_total"],
         description:
           "Opt-in legacy EG source-total conservation; omitted means existing independent edits. Captured per snapshot.",
+      },
+      accountingProfile: {
+        type: "string",
+        enum: ["legacy_sql_v1"],
+        description:
+          "Versioned C012–C146 legacy calculation rules for new snapshots. Omitted retains historical calculations; saved/frozen snapshots are never rewritten.",
+      },
+      referenceValidationPolicy: {
+        type: "string",
+        enum: ["legacy_all_matches"],
+        description:
+          "Requires legacy_sql_v1 and an approved reference export. Retains all legacy reference matches and zero-rate quantity handling as warnings; reconciliation, missing mappings, layout and journal errors still block Freeze. Omitted keeps strict validation.",
       },
       deliveryStateMachine: { type: "string" },
       target: { type: "string" },
@@ -332,6 +457,27 @@ add(
         minItems: 1,
         uniqueItems: true,
         items: { type: "string", pattern: "^[0-9]{2}$" },
+      },
+      reportCycles: {
+        type: "object",
+        additionalProperties: false,
+        required: ["adjustments", "charges"],
+        description:
+          "Optional native_sources-only independent report coverage. adjustments means 308; charges means 318. Each list must be nonempty and unique; their union must exactly equal expectedCycles. Omission retains paired coverage. Lists require source-period approval, not guesses from archived samples.",
+        properties: {
+          adjustments: {
+            type: "array",
+            minItems: 1,
+            uniqueItems: true,
+            items: { type: "string", pattern: "^[0-9]{2}$" },
+          },
+          charges: {
+            type: "array",
+            minItems: 1,
+            uniqueItems: true,
+            items: { type: "string", pattern: "^[0-9]{2}$" },
+          },
+        },
       },
       format: {
         description:
@@ -376,6 +522,8 @@ add(
   "get",
   "Read your configured source workflow executions and remaining external dependencies",
 );
+paths["/api/workflows/prepaid/workspace/extractions"]!.get!.description =
+  "Read-only, scoped to your active upload session. Includes executions and the latest preparation summary (status, error, source_version, available_at and lease_until). Use the preparation id to correlate prepaid.extraction.progress and prepaid.preparation.failed server events; no AWS execution is started by this GET.";
 add("/runs", "get", "List accounting-period runs in your workspace");
 add(
   "/runs",
@@ -602,10 +750,12 @@ add(
   "get",
   "Read owned upload session; never create a session or financial run on view",
 );
+paths["/api/workflows/prepaid/workspace"]!.get!.description =
+  "Read-only owned workspace state. A run-linked upload session includes resetContext={runId,eg,sg}, even when run is null because sources are collecting or preparation failed. Submit that context with sessionId/sessionVersion to Reset; do not infer that a hidden review run has no regional versions. Reset/removal remain blocked during active preparation. Source removal detaches inputs; it does not delete original S3 objects or frozen reports.";
 add(
   "/workspace/sources/{code}",
   "post",
-  "Upload a source before the period is known; queue preparation when complete",
+  "Store an owned source before processing setup; queue only after approved setup and complete inputs",
   {
     required: true,
     content: {
@@ -613,13 +763,88 @@ add(
         schema: {
           type: "object",
           required: ["file"],
-          properties: { file: { type: "string", format: "binary" } },
+          properties: {
+            file: { type: "string", format: "binary" },
+            uploadId: {
+              type: "string",
+              format: "uuid",
+              description:
+                "Optional retry identity. Reuse only for the same file bytes/source; replay returns its receipt without adding a version or preparation job.",
+            },
+          },
         },
       },
     },
   },
   "201",
 );
+// Preserve canonical names in existing clients; aliases are additive metadata.
+const sourceRequirement: OpenAPIV3.SchemaObject = {
+  type: "object",
+  required: ["code", "fileName"],
+  properties: {
+    code: { type: "string" },
+    fileName: {
+      type: "string",
+      description: "Canonical portal/native filename.",
+    },
+    acceptedFileNames: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Optional exact case-insensitive accepted names, including canonical name. Restored legacy aliases: EG CALLCARD.xlsx and SG CALLCARD.xlsx. Aliases do not change worksheet/content validation or AWS landing names.",
+    },
+  },
+};
+paths["/api/workflows/prepaid/workspace"]!.get!.responses["200"] = {
+  description:
+    "Owned workspace; GET does not create sessions/jobs or bind configuration. Before processing setup, sources.collectionOnly=true, valid=false, accepted enumerates names allowed for storage, and guidelines describes the billing filename families. Accepted cycle codes are NOT approved required coverage. preparation.message explains that files may be uploaded now. A deployed worker binds complete configuration later without re-upload; out-of-coverage sources block queuing until explicitly removed. Existing configured sessions retain their snapshot.",
+  content: {
+    "application/json": {
+      schema: {
+        type: "object",
+        properties: {
+          sources: {
+            type: "object",
+            properties: {
+              required: { type: "array", items: sourceRequirement },
+              accepted: { type: "array", items: sourceRequirement },
+              collectionOnly: { type: "boolean" },
+              guidelines: { type: "array", items: { type: "string" } },
+              unexpected: { type: "array", items: { type: "string" } },
+              valid: {
+                type: "boolean",
+                description:
+                  "False for collection-only sessions, even when all base inputs are stored. Not proof of valid workbook contents.",
+              },
+            },
+          },
+          preparation: {
+            type: "object",
+            properties: {
+              configured: { type: "boolean" },
+              message: { type: "string", nullable: true },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+paths["/api/workflows/prepaid/runs/{runId}/sources"]!.get!.responses["200"] = {
+  description:
+    "Required sources, uploaded files and cycle completeness. Legacy filename aliases are additive metadata.",
+  content: {
+    "application/json": {
+      schema: {
+        type: "object",
+        properties: {
+          required: { type: "array", items: sourceRequirement },
+        },
+      },
+    },
+  },
+};
 add(
   "/workspace/sources/{code}",
   "delete",
@@ -630,6 +855,8 @@ add(
   "post",
   "Retry failed preparation using the same complete source session",
 );
+paths["/api/workflows/prepaid/workspace/prepare"]!.post!.description =
+  "Retries failed preparation or attempts to bind an existing collection-only session to a valid complete integration. If setup is unavailable, files remain collecting and no job/run/AWS execution is created. Valid configuration and all approved required inputs remain mandatory; unexpected uploaded cycles are not silently discarded.";
 add(
   "/workspace/reset",
   "post",

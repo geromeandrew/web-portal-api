@@ -7,6 +7,11 @@ import { createLogger } from "../platform/logger.js";
 import { createApp } from "../routes.js";
 import { runMigrations } from "../migrationRunner.js";
 
+const shutdowns = new WeakMap<Server, () => Promise<void>>();
+export async function stopServer(server: Server): Promise<void> {
+  await shutdowns.get(server)?.();
+}
+
 /** Expose probes while migrating, but never serve business traffic on a partial schema. */
 export async function startServer(): Promise<Server> {
   const logger = createLogger();
@@ -27,7 +32,13 @@ export async function startServer(): Promise<Server> {
           server!.closeIdleConnections?.();
         });
       if (migrationInFlight) await migrationInFlight.catch(() => {});
-      if (pool) await pool.end();
+      try {
+        if (pool) await pool.end();
+      } finally {
+        process.removeListener("SIGTERM", onSignal);
+        process.removeListener("SIGINT", onSignal);
+        if (server) shutdowns.delete(server);
+      }
     })());
   };
   const onSignal = () => {
@@ -73,6 +84,7 @@ export async function startServer(): Promise<Server> {
     logger.info("api.ready", {
       port: config.PORT,
     });
+    shutdowns.set(server, close);
     return server;
   } catch (error) {
     logger.error("api.startup_failed", {

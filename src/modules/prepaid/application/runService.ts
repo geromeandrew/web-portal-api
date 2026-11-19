@@ -1,114 +1,58 @@
 import { randomUUID } from "node:crypto";
-import type { PoolClient } from "pg";
+import type { PoolClient, Pool } from "pg";
 import { AppError } from "../../../errors.js";
 import { prepaidMaximumSourceBytes } from "../domain/limits.js";
-import { assertAdministrator } from "../../../rbac.js";
 import {
   manualIntegrationSchema,
   sourceCodes,
   expectedName,
   upstreamManifestSchema,
+  billingCoverageMatches,
+  requiredBillingSources,
+  matchesSourceName,
+  sourceFileRequirement,
   type Region,
-  type Integration,
   type editSchema,
 } from "../domain/contracts.js";
 import type { z } from "zod";
 import { PrepaidRepository } from "../infrastructure/repository.js";
 import { PrepaidStorage } from "../infrastructure/prepaidStorage.js";
-import { prepaidConfigurationReadiness } from "../domain/integrationReadiness.js";
+import { PrepaidConfigurationService } from "./configurationService.js";
+import { PrepaidReviewService } from "./reviewService.js";
 
+/** Run commands and source/revision invariants.
+ * Configuration and read-only review operations delegate to focused services,
+ * preserving the service interface used by routes and workers.
+ */
 export class PrepaidRunService {
   constructor(
     readonly repo: PrepaidRepository,
     readonly storage: PrepaidStorage,
-  ) {}
+    builtinConfiguration?: unknown,
+  ) {
+    this.configuration = new PrepaidConfigurationService(
+      repo,
+      builtinConfiguration,
+    );
+    this.review = new PrepaidReviewService(repo, storage);
+  }
+  private readonly configuration: PrepaidConfigurationService;
+  private readonly review: PrepaidReviewService;
   private t = (name: string) => this.repo.table(name);
   async readiness() {
-    const objects = [
-      "runs",
-      "upload_sessions",
-      "snapshot_context",
-      "integrations",
-      "source_totals",
-      "source_extractions",
-      "reference_refreshes",
-    ];
-    const present = await this.repo.pool.query(
-      "SELECT name,to_regclass(name) IS NOT NULL present FROM unnest($1::text[]) name UNION ALL SELECT 'backend_source_context',EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass($2) AND attname='context' AND NOT attisdropped) UNION ALL SELECT 'all_source_workflows',EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass($2) AND conname='prepaid_source_extractions_workflow_check' AND pg_get_constraintdef(oid) LIKE '%charges_318%')",
-      [objects.map((x) => this.t(x)), this.t("source_extractions")],
-    );
-    // Migration 009 is an additive admin capability. Existing installations
-    // using an approved external reference export do not lose their upload path.
-    const referenceExportsAvailable = !!present.rows.find(
-      (r) => r.name === this.t("reference_refreshes"),
-    )?.present;
-    const schemaInstalled = present.rows
-      .filter((r) => r.name !== this.t("reference_refreshes"))
-      .every((r) => r.present);
-    const hasIntegration = present.rows[3]?.present;
-    const stored = hasIntegration
-      ? (
-          await this.repo.pool.query(
-            `SELECT configuration FROM ${this.t("integrations")} WHERE id=true`,
-          )
-        ).rows[0]?.configuration
-      : undefined;
-    const configuration = prepaidConfigurationReadiness(stored);
-    const checks = [
-      {
-        code: "schema",
-        status: schemaInstalled ? "configured" : "missing",
-        message: schemaInstalled
-          ? "Prepaid schema is installed."
-          : "Install Prepaid migrations 001 through 008.",
-      },
-      ...configuration.checks,
-      {
-        code: "referenceExports",
-        status: referenceExportsAvailable ? "configured" : "missing",
-        message: referenceExportsAvailable
-          ? "Administrator reference refresh/export is available; live data and mapping approval still require verification."
-          : "Install additive migration 009 to enable administrator SAP reference refresh/export. Existing approved external reference exports remain supported.",
-      },
-      {
-        code: "externalVerification",
-        status: "not_verified",
-        message:
-          "Configuration alone does not verify report parsing, live reference data, AWS execution or SAP acceptance.",
-      },
-    ];
-    return {
-      schemaInstalled,
-      referenceExportsAvailable,
-      integrationConfigured: configuration.integrationConfigured,
-      readyForUploads: schemaInstalled && configuration.integrationConfigured,
-      legacyBasis: configuration.legacyBasis,
-      externalVerification: "not_verified",
-      checks,
-    };
+    return this.configuration.readiness();
+  }
+  async availableIntegration(db: Pool | PoolClient = this.repo.pool) {
+    return this.configuration.availableIntegration(db);
   }
   async integration() {
-    const result = await this.repo.pool.query(
-      `SELECT configuration FROM ${this.t("integrations")} WHERE id=true`,
-    );
-    if (!result.rows[0])
-      throw new AppError(
-        409,
-        "PREPAID_INTEGRATION_NOT_CONFIGURED",
-        "Prepaid processing is not configured. An administrator must configure ingestion, billing-cycle coverage and an approved manual export format. Preparation starts automatically after all required uploads.",
-      );
-    return manualIntegrationSchema.parse(result.rows[0].configuration);
+    return this.configuration.integration();
   }
   async configure(
     userId: string,
     configuration: z.infer<typeof manualIntegrationSchema>,
   ) {
-    await assertAdministrator(this.repo.pool, userId);
-    await this.repo.pool.query(
-      `INSERT INTO ${this.t("integrations")}(id,configuration,updated_by) VALUES(true,$1,$2) ON CONFLICT(id) DO UPDATE SET configuration=excluded.configuration,updated_by=excluded.updated_by,updated_at=now()`,
-      [JSON.stringify(manualIntegrationSchema.parse(configuration)), userId],
-    );
-    return { configured: true };
+    return this.configuration.configure(userId, configuration);
   }
   async create(userId: string, period: string) {
     const configuration = await this.integration();
@@ -259,7 +203,7 @@ export class PrepaidRunService {
     const config = manualIntegrationSchema.parse(run.configuration);
     if (
       !sourceCodes.includes(code as (typeof sourceCodes)[number]) &&
-      !config.expectedCycles.includes(code.split("_")[1])
+      !requiredBillingSources(config).includes(code)
     )
       throw new AppError(
         400,
@@ -267,7 +211,7 @@ export class PrepaidRunService {
         "This cycle is not configured for the run.",
       );
     const name = expectedName(code);
-    if (file.originalname.toLowerCase() !== name.toLowerCase())
+    if (!matchesSourceName(code, file.originalname))
       throw new AppError(400, "PREPAID_FILE_NAME_INVALID", `Expected ${name}.`);
     if (!file.buffer.length)
       throw new AppError(
@@ -347,10 +291,7 @@ export class PrepaidRunService {
     if (
       manifest.period !== run.period ||
       manifest.workspaceId !== run.workspace_id ||
-      manifest.coverage.length !== config.expectedCycles.length ||
-      !config.expectedCycles.every((c) =>
-        manifest.coverage.some((x) => x.cycle === c),
-      )
+      !billingCoverageMatches(config, manifest.coverage)
     )
       throw new AppError(
         400,
@@ -427,18 +368,13 @@ export class PrepaidRunService {
         )
       ).rows[0] ?? null;
     const required: string[] = [...sourceCodes];
-    if (!upstream)
-      for (const cycle of config.expectedCycles)
-        required.push(`308_${cycle}`, `318_${cycle}`);
+    if (!upstream) required.push(...requiredBillingSources(config));
     const missing = required.filter(
       (code) => !files.some((f) => f.source_code === code),
     );
     return {
       valid: !missing.length,
-      required: required.map((code) => ({
-        code,
-        fileName: expectedName(code),
-      })),
+      required: required.map(sourceFileRequirement),
       missing,
       files: files.filter((f) => required.includes(f.source_code)),
       upstream,
@@ -846,46 +782,16 @@ export class PrepaidRunService {
     offset = 0,
     revisionId?: string,
   ) {
-    await this.repo.own(this.repo.pool, userId, runId);
-    const rev = revisionId
-      ? (
-          await this.repo.pool.query(
-            `SELECT * FROM ${this.t("region_revisions")} WHERE id=$1 AND run_id=$2 AND region=$3`,
-            [revisionId, runId, region],
-          )
-        ).rows[0]
-      : await this.repo.revision(this.repo.pool, runId, region);
-    if (!rev)
-      throw new AppError(
-        404,
-        "PREPAID_REVISION_NOT_FOUND",
-        "Revision not found.",
-      );
-    const filter = variant ? "AND variant=$4" : "";
-    const order =
-      kind === "reconciliation_rows"
-        ? "revenue_type,allocation_type,tax_rate"
-        : "id";
-    const result = await this.repo.pool.query(
-      `SELECT *,count(*) OVER() total_count FROM ${this.t(kind)} WHERE revision_id=$1 ${filter} ORDER BY ${order} LIMIT $2 OFFSET $3`,
-      variant ? [rev.id, limit, offset, variant] : [rev.id, limit, offset],
-    );
-    const total =
-      result.rows[0]?.total_count ??
-      (
-        await this.repo.pool.query(
-          `SELECT count(*) total FROM ${this.t(kind)} WHERE revision_id=$1 ${variant ? "AND variant=$2" : ""}`,
-          variant ? [rev.id, variant] : [rev.id],
-        )
-      ).rows[0].total;
-    return {
-      revisionId: rev.id,
-      status: rev.status,
-      rows: result.rows,
+    return this.review.output(
+      userId,
+      runId,
+      region,
+      kind,
+      variant,
       limit,
       offset,
-      total: Number(total),
-    };
+      revisionId,
+    );
   }
   async referenceMembership(
     userId: string,
@@ -896,66 +802,15 @@ export class PrepaidRunService {
     offset = 0,
     revisionId?: string,
   ) {
-    const selected = await this.output(
+    return this.review.referenceMembership(
       userId,
       runId,
       region,
-      "allocations",
-      undefined,
-      1,
-      0,
-      revisionId,
-    );
-    const revision = (
-      await this.repo.pool.query(
-        `SELECT * FROM ${this.t("region_revisions")} WHERE id=$1`,
-        [selected.revisionId],
-      )
-    ).rows[0];
-    const evidence = (
-      await this.repo.pool.query(
-        `SELECT count(*)::int total,count(*) FILTER(WHERE nullif(trim(data->>'source_brand'),'') IS NULL)::int unknown FROM ${this.t("stage_reference")} WHERE snapshot_id=$1`,
-        [revision.source_snapshot_id],
-      )
-    ).rows[0];
-    if (!evidence.total || evidence.unknown)
-      return {
-        revisionId: selected.revisionId,
-        mode,
-        complete: false,
-        reason: "REFERENCE_MEMBERSHIP_SOURCE_BRAND_UNVERIFIED",
-        unknownRows: evidence.unknown,
-        total: 0,
-        rows: [] as Record<string, unknown>[],
-        limit,
-        offset,
-      };
-    const table = mode === "all" ? "membership_report" : "membership_report_v2";
-    const rows = (
-      await this.repo.pool.query(
-        `SELECT * FROM ${this.t(table)} WHERE revision_id=$1 ORDER BY revenue_type,sub_product,cost_element ${mode === "all" ? ",id" : ""} LIMIT $2 OFFSET $3`,
-        [selected.revisionId, limit, offset],
-      )
-    ).rows;
-    const total = Number(
-      (
-        await this.repo.pool.query(
-          `SELECT count(*) n FROM ${this.t(table)} WHERE revision_id=$1`,
-          [selected.revisionId],
-        )
-      ).rows[0].n,
-    );
-    return {
-      revisionId: selected.revisionId,
       mode,
-      complete: true,
-      reason: null,
-      unknownRows: 0,
-      total,
-      rows,
       limit,
       offset,
-    };
+      revisionId,
+    );
   }
   async allocationSummary(
     userId: string,
@@ -964,95 +819,31 @@ export class PrepaidRunService {
     variant: "mt" | "bb",
     revisionId?: string,
   ) {
-    const output = await this.output(
+    return this.review.allocationSummary(
       userId,
       runId,
       region,
-      "reconciliation_rows",
-      undefined,
-      1,
-      0,
+      variant,
       revisionId,
     );
-    const rows = await this.repo.pool.query(
-      `
-      WITH detail AS (
-        SELECT revenue_type,allocation_type,tax_rate,gross,amount,tax_amount,total_gross,difference,
-          CASE WHEN allocation_type='' THEN revenue_type ELSE allocation_type END label
-        FROM ${this.t("reconciliation_rows")} r WHERE revision_id=$1
-        AND EXISTS(SELECT 1 FROM ${this.t("allocations")} a WHERE a.revision_id=r.revision_id AND a.revenue_type=r.revenue_type AND a.allocation_type=r.allocation_type AND a.tax_rate=r.tax_rate AND a.variant=$2)
-      ), combined AS (
-        SELECT replace(label,'_',' ') AS type, CASE WHEN row_number() OVER(PARTITION BY label ORDER BY tax_rate)=1 THEN gross END AS gross, tax_rate*100 AS tax_rate, amount, tax_amount AS vat_oct,total_gross,NULL::numeric AS difference, label AS sort_label,0 AS sort_kind FROM detail
-        UNION ALL
-        SELECT replace(label,'_',' ')||' Difference',max(gross),0,NULL,NULL,sum(total_gross),max(gross)-sum(total_gross),label,1 FROM detail GROUP BY label
-        UNION ALL
-        SELECT 'Posting Key '||posting_key,NULL,0,sum(abs(round(amount2,2))),NULL,NULL,NULL,'ZZ'||posting_key,2
-        FROM ${this.t("allocations")} WHERE revision_id=$1 AND variant=$2 AND abs(round(amount2,2))>=0.01 GROUP BY posting_key
-      ) SELECT type,gross,tax_rate,amount,vat_oct,total_gross,difference FROM combined ORDER BY sort_label,sort_kind,tax_rate`,
-      [output.revisionId, variant],
-    );
-    return { revisionId: output.revisionId, rows: rows.rows };
   }
   async reportHistory(
     userId: string,
     date: string | undefined,
     limit: number,
     offset: number,
+    includeBatches = false,
   ) {
-    const result = await this.repo.pool.query(
-      `
-      WITH grouped AS (
-        SELECT r.id AS run_id,r.period,s.id AS snapshot_id,
-          COALESCE((SELECT max((f->>'created_at')::timestamptz) FROM jsonb_array_elements(s.source_files) f),s.created_at) AS uploaded_at,
-          COALESCE(NULLIF(u.display_name,''),u.email) AS uploaded_by,
-          jsonb_agg(jsonb_build_object('id',v.id,'region',v.region,'revision',v.revision,'frozen_at',v.frozen_at,
-            'exports',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',e.id,'kind',e.kind)) FROM ${this.t("exports")} e WHERE e.revision_id=v.id),'[]'::jsonb)) ORDER BY v.region,v.revision) AS revisions
-        FROM ${this.t("runs")} r JOIN ${this.repo.schema}.workspaces w ON w.id=r.workspace_id
-        JOIN ${this.t("region_revisions")} v ON v.run_id=r.id AND v.status IN ('frozen','superseded')
-        JOIN ${this.t("source_snapshots")} s ON s.id=v.source_snapshot_id
-        JOIN ${this.repo.schema}.app_user u ON u.id=w.user_id
-        WHERE w.user_id=$1 GROUP BY r.id,s.id,u.display_name,u.email
-      ) SELECT *,count(*) OVER() AS total_count FROM grouped
-        WHERE ($2::date IS NULL OR (uploaded_at AT TIME ZONE 'Asia/Singapore')::date=$2::date)
-        ORDER BY uploaded_at DESC,snapshot_id LIMIT $3 OFFSET $4`,
-      [userId, date ?? null, limit, offset],
-    );
-    return {
-      rows: result.rows,
-      limit,
-      offset,
-      hasMore: result.rows.length === limit,
-    };
+    return this.review.reportHistory(userId, date, limit, offset, includeBatches);
   }
   async history(userId: string, runId: string) {
-    await this.repo.own(this.repo.pool, userId, runId);
-    return (
-      await this.repo.pool.query(
-        `SELECT * FROM ${this.t("events")} WHERE run_id=$1 ORDER BY id DESC LIMIT 1000`,
-        [runId],
-      )
-    ).rows;
+    return this.review.history(userId, runId);
   }
   async exports(userId: string, runId: string) {
-    await this.repo.own(this.repo.pool, userId, runId);
-    return (
-      await this.repo.pool.query(
-        `SELECT e.* FROM ${this.t("exports")} e JOIN ${this.t("region_revisions")} r ON r.id=e.revision_id WHERE r.run_id=$1 ORDER BY e.created_at DESC`,
-        [runId],
-      )
-    ).rows;
+    return this.review.exports(userId, runId);
   }
   async download(userId: string, runId: string, exportId: string) {
-    const record = (await this.exports(userId, runId)).find(
-      (x) => x.id === exportId,
-    );
-    if (!record)
-      throw new AppError(
-        404,
-        "PREPAID_EXPORT_NOT_FOUND",
-        "Export not found in this run.",
-      );
-    return this.storage.get(record.object_key, this.storage.prefix(runId));
+    return this.review.download(userId, runId, exportId);
   }
   async retry(userId: string, runId: string, jobId: string) {
     return this.repo.transaction(async (db) => {

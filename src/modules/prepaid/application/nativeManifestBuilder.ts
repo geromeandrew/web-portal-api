@@ -5,6 +5,9 @@ import {
   periodSchema,
   sessionManifestSchema,
   manualIntegrationSchema,
+  expectedReportCycles,
+  expectedBillingCoverage,
+  requiredBillingSources,
   type Dataset,
 } from "../domain/contracts.js";
 import {
@@ -12,8 +15,10 @@ import {
   extractionReceiptSchema,
   type SourceWorkflow,
 } from "../domain/sourceExtraction.js";
-import { PrepaidStorage } from "../infrastructure/prepaidStorage.js";
+import { PrepaidStorage, sha256 } from "../infrastructure/prepaidStorage.js";
 import { PrepaidReferenceProvider } from "./referenceProvider.js";
+import { PrepaidReferenceCatalog } from "../infrastructure/referenceCatalog.js";
+import { verifyGlueSourceCapture } from "./glueSourceSnapshot.js";
 
 type Summary = NonNullable<
   z.infer<typeof sessionManifestSchema>["extractionReceipts"]
@@ -23,7 +28,10 @@ type Summary = NonNullable<
  * Financial reclassification still belongs to the existing PostgreSQL functions.
  */
 export class PrepaidNativeManifestBuilder {
-  constructor(readonly storage: PrepaidStorage) {}
+  constructor(
+    readonly storage: PrepaidStorage,
+    readonly catalog?: PrepaidReferenceCatalog,
+  ) {}
   async build(
     job: any,
     session: any,
@@ -34,7 +42,10 @@ export class PrepaidNativeManifestBuilder {
     if (
       configuration.preparationMode !== "native_sources" ||
       configuration.sourceExtraction?.coverage !== "all_sources" ||
-      !configuration.referenceExport?.approved
+      !(
+        configuration.referenceExport?.approved ||
+        configuration.referenceVersion?.approved
+      )
     )
       throw Error(
         "Native preparation needs all ten sources and an approved reference export.",
@@ -72,6 +83,53 @@ export class PrepaidNativeManifestBuilder {
         !isDeepStrictEqual(receipt.artifacts, summary.artifacts)
       )
         throw Error("Native source receipt identity/artifact mismatch.");
+      if (receipt.financialSource === "glue_raw_v1") {
+        await verifyGlueSourceCapture(
+          receipt,
+          {
+            workflow: receipt.workflow,
+            executionArn: receipt.executionArn,
+            envPrefix: configuration.sourceExtraction!.envPrefix,
+            resources: configuration.sourceExtraction?.resources,
+            bucket: this.storage.bucket,
+            sources: receipt.sources.map((source) => ({
+              id: source.id,
+              code: source.code,
+            })),
+          },
+          `${prefix}extractions/${receipt.workflow}/`,
+          this.storage,
+        );
+      }
+      if (
+        !isDeepStrictEqual(
+          receipt.egReportMapping,
+          configuration.sourceExtraction?.egReportMapping,
+        )
+      )
+        throw Error(
+          "Native receipt EG mapping differs from the approved preparation configuration.",
+        );
+      for (const input of receipt.nativeInputs ?? []) {
+        if (
+          !receipt.egReportMapping ||
+          input.sourceCode !== receipt.workflow ||
+          !receipt.sources.some(
+            (source) =>
+              source.id === input.sourceId && source.code === input.sourceCode,
+          ) ||
+          input.key !==
+            `${prefix}extractions/${receipt.workflow}/${input.sourceId}/native-input.xlsx`
+        )
+          throw Error("Native receipt adapted-input identity mismatch.");
+        const bytes = await this.storage.bytes(
+          input.key,
+          prefix,
+          100 * 1024 * 1024,
+        );
+        if (bytes.length !== input.size || sha256(bytes) !== input.sha256)
+          throw Error("Native receipt adapted-input checksum mismatch.");
+      }
       for (const source of receipt.sources) {
         if (
           !originals.some(
@@ -155,7 +213,12 @@ export class PrepaidNativeManifestBuilder {
               .parse(row);
             if (
               header.cycle !== artifact.sourceCode.slice(4) ||
-              !configuration.expectedCycles.includes(header.cycle)
+              !expectedReportCycles(
+                configuration,
+                artifact.name === "adjustment_headers"
+                  ? "adjustments"
+                  : "charges",
+              ).includes(header.cycle)
             )
               throw Error(
                 "Native billing header is outside expected cycle coverage.",
@@ -174,16 +237,26 @@ export class PrepaidNativeManifestBuilder {
           append(artifact.name, { ...row, period });
         }
       }
-    for (const cycle of configuration.expectedCycles)
-      if (!headers.has("308_" + cycle) || !headers.has("318_" + cycle))
+    for (const code of requiredBillingSources(configuration))
+      if (!headers.has(code))
         throw Error("Native preparation is missing a 308/318 cycle header.");
-    const reference = await new PrepaidReferenceProvider(this.storage).load(
-      configuration.referenceExport,
-      period,
-    );
-    for (const row of reference.rows) append("reference", row);
+    if (configuration.referenceVersion) {
+      if (!this.catalog)
+        throw Error(
+          "Database reference catalog is required; S3 fallback is disabled.",
+        );
+      await this.catalog.assertAvailable(configuration.referenceVersion);
+    } else {
+      const reference = await new PrepaidReferenceProvider(this.storage).load(
+        configuration.referenceExport!,
+        period,
+      );
+      for (const row of reference.rows) append("reference", row);
+    }
     const datasets = [];
     for (const name of Object.keys(datasetSchemas) as Dataset[]) {
+      // Database references are loaded directly inside the publishing transaction.
+      if (name === "reference" && configuration.referenceVersion) continue;
       await owns();
       const key = `${prefix}native-canonical/${name}.jsonl`;
       const saved = await this.storage.putVerified(
@@ -210,14 +283,11 @@ export class PrepaidNativeManifestBuilder {
       // Explicit backend identity: do not present a source execution as a final AWS adapter.
       executionArn: `backend:preparation:${job.id}`,
       sourceFiles: originals.map((s: any) => ({ id: s.id, sha256: s.sha256 })),
-      coverage: configuration.expectedCycles.map((cycle) => ({
-        cycle,
-        adjustments: true,
-        charges: true,
-      })),
+      coverage: expectedBillingCoverage(configuration),
       datasets,
       extractionReceipts: receipts,
       referenceSource: configuration.referenceExport,
+      referenceVersion: configuration.referenceVersion,
     });
     const manifestKey = `${prefix}native-manifest.json`;
     await owns();

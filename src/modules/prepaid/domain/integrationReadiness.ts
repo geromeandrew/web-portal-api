@@ -39,6 +39,7 @@ export const prepaidLegacyBasis = {
     cycleRowsAvailable: false,
     directPrepaidUseOfTablesVerified: false,
     paired308And318CoverageIsPortalContract: true,
+    independentNativeReportCyclesSupported: true,
   },
   journal: {
     view: "webPrepaidSystems_JV01",
@@ -58,15 +59,15 @@ export function prepaidConfigurationReadiness(stored: unknown) {
   const messages = {
     ingestStateMachine: {
       configured: native
-        ? "Backend-native preparation configured for ten workflows and an approved reference export; runtime acceptance remains unverified."
+        ? "Backend-native preparation configured for ten workflows and an approved reference version or export; runtime acceptance remains unverified."
         : "Ingestion name configured; deployment and V2 execution still require verification.",
       required: native
-        ? "Configure all_sources coverage, shared-write approval and an approved immutable reference export for backend-native preparation."
+        ? "Configure all_sources coverage, shared-write approval and an approved database reference version or immutable export for backend-native preparation."
         : "Configure the complete Standard V2 adapter, or choose backend-native preparation with the ten source workflows and an approved reference export.",
     },
     expectedCycles: {
       configured:
-        "Billing-cycle coverage configured; confirm it against the approved source period.",
+        "Billing-cycle coverage configured; confirm completeness for the approved source period. Native reportCycles can explicitly separate 308 and 318; omitted lists retain paired coverage.",
       required:
         "Configure actual required billing cycles. The supplied legacy cycle-table definitions contain no cycle rows.",
     },

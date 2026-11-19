@@ -4,6 +4,8 @@ import {
   datasetSchemas,
   manualIntegrationSchema,
   sessionManifestSchema,
+  billingCoverageMatches,
+  expectedReportCycles,
 } from "../domain/contracts.js";
 import { PrepaidRepository } from "../infrastructure/repository.js";
 import { PrepaidStorage } from "../infrastructure/prepaidStorage.js";
@@ -16,6 +18,8 @@ import {
 
 import { PrepaidNativeManifestBuilder } from "./nativeManifestBuilder.js";
 import { verifiedExtractionBridge } from "./sourceExtractionBridge.js";
+import { preparationTiming } from "../domain/preparationTiming.js";
+import { PrepaidReferenceCatalog } from "../infrastructure/referenceCatalog.js";
 
 /** Version 2 normalization discovers the period; it never dispatches SAP. */
 export class PrepaidPreparationWorker {
@@ -37,6 +41,15 @@ export class PrepaidPreparationWorker {
       )
     ).rows[0];
     if (!job) return false;
+    const startedAt = Date.now();
+    let preparationStage = "load_session";
+    this.logger.info("prepaid.preparation.started", {
+      jobId: job.id,
+      sessionId: job.session_id,
+      sourceVersion: job.source_version,
+      fileCount: job.source_files?.length ?? 0,
+      ...preparationTiming(job.created_at, startedAt),
+    });
     let lost = false,
       knownOutcome = false;
     const heartbeat = setInterval(() => {
@@ -68,6 +81,9 @@ export class PrepaidPreparationWorker {
         throw Error("Upload session changed before preparation.");
       }
       const config = manualIntegrationSchema.parse(session.configuration);
+      const catalog = new PrepaidReferenceCatalog(this.repo);
+      if (config.referenceVersion)
+        await catalog.assertAvailable(config.referenceVersion);
       const prefix = `${this.storage.sessionPrefix(session.id)}preparation/${job.id}/`;
       const native = config.preparationMode === "native_sources";
       let extractionReceipts = job.execution_input?.extractionReceipts;
@@ -86,15 +102,18 @@ export class PrepaidPreparationWorker {
         // Child inputs are persisted separately, so a lost dispatch response is
         // recoverable even before the final V2 ingestion request exists.
         job.source_extraction_pending = true;
+        preparationStage = "source_extraction";
         extractionReceipts = await (this.sourceWorker ??=
           new PrepaidSourceExtractionWorker(
             this.repo,
             this.storage,
             this.runner,
+            undefined,
+            this.logger,
           )).advance(job, session, config.sourceExtraction, token, () => lost);
         if (!extractionReceipts) {
           await this.repo.pool.query(
-            `UPDATE ${this.t("preparation_jobs")} SET status='waiting',lease_until=NULL,available_at=now()+interval '10 seconds' WHERE id=$1 AND lease_token=$2 AND status='running'`,
+            `UPDATE ${this.t("preparation_jobs")} SET status='waiting',error=NULL,lease_until=NULL,available_at=now()+interval '10 seconds' WHERE id=$1 AND lease_token=$2 AND status='running'`,
             [job.id, token],
           );
           return true;
@@ -102,6 +121,13 @@ export class PrepaidPreparationWorker {
       }
       let manifest: ReturnType<typeof sessionManifestSchema.parse>;
       if (native) {
+        preparationStage = "assemble_native_manifest";
+        this.logger.info("prepaid.preparation.progress", {
+          jobId: job.id,
+          sessionId: job.session_id,
+          stage: preparationStage,
+          ...preparationTiming(job.created_at, startedAt),
+        });
         if (!job.execution_input) {
           job.execution_input = {
             contractVersion: 2,
@@ -131,7 +157,10 @@ export class PrepaidPreparationWorker {
         }
         let built;
         try {
-          built = await new PrepaidNativeManifestBuilder(this.storage).build(
+          built = await new PrepaidNativeManifestBuilder(
+            this.storage,
+            catalog,
+          ).build(
             job,
             session,
             config,
@@ -149,7 +178,11 @@ export class PrepaidPreparationWorker {
         if (
           manifest.producer !== "backend" ||
           manifest.executionArn !== `backend:preparation:${job.id}` ||
-          !isDeepStrictEqual(manifest.referenceSource, config.referenceExport)
+          !isDeepStrictEqual(
+            manifest.referenceSource,
+            config.referenceExport,
+          ) ||
+          !isDeepStrictEqual(manifest.referenceVersion, config.referenceVersion)
         )
           throw Error("Native manifest backend/reference identity mismatch.");
       } else {
@@ -271,16 +304,11 @@ export class PrepaidPreparationWorker {
         )
       )
         throw Error("Manifest does not attest the exact uploaded sources.");
-      if (
-        manifest.coverage.length !== config.expectedCycles.length ||
-        new Set(manifest.coverage.map((c) => c.cycle)).size !==
-          config.expectedCycles.length ||
-        !config.expectedCycles.every((c) =>
-          manifest.coverage.some((x) => x.cycle === c),
-        )
-      )
+      if (!billingCoverageMatches(config, manifest.coverage))
         throw Error("Incomplete or duplicate billing-cycle coverage.");
-      const expected = Object.keys(datasetSchemas);
+      const expected = Object.keys(datasetSchemas).filter(
+        (name) => name !== "reference" || !config.referenceVersion,
+      );
       if (
         manifest.datasets.length !== expected.length ||
         new Set(manifest.datasets.map((d) => d.name)).size !==
@@ -302,6 +330,12 @@ export class PrepaidPreparationWorker {
             prefix,
           )
         : undefined;
+      preparationStage = "publish_layouts";
+      this.logger.info("prepaid.preparation.progress", {
+        jobId: job.id,
+        sessionId: job.session_id,
+        stage: preparationStage,
+      });
       await this.repo.transaction(async (db) => {
         const owner = (
           await db.query(
@@ -402,6 +436,24 @@ export class PrepaidPreparationWorker {
           `INSERT INTO ${this.t("snapshot_context")}(snapshot_id,session_id,source_version) VALUES($1,$2,$3)`,
           [snapshotId, session.id, job.source_version],
         );
+        if (config.referenceVersion) {
+          // Pinned immutable source, read from this same PostgreSQL database.
+          // No reference S3 object is requested or produced in this mode.
+          const reference = await catalog.load(
+            config.referenceVersion,
+            manifest.period,
+            db,
+          );
+          for (let offset = 0; offset < reference.rows.length; offset += 500)
+            await db.query(
+              `INSERT INTO ${this.t("stage_reference")}(snapshot_id,row_number,data) SELECT $1,$2+ordinality::bigint,value FROM jsonb_array_elements($3::jsonb) WITH ORDINALITY`,
+              [
+                snapshotId,
+                offset,
+                JSON.stringify(reference.rows.slice(offset, offset + 500)),
+              ],
+            );
+        }
         const periods = new Set<string>();
         let sgMaximum = 0;
         for (const descriptor of manifest.datasets) {
@@ -441,7 +493,9 @@ export class PrepaidPreparationWorker {
               (descriptor.name === "adjustments" ||
                 descriptor.name === "charges") &&
               "cycle" in data &&
-              !config.expectedCycles.includes(data.cycle)
+              !expectedReportCycles(config, descriptor.name).includes(
+                data.cycle,
+              )
             )
               throw Error(
                 "A billing cycle is outside the configured coverage.",
@@ -525,12 +579,30 @@ export class PrepaidPreparationWorker {
           owner.user_id,
         );
       });
+      this.logger.info("prepaid.preparation.completed", {
+        jobId: job.id,
+        sessionId: job.session_id,
+        sourceVersion: job.source_version,
+        period: manifest.period,
+        ...preparationTiming(job.created_at, startedAt),
+      });
     } catch (e) {
       if (e instanceof PrepaidSourceExtractionError) knownOutcome = true;
       const message =
         e instanceof Error ? e.message : "Source preparation failed.";
       this.logger.error("prepaid.preparation.failed", {
         jobId: job.id,
+        sessionId: job.session_id,
+        sourceVersion: job.source_version,
+        stage: preparationStage,
+        retryable:
+          !knownOutcome &&
+          Boolean(job.execution_input || job.source_extraction_pending),
+        ...((e as any)?.prepaidContext ?? {}),
+        ...preparationTiming(job.created_at, startedAt),
+        errorName: e instanceof Error ? e.name : undefined,
+        awsRequestId: (e as any)?.$metadata?.requestId,
+        awsHttpStatus: (e as any)?.$metadata?.httpStatusCode,
         message,
       });
       await this.repo.transaction(async (db) => {

@@ -1,0 +1,193 @@
+/** Current run/session API inventory, alongside the retained compatibility routes. */
+export const prepaidAuditRoutes = [
+  ["GET", "/api/workflows/prepaid/readiness", "prepaid.readiness.read"],
+  ["GET", "/api/workflows/prepaid/report-history", "prepaid.history.read"],
+  ["GET", "/api/workflows/prepaid/integration", "prepaid.configuration.read"],
+  ["PUT", "/api/workflows/prepaid/integration", "prepaid.configuration.update"],
+  [
+    "POST",
+    "/api/workflows/prepaid/reference-exports",
+    "prepaid.reference_export.create",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/reference-exports/:referenceId",
+    "prepaid.reference_export.read",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/reference-exports/:referenceId/reconcile",
+    "prepaid.reference_export.reconcile",
+  ],
+  ["GET", "/api/workflows/prepaid/aws-batch", "prepaid.batch.read"],
+  [
+    "GET",
+    "/api/workflows/prepaid/aws-batch/review/:region/:section",
+    "prepaid.batch.review",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/aws-batch/:batchId/journal/:region",
+    "prepaid.journal.transfer",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/aws-batch/journal/:region",
+    "prepaid.journal.transfer",
+  ],
+  ["POST", "/api/workflows/prepaid/aws-batch/action", "prepaid.batch.action"],
+  ["GET", "/api/workflows/prepaid/workspace", "prepaid.workspace.read"],
+  [
+    "GET",
+    "/api/workflows/prepaid/workspace/extractions",
+    "prepaid.extractions.read",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/workspace/sources/:code",
+    "prepaid.source.upload",
+  ],
+  [
+    "DELETE",
+    "/api/workflows/prepaid/workspace/sources/:code",
+    "prepaid.source.remove",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/workspace/prepare",
+    "prepaid.preparation.request",
+  ],
+  ["POST", "/api/workflows/prepaid/workspace/reset", "prepaid.workspace.reset"],
+  ["GET", "/api/workflows/prepaid/runs", "prepaid.runs.read"],
+  ["POST", "/api/workflows/prepaid/runs", "prepaid.run.create"],
+  ["GET", "/api/workflows/prepaid/runs/:runId", "prepaid.run.read"],
+  ["POST", "/api/workflows/prepaid/runs/:runId/select", "prepaid.run.select"],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/reset-workspace",
+    "prepaid.workspace.reset",
+  ],
+  ["GET", "/api/workflows/prepaid/runs/:runId/sources", "prepaid.sources.read"],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/sources/:code",
+    "prepaid.source.upload",
+  ],
+  [
+    "DELETE",
+    "/api/workflows/prepaid/runs/:runId/sources/:code",
+    "prepaid.source.remove",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/upstream",
+    "prepaid.upstream.register",
+  ],
+  [
+    "DELETE",
+    "/api/workflows/prepaid/runs/:runId/upstream",
+    "prepaid.upstream.remove",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/process",
+    "prepaid.processing.request",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region",
+    "prepaid.layout.read",
+  ],
+  [
+    "PATCH",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region",
+    "prepaid.layout.save",
+  ],
+  [
+    "PATCH",
+    "/api/workflows/prepaid/aws-batch/review/:region/layout",
+    "prepaid.layout.save",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/import",
+    "prepaid.layout.import",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/reset",
+    "prepaid.layout.reset",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/validate",
+    "prepaid.layout.validate",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/edit",
+    "prepaid.layout.edit",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/freeze",
+    "prepaid.layout.freeze",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/allocation-summary",
+    "prepaid.allocation.read",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/allocations",
+    "prepaid.allocation.read",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/reconciliation",
+    "prepaid.reconciliation.read",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/reconciliation.csv",
+    "prepaid.reconciliation.transfer",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/jv",
+    "prepaid.jv.read",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/reference-membership",
+    "prepaid.reference_membership.read",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/runs/:runId/layouts/:region/reference-membership.csv",
+    "prepaid.reference_membership.transfer",
+  ],
+  ["GET", "/api/workflows/prepaid/runs/:runId/history", "prepaid.history.read"],
+  [
+    "GET",
+    "/api/workflows/prepaid/runs/:runId/reports/:snapshotFile",
+    "prepaid.report.transfer",
+  ],
+  ["GET", "/api/workflows/prepaid/runs/:runId/exports", "prepaid.exports.read"],
+  [
+    "GET",
+    "/api/workflows/prepaid/runs/:runId/exports/:exportId/download",
+    "prepaid.export.transfer",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/jobs/:jobId/retry",
+    "prepaid.job.retry",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/runs/:runId/jobs/:jobId/reconcile",
+    "prepaid.job.reconcile",
+  ],
+] as const;

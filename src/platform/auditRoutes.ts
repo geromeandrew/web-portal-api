@@ -1,5 +1,22 @@
+import { prepaidAuditRoutes } from "../modules/prepaid/api/auditRoutes.js";
 /** Public method/path inventory: no request values are logged before validation. */
 export const auditRoutes = [
+  ...prepaidAuditRoutes,
+  [
+    "GET",
+    "/api/workflows/prepaid/reference-versions",
+    "prepaid.reference_versions.read",
+  ],
+  [
+    "POST",
+    "/api/workflows/prepaid/reference-versions",
+    "prepaid.reference_version.import",
+  ],
+  [
+    "GET",
+    "/api/workflows/prepaid/reference-versions/:checksum/file",
+    "prepaid.reference_version.transfer",
+  ],
   ["GET", "/api/auth/me", "auth.session_validated"],
   ["GET", "/api/admin/modules", "admin.modules.read"],
   ["GET", "/api/admin/users", "admin.users.read"],

@@ -58,6 +58,7 @@ describe("Bounded legacy-sized Prepaid uploads", () => {
     await vi.waitFor(() => expect(held.length).toBe(2));
     const busy = await fetch(url, { method: "POST", body: body(10) });
     expect(busy.status).toBe(503);
+    expect(busy.headers.get("Retry-After")).toBe("1");
     expect((await busy.json()).error.code).toBe("PREPAID_UPLOAD_BUSY");
     held[0].end();
     held[1].end();

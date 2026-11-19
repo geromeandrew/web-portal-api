@@ -228,11 +228,15 @@ describe.skipIf(!url)("SAP reference operation (disposable PostgreSQL)", () => {
     const done = await get(job.id);
     expect(done.status).toBe("completed");
     expect(runner.start).not.toHaveBeenCalled();
+    expect(runner.verify).not.toHaveBeenCalled();
     expect(done.provenance).toMatchObject({
       client: "300",
       company: "GLOB",
       rowCount: 1,
       mappingApproved: false,
+      sapSource: null,
+      jobName: null,
+      scriptSha256: null,
     });
     const descriptor = done.result.referenceExport;
     expect(descriptor.approved).toBeUndefined();
@@ -362,6 +366,27 @@ describe.skipIf(!url)("SAP reference operation (disposable PostgreSQL)", () => {
     expect(runner.start).not.toHaveBeenCalled();
     expect(lockOwner).toBeUndefined();
   });
+  it("exports existing data even when the unrelated refresh-job destination is incompatible", async () => {
+    runner.verify.mockRejectedValue(
+      Error("shared job targets a different database"),
+    );
+    try {
+      await pool.query(`UPDATE "${references}".ztf0455s SET duom=''`);
+      const job = await service.create(admin, request());
+      await tick();
+      const done = await get(job.id);
+      expect(done.status).toBe("completed");
+      expect(runner.verify).not.toHaveBeenCalled();
+      expect(runner.start).not.toHaveBeenCalled();
+      const loaded = await new PrepaidReferenceProvider(storage).load(
+        done.result.referenceExport,
+        "2026-09",
+      );
+      expect(loaded.rows[0].uom).toBe("");
+    } finally {
+      runner.verify.mockResolvedValue(undefined);
+    }
+  });
   it("waits for shared extraction ownership instead of failing or overwriting", async () => {
     coordination.acquire.mockRejectedValueOnce(
       new SharedExtractionBusy("Another source owns the lock"),
@@ -438,10 +463,8 @@ describe.skipIf(!url)("SAP reference operation (disposable PostgreSQL)", () => {
           ...(method === "POST" ? { body: JSON.stringify(request()) } : {}),
         },
       );
-      expect({
-        status: response.status,
-        body: await response.json(),
-      }).toMatchObject({ status: 403 });
+      const body = await response.json();
+      expect(response.status, JSON.stringify(body)).toBe(403);
     }
     const denied = await fetch(
       `${base}/reference-exports/${randomUUID()}/reconcile`,

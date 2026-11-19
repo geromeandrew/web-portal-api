@@ -25,6 +25,9 @@ services:
       AWS_REGION: ${AWS_REGION}
       AWS_LOCAL: "false"
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES}
+      SFN_PREFIX: ${SFN_PREFIX:-}
+      PREPAID_CONFIGURATION_JSON: ${PREPAID_CONFIGURATION_JSON:-}
+      PREPAID_FULL_BATCH_DELIVERY_ENABLED: ${PREPAID_FULL_BATCH_DELIVERY_ENABLED:-false}
       PREPAID_MAX_UPLOAD_BYTES: ${PREPAID_MAX_UPLOAD_BYTES:-104857600}
       ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES}
     command: ["node", "dist/migrate.js"]
@@ -32,6 +35,10 @@ services:
     restart: "no"
 
   api:
+    command: ["node", "dist/api.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     image: ${API_IMAGE:?Set API_IMAGE}
     ports:
       - "3001:3001"
@@ -62,6 +69,9 @@ services:
     environment:
       <<: *api_environment
     command: ["node", "dist/migratePrepaid.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     networks: [portal]
     restart: "no"
 
@@ -71,7 +81,13 @@ services:
     environment:
       <<: *api_environment
     command: ["node", "dist/prepaidWorker.js"]
+    depends_on:
+      prepaid-migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 30s
     read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m,mode=1777
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     networks: [portal]

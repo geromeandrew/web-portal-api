@@ -138,7 +138,11 @@ export class PrepaidReferenceRefreshWorker {
       }
       await this.coordination.acquire(`reference:${job.id}`);
       if (job.phase === "queued") {
-        await this.runner.verify(await this.source.identity());
+        // An existing-data export reads this application's database, not the
+        // Glue destination. A shared job targeting another environment must not
+        // prevent a read-only export from a populated local reference copy.
+        if (job.request.mode === "refresh_and_export")
+          await this.runner.verify(await this.source.identity());
         await this.idleSources();
         await this.runner.idle();
         if (job.request.mode === "refresh_and_export") {
@@ -182,7 +186,9 @@ export class PrepaidReferenceRefreshWorker {
         await this.save(job, { phase: "exporting" });
       }
       if (job.phase === "exporting") {
-        await this.runner.verify(await this.source.identity());
+        const sourceDatabase = await this.source.identity();
+        if (job.request.mode === "refresh_and_export")
+          await this.runner.verify(sourceDatabase);
         await this.runner.idle(job.glue_run_id ?? undefined);
         await this.idleSources();
         const snapshot = await this.source.snapshot(job.request.period);
@@ -200,13 +206,20 @@ export class PrepaidReferenceRefreshWorker {
           );
         const provenance = {
           source: `${referenceRefreshJob.schema}.${referenceRefreshJob.table}`,
-          sapSource: "SAPPRD.ZTF0455S",
+          sourceDatabase,
+          sapSource:
+            job.request.mode === "refresh_and_export"
+              ? "SAPPRD.ZTF0455S"
+              : null,
           jobName:
             job.request.mode === "refresh_and_export"
               ? referenceRefreshJob.name
               : null,
           glueRunId: job.glue_run_id,
-          scriptSha256: referenceRefreshJob.scriptSha256,
+          scriptSha256:
+            job.request.mode === "refresh_and_export"
+              ? referenceRefreshJob.scriptSha256
+              : null,
           period: job.request.period,
           client: "300",
           company: "GLOB",

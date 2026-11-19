@@ -1,6 +1,7 @@
 import {
   DescribeExecutionCommand,
   DescribeStateMachineCommand,
+  GetExecutionHistoryCommand,
   StartExecutionCommand,
   type SFNClient,
 } from "@aws-sdk/client-sfn";
@@ -9,6 +10,26 @@ import { describe, expect, it, vi } from "vitest";
 import { AwsStepFunctionsRunner } from "../src/stepFunctionsRunner.js";
 
 describe("AwsStepFunctionsRunner", () => {
+  it("uses the newest import stage from execution history without reading its data", async () => {
+    const send = vi.fn().mockResolvedValue({
+      events: [
+        { stateEnteredEventDetails: { name: "eg_import" } },
+        { stateEnteredEventDetails: { name: "Import" } },
+        { stateEnteredEventDetails: { name: "Refresh_ZTF0455S" } },
+        { stateEnteredEventDetails: { name: "Extract_All" } },
+      ],
+    });
+    const runner = new AwsStepFunctionsRunner(
+      { send } as unknown as SFNClient,
+      { send: vi.fn() } as unknown as STSClient,
+      "us-east-1",
+    );
+    await expect(runner.prepaidImportStage("execution-arn")).resolves.toBe("importing-layouts");
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(GetExecutionHistoryCommand);
+    expect(command.input).toMatchObject({ reverseOrder: true, includeExecutionData: false });
+  });
+
   it("recovers a named execution after jsonb key reordering but rejects changed values", async () => {
     const send = vi
       .fn()
@@ -222,5 +243,15 @@ describe("AwsStepFunctionsRunner", () => {
         "arn:aws:states:ap-southeast-1:123456789012:stateMachine:machine",
       includedData: "METADATA_ONLY",
     });
+
+    stepFunctionsSend.mockResolvedValueOnce({
+      name: "machine",
+      stateMachineArn: "arn:aws:states:us-east-1:123456789012:stateMachine:machine",
+      type: "STANDARD",
+      creationDate: new Date("2026-08-01T00:00:00Z"),
+    });
+    await expect(runner.describeStateMachine("machine")).rejects.toThrow(
+      "AWS Step Functions returned a different state machine.",
+    );
   });
 });

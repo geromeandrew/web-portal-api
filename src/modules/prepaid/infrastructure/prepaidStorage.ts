@@ -2,6 +2,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -10,6 +11,7 @@ import { createAwsClientOptions } from "../../../aws.js";
 import type { Config } from "../../../config.js";
 import { AppError } from "../../../errors.js";
 import { LegacyLanding } from "./legacyLanding.js";
+import type { Logger } from "../../../platform/logger.js";
 
 export const sha256 = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -18,8 +20,8 @@ export class PrepaidStorage {
     private readonly client: Pick<S3Client, "send">,
     readonly bucket: string,
   ) {}
-  legacyLanding() {
-    return new LegacyLanding(this.client, this.bucket);
+  legacyLanding(logger?: Logger) {
+    return new LegacyLanding(this.client, this.bucket, logger);
   }
   async putVerified(
     key: string,
@@ -112,6 +114,36 @@ export class PrepaidStorage {
       throw new Error(
         "Dataset checksum or row count does not match its manifest.",
       );
+  }
+  async deliveredJournalKey(prefix: string, filename: string, startedAt: string, completedAt: string | null) {
+    const start = Date.parse(startedAt);
+    const end = completedAt ? Date.parse(completedAt) : Date.now();
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start)
+      throw Error("Invalid journal delivery window.");
+
+    let match: string | undefined;
+    let token: string | undefined;
+    do {
+      const page = await this.client.send(new ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: prefix,
+        ContinuationToken: token,
+      }));
+      for (const object of page.Contents ?? []) {
+        const key = object.Key;
+        const timestamp = object.LastModified?.getTime();
+        if (!key || timestamp == null || timestamp < start || timestamp > end)
+          continue;
+        const [folder, name, extra] = key.slice(prefix.length).split("/");
+        if (!/^\d{8}[-_]\d{4}$/.test(folder) || name !== filename || extra !== undefined)
+          continue;
+        if (match) throw Error("Multiple delivered journals match this operation.");
+        match = key;
+      }
+      token = page.NextContinuationToken;
+    } while (token);
+    if (!match) throw Error("No journal was found in the delivery archive.");
+    return match;
   }
   async get(key: string, prefix: string) {
     this.assertKey(key, prefix);

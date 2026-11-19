@@ -9,7 +9,10 @@ import { prepaidSourceExtractionMigrationSql } from "../src/modules/prepaid/infr
 import { prepaidAllSourceMigrationSql } from "../src/modules/prepaid/infrastructure/allSourceMigration.js";
 import { prepaidSourceBackendMigrationSql } from "../src/modules/prepaid/infrastructure/sourceBackendMigration.js";
 import { prepaidReferenceRefreshMigrationSql } from "../src/modules/prepaid/infrastructure/referenceRefreshMigration.js";
+import { prepaidAccountingParityMigrationSql } from "../src/modules/prepaid/infrastructure/accountingParityMigration.js";
+import { prepaidReferenceLookupMigrationSql } from "../src/modules/prepaid/infrastructure/referenceLookupMigration.js";
 import { PrepaidWorkspaceService } from "../src/modules/prepaid/application/workspaceService.js";
+import { approvedProvidedEgReportMapping } from "../src/modules/prepaid/domain/builtinConfiguration.js";
 import { PrepaidPreparationWorker } from "../src/modules/prepaid/application/preparationWorker.js";
 import { frozenReports } from "../src/modules/prepaid/application/reportService.js";
 import { unzipSync } from "fflate";
@@ -26,6 +29,8 @@ import {
   datasetSchemas,
   expectedName,
   jvHeaders,
+  sourceCodes,
+  manualIntegrationSchema,
   type Dataset,
   type Integration,
 } from "../src/modules/prepaid/domain/contracts.js";
@@ -66,6 +71,7 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
       if (objects.has(key))
         throw Object.assign(new Error("exists"), {
           name: "PreconditionFailed",
+          $metadata: { httpStatusCode: 412 },
         });
       objects.set(key, Buffer.from(command.input.Body));
       return {};
@@ -152,31 +158,42 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
     await q(prepaidSourceBackendMigrationSql(schema));
     await q(prepaidAllSourceMigrationSql(schema, schema + "_raw"));
     await q(prepaidReferenceRefreshMigrationSql(schema));
+    await q(prepaidAccountingParityMigrationSql(schema));
+    await q(prepaidReferenceLookupMigrationSql(schema));
     await service.configure(user, configuration);
     const app = express();
     app.use(express.json());
     const config = { DATABASE_SCHEMA: schema } as Config;
+    const dependencies = {
+      pool,
+      config,
+      prepaidStorage: storage,
+      authenticate: (req, res, next) => {
+        const id = req.header("x-test-user");
+        if (!id) {
+          res.sendStatus(401);
+          return;
+        }
+        req.auth = { userId: id } as any;
+        next();
+      },
+    } as AppDependencies;
+    const upload = multer({
+      storage: multer.memoryStorage(),
+      limits: { fileSize: 1000 },
+    }).single("file");
+    app.use("/prepaid", createPrepaidRouter(dependencies, upload));
     app.use(
-      "/prepaid",
+      "/batch-prepaid",
       createPrepaidRouter(
         {
-          pool,
-          config,
-          prepaidStorage: storage,
-          authenticate: (req, res, next) => {
-            const id = req.header("x-test-user");
-            if (!id) {
-              res.sendStatus(401);
-              return;
-            }
-            req.auth = { userId: id } as any;
-            next();
+          ...dependencies,
+          config: {
+            ...config,
+            SFN_PREFIX: "isg-esatp-st",
           },
-        } as AppDependencies,
-        multer({
-          storage: multer.memoryStorage(),
-          limits: { fileSize: 1000 },
-        }).single("file"),
+        },
+        upload,
       ),
     );
     app.use(createErrorHandler(logger, config));
@@ -434,6 +451,41 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
     expect(finished.session.status).toBe("ready");
     return { workspace, finished, job };
   }
+  it("keeps readiness scoped while unrelated constraints are created and dropped", async () => {
+    const noise = `${schema}_noise`;
+    await pool.query(`CREATE SCHEMA "${noise}"`);
+    try {
+      await Promise.all([
+        (async () => {
+          for (let i = 0; i < 20; i++) {
+            await pool.query(
+              `CREATE TABLE "${noise}".changing(value int CHECK(value>0)); DROP TABLE "${noise}".changing`,
+            );
+          }
+        })(),
+        (async () => {
+          for (let i = 0; i < 20; i++) {
+            expect(await service.readiness()).toMatchObject({
+              schemaInstalled: true,
+              readyForUploads: true,
+            });
+          }
+        })(),
+      ]);
+    } finally {
+      // Exact generated schema owned by this guarded disposable-database test.
+      await pool.query(`DROP SCHEMA "${noise}" CASCADE`);
+    }
+  });
+  it("requires migration 015 before exposing an enabled batch workflow", async () => {
+    const response = await fetch(new URL("/batch-prepaid/aws-batch", base), {
+      headers: { "x-test-user": user },
+    });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: { code: "PREPAID_BATCH_SCHEMA_NOT_INSTALLED" },
+    });
+  });
   it("reports configured readiness without executing AWS; identifies missing/invalid setup", async () => {
     const before = start.mock.calls.length;
     expect(await service.readiness()).toMatchObject({
@@ -458,7 +510,8 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
     await q("DELETE FROM prepaid_integrations");
     expect(await service.readiness()).toMatchObject({
       integrationConfigured: false,
-      readyForUploads: false,
+      readyForUploads: true,
+      readyForPreparation: false,
     });
     await q(
       "INSERT INTO prepaid_integrations(id,configuration,updated_by) VALUES(true,'{}',$1)",
@@ -469,6 +522,369 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
     );
     await service.configure(user, configuration);
     expect(start.mock.calls.length).toBe(before);
+  });
+  async function uploadActor() {
+    const actor = randomUUID();
+    await q("INSERT INTO app_user(id) VALUES($1)", [actor]);
+    return actor;
+  }
+  it("uses built-ins without seeding rows, respects overrides, and does not mask invalid database settings", async () => {
+    const defaults = new PrepaidRunService(repo, storage, configuration);
+    await q("DELETE FROM prepaid_integrations");
+    try {
+      expect(await defaults.integration()).toMatchObject(configuration);
+      expect(await defaults.readiness()).toMatchObject({
+        configurationSource: "built_in",
+        readyForPreparation: true,
+      });
+      expect(
+        (await q("SELECT count(*)::int count FROM prepaid_integrations"))
+          .rows[0].count,
+      ).toBe(0);
+      const override = { ...configuration, expectedCycles: ["03"] };
+      await defaults.configure(user, override);
+      expect((await defaults.integration()).expectedCycles).toEqual(["03"]);
+      expect(await defaults.readiness()).toMatchObject({
+        configurationSource: "database",
+        readyForPreparation: true,
+      });
+      await q("UPDATE prepaid_integrations SET configuration='{}'");
+      expect(await defaults.availableIntegration()).toBeNull();
+      expect(await defaults.readiness()).toMatchObject({
+        configurationSource: "database",
+        readyForPreparation: false,
+      });
+    } finally {
+      await service.configure(user, configuration);
+    }
+  });
+  async function closeUploadActor(actor: string) {
+    await q(
+      "UPDATE prepaid_preparation_jobs SET status='cancelled' WHERE session_id IN(SELECT s.id FROM prepaid_upload_sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE w.user_id=$1) AND status IN('queued','running','waiting')",
+      [actor],
+    );
+    await q(
+      "UPDATE prepaid_upload_sessions SET active=false WHERE workspace_id IN(SELECT id FROM workspaces WHERE user_id=$1)",
+      [actor],
+    );
+    await service.configure(user, configuration);
+  }
+  it("replays upload identities without extra versions/jobs, rejects changed bytes and does not cross a reset", async () => {
+    const actor = await uploadActor(),
+      workspace = new PrepaidWorkspaceService(service),
+      id = randomUUID();
+    await q("DELETE FROM prepaid_integrations");
+    const file = {
+      originalname: "KE24.XLSX",
+      mimetype: "application/octet-stream",
+      buffer: Buffer.from("PK synthetic retry fixture"),
+    };
+    try {
+      const [saved, duplicate] = await Promise.all([
+        workspace.upload(actor, "ke24", file, id),
+        workspace.upload(actor, "ke24", file, id),
+      ]);
+      expect(duplicate).toEqual(saved);
+      const before = await workspace.state(actor);
+      const [a, b] = await Promise.all([
+        workspace.upload(actor, "ke24", file, id),
+        workspace.upload(actor, "ke24", file, id),
+      ]);
+      expect(a).toEqual(saved);
+      expect(b).toEqual(saved);
+      const after = await workspace.state(actor);
+      expect(after.session.version).toBe(before.session.version);
+      expect(after.sources.files).toHaveLength(1);
+      expect(
+        (
+          await q(
+            "SELECT 1 FROM prepaid_preparation_jobs WHERE session_id=$1",
+            [after.session.id],
+          )
+        ).rowCount,
+      ).toBe(0);
+      await expect(
+        workspace.upload(
+          actor,
+          "ke24",
+          { ...file, buffer: Buffer.from("PK different content") },
+          id,
+        ),
+      ).rejects.toMatchObject({ code: "PREPAID_UPLOAD_ID_CONFLICT" });
+      // A lost acknowledgement may be retried after the last upload already
+      // queued preparation. Receipt replay must not require mutable sources.
+      await q(
+        "UPDATE prepaid_upload_sessions SET status='pending' WHERE id=$1",
+        [after.session.id],
+      );
+      expect(await workspace.upload(actor, "ke24", file, id)).toEqual(saved);
+      expect((await workspace.state(actor)).session.status).toBe("pending");
+      await q("UPDATE prepaid_upload_sessions SET active=false WHERE id=$1", [
+        after.session.id,
+      ]);
+      await expect(
+        workspace.upload(actor, "ke24", file, id),
+      ).rejects.toMatchObject({ code: "PREPAID_UPLOAD_ID_CONFLICT" });
+    } finally {
+      await closeUploadActor(actor);
+    }
+  });
+  it("explains old mapping failures without rewriting history and binds approval only to a new session", async () => {
+    const actor = await uploadActor();
+    const approvedConfig = manualIntegrationSchema.parse({
+      ...configuration,
+      sourceExtraction: {
+        envPrefix: "isg-esatp-dv",
+        coverage: "all_sources",
+        sharedWritesApproved: true,
+        egReportMapping: approvedProvidedEgReportMapping,
+      },
+    });
+    const runs = new PrepaidRunService(repo, storage, approvedConfig);
+    const workspace = new PrepaidWorkspaceService(runs);
+    const file = {
+      originalname: "KE24.XLSX",
+      buffer: Buffer.from("PK synthetic approval session fixture"),
+      mimetype: "application/octet-stream",
+    };
+    await q("DELETE FROM prepaid_integrations");
+    try {
+      await workspace.upload(actor, "ke24", file);
+      const initial = await workspace.state(actor);
+      const old = structuredClone(approvedConfig);
+      delete old.sourceExtraction!.egReportMapping;
+      await q(
+        "UPDATE prepaid_upload_sessions SET configuration=$2,status='failed',error=$3 WHERE id=$1",
+        [
+          initial.session.id,
+          JSON.stringify(old),
+          "Source normalization failed: EG_REPORT_MAPPING_REQUIRED: approve sourceExtraction.egReportMapping.callcardScope",
+        ],
+      );
+      const failed = await workspace.state(actor);
+      expect(failed.error).toContain("Reset the workspace");
+      expect(
+        failed.session.configuration.sourceExtraction.egReportMapping,
+      ).toBeUndefined();
+      expect(failed.session.version).toBe(initial.session.version);
+      expect(failed.sources.files[0].id).toBe(initial.sources.files[0].id);
+      expect(
+        (
+          await q(
+            "SELECT 1 FROM prepaid_preparation_jobs WHERE session_id=$1",
+            [initial.session.id],
+          )
+        ).rowCount,
+      ).toBe(0);
+      await workspace.reset(actor, {
+        sessionId: failed.session.id,
+        sessionVersion: failed.session.version,
+      });
+      await workspace.upload(actor, "ke24", file);
+      const next = await workspace.state(actor);
+      expect(next.session.id).not.toBe(initial.session.id);
+      expect(
+        next.session.configuration.sourceExtraction.egReportMapping,
+      ).toEqual(approvedProvidedEgReportMapping);
+      const retained = (
+        await q(
+          "SELECT configuration,active FROM prepaid_upload_sessions WHERE id=$1",
+          [initial.session.id],
+        )
+      ).rows[0];
+      expect(retained.active).toBe(false);
+      expect(retained.configuration).toEqual(old);
+      expect(objects.has(initial.sources.files[0].object_key)).toBe(true);
+    } finally {
+      await closeUploadActor(actor);
+    }
+  });
+  it("accepts all ten source types over HTTP before processing setup, preserving bytes and never queuing incomplete configuration", async () => {
+    const actor = await uploadActor(),
+      workspace = new PrepaidWorkspaceService(service);
+    const starts = start.mock.calls.length;
+    await q("DELETE FROM prepaid_integrations");
+    try {
+      const viewed = await workspace.state(actor);
+      expect(viewed).toMatchObject({
+        session: null,
+        run: null,
+        error: null,
+        preparation: { configured: false },
+        sources: { collectionOnly: true, valid: false },
+      });
+      expect(viewed.sources.accepted).toHaveLength(208);
+      expect(
+        (await q("SELECT 1 FROM workspaces WHERE user_id=$1", [actor]))
+          .rowCount,
+      ).toBe(0);
+      for (const code of [...sourceCodes, "308_21", "318_27"]) {
+        const original = Buffer.from(
+          code === "monthly_recharge"
+            ? "test csv only"
+            : "PK SYNTHETIC UPLOAD TEST " + code,
+        );
+        const form = new FormData();
+        form.append("file", new Blob([original]), expectedName(code));
+        const uploadId = randomUUID();
+        form.append("uploadId", uploadId);
+        const response = await fetch(`${base}/workspace/sources/${code}`, {
+          method: "POST",
+          headers: { "x-test-user": actor },
+          body: form,
+        });
+        expect(response.status).toBe(201);
+        const saved = (await response.json()) as any;
+        expect(saved.id).toBe(uploadId);
+        expect(saved.sha256).toBe(sha256(original));
+        expect(objects.get(saved.key)).toEqual(original);
+      }
+      const state = await workspace.prepare(actor);
+      expect(state.session.status).toBe("collecting");
+      expect(state.sources.files).toHaveLength(10);
+      expect(state.sources.valid).toBe(false);
+      expect(
+        manualIntegrationSchema.safeParse(state.session.configuration).success,
+      ).toBe(false);
+      expect(await workspace.resumeCollectingUploads()).toBe(false);
+      expect(
+        (
+          await q(
+            "SELECT 1 FROM prepaid_preparation_jobs WHERE session_id=$1",
+            [state.session.id],
+          )
+        ).rowCount,
+      ).toBe(0);
+      expect(
+        (
+          await q("SELECT 1 FROM prepaid_runs WHERE workspace_id=$1", [
+            state.session.workspace_id,
+          ])
+        ).rowCount,
+      ).toBe(0);
+      expect(
+        (await new PrepaidWorkspaceService(service).state(otherUser)).sources
+          .files,
+      ).not.toContainEqual(expect.objectContaining({ uploaded_by: actor }));
+      expect(start.mock.calls.length).toBe(starts);
+    } finally {
+      await closeUploadActor(actor);
+    }
+  });
+  it("binds a complete configuration later and queues once without requiring re-upload or inferring coverage", async () => {
+    const actor = await uploadActor(),
+      workspace = new PrepaidWorkspaceService(service);
+    await q("DELETE FROM prepaid_integrations");
+    try {
+      const codes = [...sourceCodes, "308_01", "318_01", "308_02", "318_02"];
+      for (const code of codes)
+        await workspace.upload(actor, code, {
+          originalname: expectedName(code),
+          buffer: Buffer.from(code === "monthly_recharge" ? "csv" : "PK test"),
+          mimetype: "application/octet-stream",
+        });
+      const staged = await workspace.state(actor);
+      await q(
+        "INSERT INTO prepaid_integrations(id,configuration,updated_by) VALUES(true,'{}',$1)",
+        [user],
+      );
+      expect(await workspace.resumeCollectingUploads()).toBe(false);
+      expect((await workspace.state(actor)).session.configuration).toEqual(
+        staged.session.configuration,
+      );
+      await service.configure(user, configuration);
+      // GET remains read-only; the background worker performs the binding.
+      expect((await workspace.state(actor)).session.status).toBe("collecting");
+      await Promise.all([
+        workspace.resumeCollectingUploads(),
+        workspace.resumeCollectingUploads(),
+      ]);
+      const ready = await workspace.state(actor);
+      expect(ready.session).toMatchObject({
+        id: staged.session.id,
+        status: "pending",
+        version: staged.session.version + 1,
+      });
+      expect(ready.preparation.configured).toBe(true);
+      expect(ready.sources.files.map((f: any) => f.sha256)).toEqual(
+        staged.sources.files.map((f: any) => f.sha256),
+      );
+      const jobs = (
+        await q("SELECT * FROM prepaid_preparation_jobs WHERE session_id=$1", [
+          ready.session.id,
+        ])
+      ).rows;
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0].source_files).toHaveLength(codes.length);
+      expect(ready.session.configuration).toEqual(configuration);
+    } finally {
+      await closeUploadActor(actor);
+    }
+  });
+  it("does not silently drop uploaded cycles outside later approved coverage; explicit removal unblocks queuing", async () => {
+    const actor = await uploadActor(),
+      workspace = new PrepaidWorkspaceService(service);
+    await q("DELETE FROM prepaid_integrations");
+    try {
+      for (const code of [...sourceCodes, "308_01", "318_01", "308_99"])
+        await workspace.upload(actor, code, {
+          originalname: expectedName(code),
+          buffer: Buffer.from(code === "monthly_recharge" ? "csv" : "PK test"),
+          mimetype: "application/octet-stream",
+        });
+      await service.configure(user, {
+        ...configuration,
+        expectedCycles: ["01"],
+      });
+      expect(await workspace.resumeCollectingUploads()).toBe(false);
+      const blocked = await workspace.state(actor);
+      expect(blocked.sources.unexpected).toEqual(["308_99"]);
+      expect(blocked.sources.valid).toBe(false);
+      expect(blocked.session.status).toBe("collecting");
+      expect(blocked.error).toContain("outside the approved cycle coverage");
+      const unblocked = await workspace.remove(actor, "308_99");
+      expect(unblocked.session.status).toBe("pending");
+      expect(
+        (
+          await q(
+            "SELECT * FROM prepaid_preparation_jobs WHERE session_id=$1",
+            [blocked.session.id],
+          )
+        ).rows,
+      ).toHaveLength(1);
+    } finally {
+      await closeUploadActor(actor);
+    }
+  });
+  it("rechecks approved coverage when configuration changes during an object upload", async () => {
+    const actor = await uploadActor(),
+      workspace = new PrepaidWorkspaceService(service);
+    await q("DELETE FROM prepaid_integrations");
+    const put = storage.put.bind(storage);
+    const intercept = vi
+      .spyOn(storage, "put")
+      .mockImplementationOnce(async (...args) => {
+        const result = await put(...args);
+        await service.configure(user, {
+          ...configuration,
+          expectedCycles: ["01"],
+        });
+        await workspace.resumeCollectingUploads();
+        return result;
+      });
+    try {
+      await expect(
+        workspace.upload(actor, "308_99", {
+          originalname: expectedName("308_99"),
+          buffer: Buffer.from("PK test"),
+          mimetype: "application/octet-stream",
+        }),
+      ).rejects.toMatchObject({ code: "PREPAID_SOURCE_COVERAGE_CHANGED" });
+      expect((await workspace.state(actor)).sources.files).toHaveLength(0);
+    } finally {
+      intercept.mockRestore();
+      await closeUploadActor(actor);
+    }
   });
   it("recovers historical v2 provenance only from exact completed preparation evidence", async () => {
     const actor = randomUUID();
@@ -591,6 +1007,46 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
     if (final.session.status === "collecting")
       expect((await service.layout(actor, runId, "eg")).frozen).toBe(false);
     else expect((await service.layout(actor, runId, "eg")).frozen).toBe(true);
+  });
+  it("keeps versioned reset context after removal hides the review run, preserving stored originals", async () => {
+    const actor = await uploadActor();
+    const { workspace, finished } = await prepareSession(actor);
+    const runId = finished.run!.id;
+    const originalKeys = finished.sources.files.map((f: any) => f.object_key);
+    const changed = await workspace.remove(actor, "ke24");
+    expect(changed.run).toBeNull();
+    expect(changed.session.status).toBe("collecting");
+    const resetContext = (changed as any).resetContext;
+    expect(resetContext).toEqual({
+      runId,
+      eg: (await service.layout(actor, runId, "eg")).version,
+      sg: (await service.layout(actor, runId, "sg")).version,
+    });
+    await workspace.reset(actor, {
+      ...resetContext,
+      sessionId: changed.session.id,
+      sessionVersion: changed.session.version,
+    });
+    expect((await workspace.state(actor)).session).toBeNull();
+    for (const key of originalKeys) expect(objects.has(key)).toBe(true);
+  });
+  it("rejects a stale regional reset context atomically even while the review run is hidden", async () => {
+    const actor = await uploadActor();
+    const { workspace, finished } = await prepareSession(actor);
+    const changed = await workspace.remove(actor, "ke24");
+    const context = (changed as any).resetContext;
+    await expect(
+      workspace.reset(actor, {
+        ...context,
+        eg: context.eg + 1,
+        sessionId: changed.session.id,
+        sessionVersion: changed.session.version,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    const current = await workspace.state(actor);
+    expect(current.session.id).toBe(changed.session.id);
+    expect(current.sources.files.length).toBe(changed.sources.files.length);
+    expect(current.session.run_id).toBe(finished.run!.id);
   });
   async function imported(
     transform?: (rows: Record<Dataset, unknown[]>) => void,
@@ -793,6 +1249,64 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
     } finally {
       await service.configure(user, configuration);
     }
+  });
+  it("accepts restored legacy Call Card names over HTTP while retaining immutable bytes and native object names", async () => {
+    const actor = randomUUID();
+    await q("INSERT INTO app_user(id) VALUES($1)", [actor]);
+    for (const [code, filename] of [
+      ["callcard_eg", "EG CALLCARD.xlsx"],
+      ["callcard_sg", "SG CALLCARD.xlsx"],
+    ]) {
+      const bytes = Buffer.from("PKoriginal-" + code);
+      const body = new FormData();
+      body.append("file", new Blob([bytes]), filename);
+      const response = await fetch(`${base}/workspace/sources/${code}`, {
+        method: "POST",
+        headers: { "x-test-user": actor },
+        body,
+      });
+      expect(response.status).toBe(201);
+      const row = (
+        await q(
+          "SELECT f.* FROM prepaid_session_files f JOIN prepaid_upload_sessions s ON s.id=f.session_id JOIN workspaces w ON w.id=s.workspace_id WHERE w.user_id=$1 AND f.source_code=$2 AND f.active",
+          [actor, code],
+        )
+      ).rows[0];
+      expect(row.original_name).toBe(filename);
+      expect(row.object_key.endsWith("/" + expectedName(code))).toBe(true);
+      expect(row.sha256).toBe(sha256(bytes));
+      expect(objects.get(row.object_key)).toEqual(bytes);
+    }
+    const state = await new PrepaidWorkspaceService(service).state(actor);
+    expect(
+      state.sources.required.find((item: any) => item.code === "callcard_eg")
+        .acceptedFileNames,
+    ).toContain("EG CALLCARD.xlsx");
+    const bad = new FormData();
+    bad.append("file", new Blob(["PKwrong-region"]), "SG CALLCARD.xlsx");
+    expect(
+      (
+        await fetch(`${base}/workspace/sources/callcard_eg`, {
+          method: "POST",
+          headers: { "x-test-user": actor },
+          body: bad,
+        })
+      ).status,
+    ).toBe(400);
+    // Historical run upload path uses the same alias contract.
+    const legacyActor = randomUUID();
+    await q("INSERT INTO app_user(id) VALUES($1)", [legacyActor]);
+    const run = await service.create(legacyActor, "2030-01");
+    await service.upload(legacyActor, run.id, "callcard_eg", {
+      originalname: "EG CALLCARD.xlsx",
+      buffer: Buffer.from("PKlegacy"),
+      mimetype: "application/octet-stream",
+    });
+    expect(
+      (await service.sources(legacyActor, run.id)).files.find(
+        (file: any) => file.source_code === "callcard_eg",
+      ).original_name,
+    ).toBe("EG CALLCARD.xlsx");
   });
   it("workspace GET creates nothing and invalid upload cannot create a session", async () => {
     const fresh = randomUUID();
@@ -1116,6 +1630,62 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
         expect(
           (await service.allocationSummary(user, run.id, region, variant)).rows,
         ).toBeInstanceOf(Array);
+  });
+  it("reads a JV page in one query while preserving exact values, ownership and empty-page totals", async () => {
+    const { run, layout } = await imported();
+    await service.command(user, run.id, "eg", "validate", layout.version);
+    await q(
+      "UPDATE prepaid_jv_lines SET amount='9007199254740993.01' WHERE id=(SELECT min(id) FROM prepaid_jv_lines WHERE revision_id=$1)",
+      [layout.id],
+    );
+    const query = vi.spyOn(pool, "query");
+    let first;
+    try {
+      first = await service.output(
+        user,
+        run.id,
+        "eg",
+        "jv_lines",
+        undefined,
+        1,
+        0,
+      );
+      expect(query).toHaveBeenCalledTimes(1);
+    } finally {
+      query.mockRestore();
+    }
+    expect(first!.rows).toHaveLength(1);
+    expect(first!.rows[0].amount).toBe("9007199254740993.01");
+    expect(typeof first!.rows[0].quantity).toBe("string");
+    expect(
+      Object.keys(first!.rows[0]).some((key) => key.startsWith("__")),
+    ).toBe(false);
+    const empty = await service.output(
+      user,
+      run.id,
+      "eg",
+      "jv_lines",
+      undefined,
+      1,
+      first!.total + 1,
+    );
+    expect(empty.rows).toEqual([]);
+    expect(empty.total).toBe(first!.total);
+    await expect(
+      service.output(otherUser, run.id, "eg", "jv_lines"),
+    ).rejects.toMatchObject({ code: "PREPAID_RUN_NOT_FOUND" });
+    await expect(
+      service.output(
+        user,
+        run.id,
+        "sg",
+        "jv_lines",
+        undefined,
+        1,
+        0,
+        layout.id,
+      ),
+    ).rejects.toMatchObject({ code: "PREPAID_REVISION_NOT_FOUND" });
   });
   it("isolates ownership, validates exact names and requires all cycles", async () => {
     const run = await service.create(user, "2029-01");

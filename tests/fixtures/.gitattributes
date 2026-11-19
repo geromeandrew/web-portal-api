@@ -1,0 +1,3 @@
+# Preserve the exact reviewed S3 object bytes across Windows and Linux checkouts.
+# This checksum fixture deliberately retains upstream whitespace; do not format it.
+prepaid-reviewed-utilsaws.py -text -whitespace

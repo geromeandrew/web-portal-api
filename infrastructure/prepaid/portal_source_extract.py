@@ -12,10 +12,13 @@ import sys
 import zipfile
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, getcontext
+from itertools import islice
 
 getcontext().prec = 50  # do not round intermediate sums through Python's default 28 digits
 MAX_SOURCE_BYTES = 100 * 1024 * 1024  # legacy generic upload controller: 100 MiB
 MAX_WORKBOOK_CELLS = 2_000_000
+MAX_WORKBOOK_ROWS = 250_000
+MAX_SCANNED_WORKBOOK_ROWS = 1_048_576  # Excel's physical row bound, including blank formatting
 
 
 def dumps(value):
@@ -27,6 +30,8 @@ def text(value):
         return ""
     if isinstance(value, (datetime, date)):
         return value.isoformat()
+    if isinstance(value, Decimal):
+        return format(value, "f")
     return str(value).strip()
 
 
@@ -52,6 +57,22 @@ def money(value, rounded=False):
     if not re.fullmatch(r"-?\d{1,28}(?:\.\d{1,10})?", result):
         raise ValueError("Source precision exceeds the canonical contract")
     return result
+
+
+def billing_money(value):
+    """Match the unchanged native openpyxl numeric-cell representation.
+
+    The streaming reader preserves XML Decimal text, including Excel double
+    artifacts such as -533.91999999999996. Native openpyxl 3.1.2 reads that cell
+    as float -533.92. Fractional numeric cells take this same conversion even
+    when their XML artifact fits ten places; text amounts are never coerced.
+    Integer cells remain exact. No float aggregation or forced
+    two-decimal rounding occurs. Genuine excess precision still fails money().
+    """
+    parsed = amount(value)
+    if isinstance(value, Decimal) and parsed.as_tuple().exponent < 0:
+        parsed = Decimal(str(float(parsed)))
+    return money(parsed)
 
 
 def month(value):
@@ -96,7 +117,7 @@ def parse_loadapi(rows, region):
     skip, index = (3, 5) if region == "eg" else (2, 8)
     total = Decimal(0)
     selected = 0
-    for row in rows[skip:]:
+    for row in islice(rows, skip, None):
         if not row or not text(row[0]) or text(row[0]).casefold().startswith("type"):
             continue
         if text(row[0]).upper() != region.upper():
@@ -169,7 +190,7 @@ def parse_adjustments(rows, cycle):
         if not customer or not text(values[4]):
             raise ValueError("308 financial row has no customer type or adjustment code")
         result.append({"cycle": cycle, "customer_type": customer, "code": text(values[4]),
-                       "amount": money(amount(values[8])), "currency": "PHP"})
+                       "amount": billing_money(values[8]), "currency": "PHP"})
     return result  # an attested header with genuinely zero PHP lines is permitted
 
 
@@ -220,21 +241,38 @@ def workbook_rows(body, workflow):
         if not sheets or (workflow == "callcard_sg" and len(sheets) != 1):
             raise ValueError("Missing or ambiguous CALLCARD worksheet")
         sheet = sheets[0]  # same first-sheet selection as the existing flat jobs
-        if sheet.max_row > 250000 or sheet.max_column > 100:
-            raise ValueError("Workbook dimensions exceed extraction limits")
-        rows, cell_count = [], 0
-        for row in sheet.iter_rows(values_only=True):
+        # Real legacy exports advertise XEZ/XFD-sized used ranges because of
+        # formatting. Bound actual payload, not the untrusted dimension hint.
+        # Reset makes the streaming reader stop at XML rows, not that hint.
+        sheet.reset_dimensions()
+        rows, cell_count, blank_rows = [], 0, 0
+        for index, row in enumerate(sheet.iter_rows(values_only=True)):
+            if index >= MAX_SCANNED_WORKBOOK_ROWS:
+                raise ValueError("Workbook scanned rows exceed extraction limits")
+            last = len(row)
+            while last and row[last - 1] is None:
+                last -= 1
+            if not last:
+                blank_rows += 1
+                continue
+            row = row[:last]
             cell_count += len(row)
-            if len(rows) >= 250000 or len(row) > 100 or cell_count > MAX_WORKBOOK_CELLS:
+            if len(rows) + blank_rows >= MAX_WORKBOOK_ROWS or len(row) > 100 or cell_count > MAX_WORKBOOK_CELLS:
                 raise ValueError("Workbook rows/columns/cells exceed extraction limits")
+            # Preserve internal/leading blank row ordinals (skiprows contracts),
+            # but do not retain a potentially enormous empty formatted tail.
+            rows.extend([()] * blank_rows)
+            blank_rows = 0
             rows.append(row)
         formulas = openpyxl.load_workbook(io.BytesIO(body), read_only=True, data_only=False, keep_links=False)
         try:
-            for index, row in enumerate(formulas[sheet.title].iter_rows()):
-                if index >= len(rows):
-                    break
+            formula_sheet = formulas[sheet.title]
+            formula_sheet.reset_dimensions()
+            for index, row in enumerate(formula_sheet.iter_rows()):
+                if index >= MAX_SCANNED_WORKBOOK_ROWS:
+                    raise ValueError("Workbook scanned rows exceed extraction limits")
                 for column, cell in enumerate(row):
-                    if cell.data_type == "f" and (column >= len(rows[index]) or rows[index][column] is None):
+                    if cell.data_type == "f" and (index >= len(rows) or column >= len(rows[index]) or rows[index][column] is None):
                         raise ValueError("Workbook contains a formula without a cached value; recalculate and save it first")
         finally:
             formulas.close()

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { referenceVersionSchema } from "./referenceVersion.js";
 import {
   extractionArtifactSchema,
   sourceExtractionSchema,
@@ -50,6 +51,30 @@ export function expectedName(code: string) {
   return report === "308"
     ? `308. Billed Adjustments Monthly Summary Report_G_BC${cycle}.XLSX`
     : `318. Billed Charges Summary Report_G_BC${cycle}.XLSX`;
+}
+
+// Confirmed SourceFiles_File rows in restored etl_db_web. These identify the
+// same source; they do not authorize a different financial template or mapping.
+const legacyFileAliases: Record<string, string[]> = {
+  callcard_eg: ["EG CALLCARD.xlsx"],
+  callcard_sg: ["SG CALLCARD.xlsx"],
+};
+export function acceptedSourceNames(code: string) {
+  return [expectedName(code), ...(legacyFileAliases[code] ?? [])];
+}
+export function matchesSourceName(code: string, name: string) {
+  return acceptedSourceNames(code).some(
+    (accepted) => accepted.toLowerCase() === name.toLowerCase(),
+  );
+}
+export function sourceFileRequirement(code: string) {
+  return {
+    code,
+    fileName: expectedName(code),
+    ...(legacyFileAliases[code]
+      ? { acceptedFileNames: acceptedSourceNames(code) }
+      : {}),
+  };
 }
 
 const base = { period: periodSchema };
@@ -107,6 +132,7 @@ export const datasetSchemas = {
     // Legacy BRAND category, distinct from allocation WWBRD (canonical brand).
     // Optional for older adapters; absence makes membership reporting unverified.
     source_brand: z.string().trim().min(1).optional(),
+    posting_key: z.string().trim().optional(),
     cost_element: z.string().regex(/^\d{1,10}$/),
     brand: z.string(),
     cfu: z.string(),
@@ -114,7 +140,9 @@ export const datasetSchemas = {
     sub_product: z.string(),
     tax_rate: moneySchema.refine((v) => Number(v) >= 0 && Number(v) <= 1),
     average_rate: moneySchema.refine((v) => Number(v) >= 0),
-    uom: z.string().min(1),
+    // Legacy C014 passes DUOM through unchanged. Real dev reference records
+    // include blank units; retain them rather than inventing EA or dropping rows.
+    uom: z.string(),
   }),
 };
 export type Dataset = keyof typeof datasetSchemas;
@@ -148,11 +176,16 @@ export const manifestSchema = z.object({
   ),
   coverage: z
     .array(
-      z.object({
-        cycle: z.string().regex(/^\d{2}$/),
-        adjustments: z.literal(true),
-        charges: z.literal(true),
-      }),
+      z
+        .object({
+          cycle: z.string().regex(/^\d{2}$/),
+          adjustments: z.boolean(),
+          charges: z.boolean(),
+        })
+        .refine(
+          (entry) => entry.adjustments || entry.charges,
+          "A covered cycle must include at least one billing report",
+        ),
     )
     .min(1),
   datasets: z.array(descriptorSchema).min(1),
@@ -204,6 +237,55 @@ export const integrationSchema = z.object({
   }),
 });
 export type Integration = z.infer<typeof integrationSchema>;
+const cycleListSchema = integrationSchema.shape.expectedCycles;
+const reportCyclesSchema = z
+  .object({
+    adjustments: cycleListSchema,
+    charges: cycleListSchema,
+  })
+  .strict();
+type BillingConfiguration = {
+  expectedCycles: string[];
+  reportCycles?: z.infer<typeof reportCyclesSchema>;
+};
+// Legacy 308 and 318 extraction jobs run independently. Retain the historical
+// portal paired default unless native configuration explicitly supplies both lists.
+export function expectedReportCycles(
+  config: BillingConfiguration,
+  report: "adjustments" | "charges",
+) {
+  return config.reportCycles?.[report] ?? config.expectedCycles;
+}
+export function expectedBillingCoverage(config: BillingConfiguration) {
+  return config.expectedCycles.map((cycle) => ({
+    cycle,
+    adjustments: expectedReportCycles(config, "adjustments").includes(cycle),
+    charges: expectedReportCycles(config, "charges").includes(cycle),
+  }));
+}
+export function billingCoverageMatches(
+  config: BillingConfiguration,
+  coverage: { cycle: string; adjustments: boolean; charges: boolean }[],
+) {
+  return (
+    coverage.length === config.expectedCycles.length &&
+    new Set(coverage.map((entry) => entry.cycle)).size === coverage.length &&
+    expectedBillingCoverage(config).every((expected) =>
+      coverage.some(
+        (actual) =>
+          actual.cycle === expected.cycle &&
+          actual.adjustments === expected.adjustments &&
+          actual.charges === expected.charges,
+      ),
+    )
+  );
+}
+export function requiredBillingSources(config: BillingConfiguration) {
+  return expectedBillingCoverage(config).flatMap((entry) => [
+    ...(entry.adjustments ? [`308_${entry.cycle}`] : []),
+    ...(entry.charges ? [`318_${entry.cycle}`] : []),
+  ]);
+}
 export const referenceExportSchema = z.object({
   key: z.string().min(1),
   prefix: z
@@ -236,14 +318,18 @@ export const manualReportFormatSchema = z.union([
 // Manual staging needs ingestion and an approved export format, not SAP dispatch.
 export const manualIntegrationSchema = integrationSchema
   .extend({
+    accountingProfile: z.enum(["legacy_sql_v1"]).optional(),
+    referenceValidationPolicy: z.enum(["legacy_all_matches"]).optional(),
     // Optional native sources: old settings retain four external-adapter children.
     // native_sources explicitly selects all ten and backend final assembly.
     sourceExtraction: sourceExtractionSchema.optional(),
     preparationMode: z.enum(["external_adapter", "native_sources"]).optional(),
+    reportCycles: reportCyclesSchema.optional(),
     ingestStateMachine: integrationSchema.shape.ingestStateMachine.optional(),
     referenceExport: referenceExportSchema
       .extend({ approved: z.literal(true) })
       .optional(),
+    referenceVersion: referenceVersionSchema.optional(),
     // Explicit opt-in; old configurations retain independent gross edits.
     sourceSplitPolicy: z.enum(["independent", "legacy_eg_total"]).optional(),
     deliveryStateMachine:
@@ -253,6 +339,34 @@ export const manualIntegrationSchema = integrationSchema
     format: manualReportFormatSchema,
   })
   .superRefine((config, ctx) => {
+    if (
+      config.referenceValidationPolicy === "legacy_all_matches" &&
+      (config.accountingProfile !== "legacy_sql_v1" ||
+        !(config.referenceExport || config.referenceVersion))
+    )
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["referenceValidationPolicy"],
+        message:
+          "Legacy reference handling requires legacy_sql_v1 and an approved immutable reference version or export.",
+      });
+    if (config.reportCycles) {
+      const union = new Set([
+        ...config.reportCycles.adjustments,
+        ...config.reportCycles.charges,
+      ]);
+      if (
+        config.preparationMode !== "native_sources" ||
+        union.size !== config.expectedCycles.length ||
+        config.expectedCycles.some((cycle) => !union.has(cycle))
+      )
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["reportCycles"],
+          message:
+            "Per-report coverage requires native_sources and its union must exactly match expectedCycles.",
+        });
+    }
     if (config.preparationMode === "native_sources") {
       if (
         !config.sourceExtraction ||
@@ -264,12 +378,19 @@ export const manualIntegrationSchema = integrationSchema
           message:
             "Native preparation requires explicit all_sources coverage and shared-write approval.",
         });
-      if (!config.referenceExport)
+      if (!config.referenceExport && !config.referenceVersion)
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["referenceExport"],
           message:
-            "Native preparation requires an approved, immutable SAP reference export.",
+            "Native preparation requires an approved database reference version or immutable SAP reference export.",
+        });
+      if (config.referenceExport && config.referenceVersion)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["referenceVersion"],
+          message:
+            "Select exactly one reference source; database versions never fall back to S3.",
         });
     } else if (!config.ingestStateMachine)
       ctx.addIssue({
@@ -277,6 +398,13 @@ export const manualIntegrationSchema = integrationSchema
         path: ["ingestStateMachine"],
         message:
           "Configure a complete external V2 adapter, or choose native_sources with all ten workflows and an approved reference export.",
+      });
+    if (config.referenceVersion && config.preparationMode !== "native_sources")
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["referenceVersion"],
+        message:
+          "Database reference versions require native_sources preparation.",
       });
   });
 export const sessionManifestSchema = manifestSchema
@@ -290,6 +418,7 @@ export const sessionManifestSchema = manifestSchema
     referenceSource: referenceExportSchema
       .extend({ approved: z.literal(true) })
       .optional(),
+    referenceVersion: referenceVersionSchema.optional(),
     extractionReceipts: z
       .array(
         z.object({

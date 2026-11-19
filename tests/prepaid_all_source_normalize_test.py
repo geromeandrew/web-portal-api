@@ -1,9 +1,11 @@
 """Real workbook/CSV regression fixtures; no AWS or application DB access."""
 import csv
 import io
+import re
 import sys
 import unittest
 import zipfile
+from decimal import Decimal
 from unittest.mock import patch
 from pathlib import Path
 
@@ -11,7 +13,7 @@ import openpyxl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "infrastructure" / "prepaid"))
 from normalize_source import normalize, KE24_HEADERS, CHARGE_HEADERS, RECHARGE_HEADERS
-from portal_source_extract import MAX_SOURCE_BYTES, workbook_rows
+from portal_source_extract import MAX_SOURCE_BYTES, workbook_rows, billing_money, HEADERS
 
 
 def workbook(rows):
@@ -30,6 +32,79 @@ def ke24_row(period="009/2026", currency="PHP"):
 
 
 class AllSourceNormalizationTests(unittest.TestCase):
+    def test_billing_numeric_cells_match_native_reader_without_rounding_each_row_to_cents(self):
+        examples = [("-533.91999999999996", "-533.92"),
+                    ("284073.71000000002", "284073.71"),
+                    ("62639.839999999997", "62639.84"),
+                    ("21921507.670000002", "21921507.67")]
+        for raw, expected in examples:
+            with self.subTest(raw=raw):
+                self.assertEqual(billing_money(Decimal(raw)), expected)
+                if Decimal(raw).as_tuple().exponent < -10:
+                    with self.assertRaisesRegex(ValueError, "precision"):
+                        billing_money(raw)  # A text decimal is not an Excel double.
+                else:
+                    self.assertEqual(billing_money(raw), raw)
+        self.assertEqual(billing_money(Decimal("1.2345678901")), "1.2345678901")
+        self.assertEqual(billing_money(Decimal("1.2300000000000")), "1.23")
+        self.assertEqual(billing_money("-5.2500"), "-5.2500")
+        for raw in ("0.00000000001", "1.12345678901"):
+            with self.assertRaisesRegex(ValueError, "precision"):
+                billing_money(Decimal(raw))
+
+    def test_streamed_308_and_318_numeric_xml_artifacts_retain_native_totals(self):
+        leading = [["Cycle Code:", "BC21"], ["Cycle Year:", "2023"], ["Cycle Instance:", "9"]]
+        detail = ["E", "", "PRE", "", "AMAXCEP", "", "GLOB", "PHP", -533.92, ""]
+        body = workbook(leading + [HEADERS, detail])
+        def numeric_xml(original, old, new):
+            result = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(original)) as source, zipfile.ZipFile(result, "w", zipfile.ZIP_DEFLATED) as target:
+                for item in source.infolist():
+                    value = source.read(item)
+                    if item.filename == "xl/worksheets/sheet1.xml":
+                        self.assertIn(old, value)
+                        value = value.replace(old, new)
+                    target.writestr(item, value)
+            return result.getvalue()
+        body = numeric_xml(body, b"<v>-533.92</v>", b"<v>-533.91999999999996</v>")
+        result = normalize("adjustments_308", "308_21", body)
+        self.assertEqual(result["adjustments"][0]["amount"], "-533.92")
+        leading[0][1] = "BC27"
+        charge = ["E", "", "PRE", "MT", "AMAXCEP", "", "", 284073.71, "", "GLOB", "PHP"]
+        body = numeric_xml(workbook(leading + [CHARGE_HEADERS, charge]),
+                           b"<v>284073.71</v>", b"<v>284073.71000000002</v>")
+        self.assertEqual(normalize("charges_318", "318_27", body)["charges"][0]["amount"], "284073.71")
+
+    def test_inflated_formatting_dimension_is_not_treated_as_financial_data(self):
+        original = workbook([KE24_HEADERS, ke24_row()])
+        result = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(original)) as source, zipfile.ZipFile(result, "w", zipfile.ZIP_DEFLATED) as target:
+            for item in source.infolist():
+                body = source.read(item)
+                if item.filename == "xl/worksheets/sheet1.xml":
+                    body = re.sub(br'<dimension ref="[^"]+"', b'<dimension ref="A1:XFD1048576"', body)
+                target.writestr(item, body)
+        self.assertEqual(normalize("ke24", "ke24", result.getvalue())["ke24"][0]["amount"], "-100.25")
+
+    def test_blank_formatted_columns_are_ignored_but_financial_columns_are_not(self):
+        for value in (None, "unrecognized financial data"):
+            book = openpyxl.Workbook()
+            book.active.append(KE24_HEADERS)
+            book.active.append(ke24_row())
+            book.active.cell(2, 200, value).number_format = "0.00"
+            output = io.BytesIO()
+            book.save(output)
+            book.close()
+            if value is None:
+                self.assertEqual(len(normalize("ke24", "ke24", output.getvalue())["ke24"]), 1)
+            else:
+                with self.assertRaisesRegex(ValueError, "columns/cells exceed"):
+                    normalize("ke24", "ke24", output.getvalue())
+
+    def test_uncached_formula_in_an_otherwise_empty_tail_is_not_discarded(self):
+        with self.assertRaisesRegex(ValueError, "formula without a cached value"):
+            workbook_rows(workbook([["title"], [], ["=1+2"]]), "ke24")
+
     def test_real_xlsx_above_previous_4_5mb_limit_is_supported(self):
         body = io.BytesIO(workbook([KE24_HEADERS, ke24_row()]))
         with zipfile.ZipFile(body, "a", compression=zipfile.ZIP_STORED) as archive:

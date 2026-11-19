@@ -24,7 +24,7 @@ export function validateSourceFragment(
       throw Error("Billing header cycle mismatch.");
     return header;
   }
-  const schema: z.AnyZodObject = datasetSchemas[name];
+  const schema: z.ZodObject<any> = datasetSchemas[name];
   const data = (name === "ke24" ? schema : schema.omit({ period: true })).parse(
     value,
   ) as any;

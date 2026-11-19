@@ -2,6 +2,7 @@ import {
   prepaidAllSourceMigrationSql,
   prepaidAdditionalRawValidationSql,
 } from "./allSourceMigration.js";
+import { prepaidFullBatchMigrationSql } from "./fullBatchMigration.js";
 import { prepaidMigrationSql } from "./migrations.js";
 import { prepaidWorkspaceMigrationSql } from "./workspaceMigration.js";
 import { prepaidConsistencyMigrationSql } from "./consistencyMigration.js";
@@ -9,6 +10,11 @@ import { prepaidLegacyRulesMigrationSql } from "./legacyRulesMigration.js";
 import { prepaidSourceExtractionMigrationSql } from "./sourceExtractionMigration.js";
 import { prepaidSourceBackendMigrationSql } from "./sourceBackendMigration.js";
 import { prepaidReferenceRefreshMigrationSql } from "./referenceRefreshMigration.js";
+import { prepaidAccountingParityMigrationSql } from "./accountingParityMigration.js";
+import { prepaidReferenceLookupMigrationSql } from "./referenceLookupMigration.js";
+import { prepaidReferencePolicyMigrationSql } from "./referencePolicyMigration.js";
+import { prepaidReferenceCatalogMigrationSql } from "./referenceCatalogMigration.js";
+import { prepaidValidationReviewMigrationSql } from "./validationReviewMigration.js";
 import {
   prepaidRawSchema,
   prepaidRawSourceMigrationSql,
@@ -35,6 +41,12 @@ export function prepaidMigrations(rawSchema = prepaidRawSchema) {
       (schema: string) => prepaidAllSourceMigrationSql(schema, rawSchema),
     ],
     ["009_prepaid_reference_refresh", prepaidReferenceRefreshMigrationSql],
+    ["010_prepaid_accounting_parity", prepaidAccountingParityMigrationSql],
+    ["011_prepaid_reference_lookup", prepaidReferenceLookupMigrationSql],
+    ["012_prepaid_reference_policy", prepaidReferencePolicyMigrationSql],
+    ["013_prepaid_reference_catalog", prepaidReferenceCatalogMigrationSql],
+    ["014_prepaid_validation_review", prepaidValidationReviewMigrationSql],
+    ["015_prepaid_full_batch", prepaidFullBatchMigrationSql],
   ] as const;
 }
 
@@ -99,7 +111,7 @@ export async function migratePrepaid(
       "Missing/incompatible backend source context from migration 007. Restore/review schema drift; existing data is preserved.",
     );
   const workflows = await connection.query(
-    `SELECT pg_get_constraintdef(oid) definition FROM pg_constraint WHERE conrelid=to_regclass('${s}.prepaid_source_extractions') AND conname='prepaid_source_extractions_workflow_check' AND contype='c' AND convalidated`,
+    `WITH workflow_constraint AS MATERIALIZED (SELECT oid FROM pg_constraint WHERE conrelid=to_regclass('${s}.prepaid_source_extractions') AND conname='prepaid_source_extractions_workflow_check' AND contype='c' AND convalidated) SELECT pg_get_constraintdef(oid) definition FROM workflow_constraint`,
   );
   const definition = String(workflows.rows[0]?.definition ?? "");
   const required = [

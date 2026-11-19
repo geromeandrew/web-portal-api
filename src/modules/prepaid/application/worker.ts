@@ -11,6 +11,8 @@ import {
   upstreamManifestSchema,
   jvHeaders,
   encodeDelimited,
+  billingCoverageMatches,
+  expectedReportCycles,
   type Dataset,
 } from "../domain/contracts.js";
 import type { Logger } from "../../../platform/logger.js";
@@ -319,14 +321,7 @@ export class PrepaidWorker {
       throw new Error(
         "Ingestion manifest identifies a different run, period or execution",
       );
-    if (
-      manifest.coverage.length !== config.expectedCycles.length ||
-      new Set(manifest.coverage.map((c) => c.cycle)).size !==
-        config.expectedCycles.length ||
-      !config.expectedCycles.every((c) =>
-        manifest.coverage.some((x) => x.cycle === c),
-      )
-    )
+    if (!billingCoverageMatches(config, manifest.coverage))
       throw new Error("Incomplete or duplicate billing-cycle coverage");
     if (
       manifest.sourceFiles.length !== snapshot.source_files.length ||
@@ -416,7 +411,7 @@ export class PrepaidWorker {
           if (
             (descriptor.name === "adjustments" ||
               descriptor.name === "charges") &&
-            !config.expectedCycles.includes(
+            !expectedReportCycles(config, descriptor.name).includes(
               (data as z.infer<typeof datasetSchemas.adjustments>).cycle,
             )
           )

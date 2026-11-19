@@ -11,7 +11,11 @@ import {
   validateLegacySourceDefinition,
   type SourceWorkflow,
 } from "../src/modules/prepaid/domain/sourceExtraction.js";
-import { legacyDefinition } from "./fixtures/prepaidSource.js";
+import {
+  legacyDefinition,
+  nativeJobColumnArguments,
+  nativeJobFixture,
+} from "./fixtures/prepaidSource.js";
 
 // Real AWS SDK serializers, HTTP transport, deserializers and error recovery.
 // All endpoints bind to loopback and credentials are deliberately fake.
@@ -22,7 +26,9 @@ describe("Native source AWS protocol against a local HTTP stand-in", () => {
   const calls: { action: string; body: any }[] = [];
   const executions = new Map<string, { input: string; status: string }>();
   let drift = false,
-    activeGlue = false;
+    activeGlue = false,
+    ownedGlue = false,
+    foreignGlue = false;
   beforeAll(async () => {
     server = createServer(async (request, response) => {
       try {
@@ -116,14 +122,19 @@ describe("Native source AWS protocol against a local HTTP stand-in", () => {
             send({
               Job: {
                 Name: body.JobName,
-                Command: { Name: "glueetl" },
+                Command: nativeJobFixture(number).command,
                 DefaultArguments: {
+                  ...nativeJobColumnArguments(
+                    (Object.keys(sourceWorkflows) as SourceWorkflow[]).find(
+                      (key) => sourceWorkflows[key] === workflow,
+                    )!,
+                    index,
+                  ),
                   "--folder_location": "test-bucket/prepaid_reclass/",
                   "--input_file_name": workflow.inputPattern,
                   "--target_table": drift
                     ? "wrong.table"
                     : `sdbtdir1_prepaid_dbo.${workflow.targets[index]}`,
-                  "--move_to_success": "false",
                 },
               },
             });
@@ -133,7 +144,41 @@ describe("Native source AWS protocol against a local HTTP stand-in", () => {
             send({ executions: [] });
             return;
           case "GetJobRuns":
-            send({ JobRuns: activeGlue ? [{ JobRunState: "RUNNING" }] : [] });
+            send({
+              JobRuns: ownedGlue
+                ? body.JobName.endsWith("_1")
+                  ? [
+                      { Id: "jr_owned", JobRunState: "RUNNING" },
+                      ...(foreignGlue
+                        ? [{ Id: "jr_foreign", JobRunState: "RUNNING" }]
+                        : []),
+                    ]
+                  : []
+                : activeGlue
+                  ? [{ JobRunState: "RUNNING" }]
+                  : [],
+            });
+            return;
+          case "GetExecutionHistory":
+            send({
+              events: [
+                {
+                  id: 5,
+                  previousEventId: 4,
+                  timestamp: 1,
+                  type: "TaskSubmitted",
+                  taskSubmittedEventDetails: {
+                    resourceType: "glue",
+                    resource: "startJobRun.sync",
+                    outputDetails: { truncated: false },
+                    output: JSON.stringify({
+                      JobName: "isg-esatp-dv-prep_reclass-gljo-extract_1",
+                      JobRunId: "jr_owned",
+                    }),
+                  },
+                },
+              ],
+            });
             return;
           default:
             response.statusCode = 400;
@@ -164,6 +209,8 @@ describe("Native source AWS protocol against a local HTTP stand-in", () => {
     executions.clear();
     drift = false;
     activeGlue = false;
+    ownedGlue = false;
+    foreignGlue = false;
   });
   afterAll(async () => {
     sfn.destroy();
@@ -244,6 +291,33 @@ describe("Native source AWS protocol against a local HTTP stand-in", () => {
       runner.startExecution(machine, { env_prefix: "wrong" }, "same-name"),
     ).rejects.toThrow("different input");
     expect(executions.size).toBe(1);
+  });
+  it("attributes actual Glue run IDs over HTTP and blocks a foreign run of the same job", async () => {
+    ownedGlue = true;
+    const cohort = {
+      executions: {
+        callcard_sg:
+          "arn:aws:states:us-east-1:123456789012:execution:isg-esatp-dv-prcl_cc_sg-sf:prepaid-source-owned",
+      },
+      allowOwnedGlue: true,
+    };
+    await inspector.idle([], "isg-esatp-dv", undefined, cohort);
+    expect(calls.some((call) => call.action === "GetExecutionHistory")).toBe(
+      true,
+    );
+    foreignGlue = true;
+    await expect(
+      inspector.idle([], "isg-esatp-dv", undefined, cohort),
+    ).rejects.toThrow("foreign or unverified");
+    await expect(
+      inspector.idle([], "isg-esatp-dv", undefined, {
+        ...cohort,
+        allowOwnedGlue: false,
+      }),
+    ).rejects.toThrow("still active");
+    expect(calls.some((call) => /^(Start|Update|Stop)/.test(call.action))).toBe(
+      false,
+    );
   });
   it("rejects drift and active shared Glue runs through actual SDK HTTP responses", async () => {
     drift = true;

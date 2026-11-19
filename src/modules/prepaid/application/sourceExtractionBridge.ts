@@ -8,7 +8,7 @@ import {
 import type { PrepaidStorage } from "../infrastructure/prepaidStorage.js";
 
 /** KE24 owns period discovery. The backend producer or an external adapter must include these exact
- * records; it cannot silently ignore backend-normalized original-source output.
+ * records; it cannot silently ignore the verified extraction snapshot output.
  */
 export async function verifiedExtractionBridge(
   storage: PrepaidStorage,

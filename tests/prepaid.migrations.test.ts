@@ -35,14 +35,14 @@ describe("Prepaid migration SQL", () => {
     for (const invalid of ["SELECT 'abc", "DO $$ BEGIN", "/* missing"])
       expect(() => splitSqlStatements(invalid)).toThrow("Unterminated");
   });
-  it("splits every complete migration and retains all 16 function bodies", () => {
+  it("splits every complete migration and retains all function definitions", () => {
     const statements = prepaidMigrations().flatMap(([, sql]) =>
       splitSqlStatements(sql("web_portal")),
     );
     expect(
       statements.filter((s) => /CREATE(?: OR REPLACE)? FUNCTION/.test(s)),
-    ).toHaveLength(16);
-    expect(statements.filter((s) => /CREATE TABLE/.test(s))).toHaveLength(47);
+    ).toHaveLength(25);
+    expect(statements.filter((s) => /CREATE TABLE/.test(s))).toHaveLength(50);
   });
 });
 
@@ -100,13 +100,13 @@ describe.skipIf(!testUrl)("Prepaid migrations (isolated PostgreSQL)", () => {
       client.release();
     }
   }
-  it("installs all nine migrations, 36 portal tables and twelve raw targets", async () => {
+  it("installs all migrations, 41 portal tables and twelve raw targets", async () => {
     expect(await run()).toEqual(prepaidMigrations().map(([id]) => id));
     const result = await pool.query(
       "SELECT schemaname,count(*)::integer count FROM pg_tables WHERE schemaname=ANY($1) GROUP BY schemaname",
       [[schema, raw]],
     );
-    expect(result.rows.find((r) => r.schemaname === schema).count).toBe(38); // 36 prepaid + two prerequisites
+    expect(result.rows.find((r) => r.schemaname === schema).count).toBe(41); // 38 prepaid + two prerequisites
     expect(result.rows.find((r) => r.schemaname === raw).count).toBe(12);
     const column = await pool.query(
       "SELECT is_identity,identity_generation FROM information_schema.columns WHERE table_schema=$1 AND table_name='dcload_api' AND column_name='rownum'",

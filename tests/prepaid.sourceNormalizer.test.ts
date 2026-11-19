@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { strToU8, zipSync } from "fflate";
+import { strToU8, strFromU8, zipSync, unzipSync } from "fflate";
+import ExcelJS from "exceljs";
 import { BackendSourceNormalizer } from "../src/modules/prepaid/infrastructure/sourceNormalizer.js";
+import { datasetSchemas } from "../src/modules/prepaid/domain/contracts.js";
 
 const runtime =
   process.env.PREPAID_PYTHON_EXECUTABLE ||
@@ -13,6 +15,101 @@ const runtime =
 describe.skipIf(!existsSync(runtime))(
   "Local backend source normalizer runtime",
   () => {
+    it.each([
+      {
+        workflow: "adjustments_308" as const,
+        code: "308_21",
+        cycle: "21",
+        dataset: "adjustments" as const,
+        amount: -533.92,
+        xmlValue: "-533.91999999999996",
+        headers: [
+          "Customer Type",
+          "Customer Sub Type",
+          "Subscriber Type",
+          "Adjustment Type",
+          "Adjustment Code",
+          "Adjustment Reason",
+          "Legal Entity",
+          "Currency",
+          "Amount",
+          "Write-Off Activity Indicator",
+        ],
+        detail: ["E", "", "PRE", "", "AMAXCEP", "", "GLOB", "PHP", -533.92, ""],
+      },
+      {
+        workflow: "charges_318" as const,
+        code: "318_27",
+        cycle: "27",
+        dataset: "charges" as const,
+        amount: 284073.71,
+        xmlValue: "284073.71000000002",
+        headers: [
+          "Customer Type",
+          "Customer SubType",
+          "Subscriber Type",
+          "Revenue Type",
+          "Charge Code/Tax Code",
+          "Charge Type/Tax Type",
+          "Discount Plan Code",
+          "Total Amount",
+          "Document Demand Type",
+          "Legal Entity",
+          "Currency",
+        ],
+        detail: [
+          "E",
+          "",
+          "PRE",
+          "MT",
+          "AMAXCEP",
+          "",
+          "",
+          284073.71,
+          "",
+          "GLOB",
+          "PHP",
+        ],
+      },
+    ])(
+      "normalizes real numeric XML artifacts through the runtime boundary: $workflow",
+      async (sample) => {
+        const book = new ExcelJS.Workbook();
+        const sheet = book.addWorksheet("Page1_1");
+        sheet.addRows([
+          ["Cycle Code:", "BC" + sample.cycle],
+          ["Cycle Year:", "2023"],
+          ["Cycle Instance:", "9"],
+          sample.headers,
+          sample.detail,
+        ]);
+        const parts = unzipSync(new Uint8Array(await book.xlsx.writeBuffer()));
+        const key = "xl/worksheets/sheet1.xml";
+        const xml = strFromU8(parts[key]);
+        expect(xml).toContain(`<v>${sample.amount}</v>`);
+        parts[key] = strToU8(
+          xml.replace(`<v>${sample.amount}</v>`, `<v>${sample.xmlValue}</v>`),
+        );
+        const result = await new BackendSourceNormalizer().normalize(
+          sample.workflow,
+          sample.code,
+          Buffer.from(zipSync(parts)),
+        );
+        expect(result[sample.dataset]).toHaveLength(1);
+        expect(
+          datasetSchemas[sample.dataset].parse({
+            ...(result[sample.dataset][0] as object),
+            period: "2023-09",
+          }),
+        ).toMatchObject({
+          cycle: sample.cycle,
+          amount: String(sample.amount),
+          code: "AMAXCEP",
+          customer_type: "E",
+          currency: "PHP",
+        });
+      },
+    );
     it("parses real XLSX bytes locally and sums exact Load API EG amounts", async () => {
       const files = {
         "[Content_Types].xml":

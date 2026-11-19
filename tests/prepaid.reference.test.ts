@@ -22,6 +22,7 @@ describe("Legacy ZTF0455S reference conversion", () => {
     expect(output.rows[0]).toMatchObject({
       brand: "GP",
       source_brand: "GHP-PREPAID",
+      posting_key: "50",
       cost_element: "0000000123",
       tax_rate: row.TAXRATE,
       average_rate: row.AVERATE,
@@ -41,6 +42,30 @@ describe("Legacy ZTF0455S reference conversion", () => {
         .report.skippedClientRows,
     ).toBe(1);
     expect(() => convertLegacyReference(bytes([row]), "2026-13")).toThrow();
+  });
+  it("preserves blank DUOM from the real legacy/dev reference without supplying a fake unit", () => {
+    const output = convertLegacyReference(
+      bytes([{ ...row, DUOM: "" }]),
+      "2023-09",
+    );
+    expect(output.rows[0].uom).toBe("");
+    expect(output.provenance[0].source.DUOM).toBe("");
+    expect(() =>
+      convertLegacyReference(bytes([{ ...row, DUOM: null }]), "2023-09"),
+    ).toThrow("DUOM must be an exact string");
+  });
+  it("accepts a blank descriptive BRAND without changing WWBRD or inventing membership", () => {
+    const output = convertLegacyReference(
+      bytes([{ ...row, BRAND: "   " }]),
+      "2023-09",
+    );
+    expect(output.rows[0].brand).toBe("GP");
+    expect(output.rows[0]).not.toHaveProperty("source_brand");
+    expect(output.provenance[0].source.BRAND).toBe("   ");
+    expect(output.report.missingSourceBrandRows).toBe(1);
+    expect(() =>
+      convertLegacyReference(bytes([{ ...row, BRAND: null }]), "2023-09"),
+    ).toThrow("BRAND must be an exact string");
   });
   it.each([
     { ...row, HKONT: 123 },

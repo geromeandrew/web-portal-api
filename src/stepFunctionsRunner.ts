@@ -1,6 +1,7 @@
 import {
   DescribeExecutionCommand,
   DescribeStateMachineCommand,
+  GetExecutionHistoryCommand,
   SFNClient,
   StartExecutionCommand,
   type SFNClient as SFNClientType,
@@ -17,7 +18,10 @@ import { isDeepStrictEqual } from "node:util";
 type StepFunctionsSender = Pick<SFNClientType, "send">;
 type StsSender = Pick<STSClientType, "send">;
 
+export type PrepaidImportStage = "extracting" | "refreshing-reference" | "importing-layouts";
+
 export type StepFunctionsRunner = {
+  prepaidImportStage?(executionArn: string): Promise<PrepaidImportStage | undefined>;
   describeStateMachineDefinition(
     stateMachineName: string,
   ): Promise<{ arn: string; type: string; status: string; definition: string }>;
@@ -139,6 +143,26 @@ export class AwsStepFunctionsRunner implements StepFunctionsRunner {
     };
   }
 
+  async prepaidImportStage(executionArn: string): Promise<PrepaidImportStage | undefined> {
+    // Read parent state transitions only. Execution inputs and outputs are not needed.
+    const { events } = await this.client.send(
+      new GetExecutionHistoryCommand({
+        executionArn,
+        reverseOrder: true,
+        includeExecutionData: false,
+        maxResults: 100,
+      }),
+    );
+    for (const event of events ?? []) {
+      switch (event.stateEnteredEventDetails?.name) {
+        case "Import": return "importing-layouts";
+        case "Refresh_ZTF0455S": return "refreshing-reference";
+        case "Extract_All": return "extracting";
+      }
+    }
+    return undefined;
+  }
+
   async describeExecution(executionArn: string) {
     const response = await this.client.send(
       new DescribeExecutionCommand({ executionArn }),
@@ -161,9 +185,10 @@ export class AwsStepFunctionsRunner implements StepFunctionsRunner {
   }
 
   async describeStateMachine(stateMachineName: string) {
+    const arn = await this.stateMachineArn(stateMachineName);
     const response = await this.client.send(
       new DescribeStateMachineCommand({
-        stateMachineArn: await this.stateMachineArn(stateMachineName),
+        stateMachineArn: arn,
         includedData: "METADATA_ONLY",
       }),
     );
@@ -176,6 +201,8 @@ export class AwsStepFunctionsRunner implements StepFunctionsRunner {
       throw new Error(
         "AWS Step Functions did not return complete state machine metadata.",
       );
+    if (response.stateMachineArn !== arn || response.name !== stateMachineName)
+      throw new Error("AWS Step Functions returned a different state machine.");
     const logging = response.loggingConfiguration;
     return {
       name: response.name,

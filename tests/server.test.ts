@@ -15,7 +15,7 @@ vi.mock("../src/migrationRunner.js", () => ({ runMigrations: mocks.migrate }));
 vi.mock("../src/platform/logger.js", () => ({
   createLogger: () => mocks.logger,
 }));
-import { startServer } from "../src/app/server.js";
+import { startServer, stopServer } from "../src/app/server.js";
 let server: Server;
 let pool: { query: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
 beforeEach(() => {
@@ -80,6 +80,17 @@ describe("automatic startup migrations", () => {
   it("refuses readiness when audit INSERT permission is missing", async () => {
     pool.query.mockResolvedValue({ rows: [{ ready: false }] });
     await expect(startServer()).rejects.toThrow("INSERT permission");
+    expect(pool.end).toHaveBeenCalledOnce();
+  });
+
+  it("coordinates explicit cleanup without closing the API pool twice", async () => {
+    const listeners = process.listeners("SIGTERM");
+    await startServer();
+    await Promise.all([stopServer(server), stopServer(server)]);
+    expect(server.close).toHaveBeenCalledOnce();
+    expect(pool.end).toHaveBeenCalledOnce();
+    expect(process.listeners("SIGTERM")).toEqual(listeners);
+    await stopServer(server);
     expect(pool.end).toHaveBeenCalledOnce();
   });
 });

@@ -15,7 +15,8 @@ export function convertLegacyReference(
   const rows: ReturnType<typeof datasetSchemas.reference.parse>[] = [];
   const provenance: { line: number; source: Record<string, unknown> }[] = [];
   let inputRows = 0,
-    skippedClientRows = 0;
+    skippedClientRows = 0,
+    missingSourceBrandRows = 0;
   for (const [index, line] of text.split(/\r?\n/).entries()) {
     if (!line.trim()) continue;
     if (Buffer.byteLength(line) > 128000)
@@ -42,11 +43,19 @@ export function convertLegacyReference(
       const account = field("HKONT");
       if (!/^\d{1,10}$/.test(account))
         throw Error("HKONT must contain 1–10 digits.");
+      // BRAND describes membership; WWBRD is the allocation classification.
+      // Real staging rows have a blank description. Retain that absence as
+      // unknown membership, rather than rejecting a valid allocation key or
+      // inventing GHP-PREPAID. The original value remains in provenance.
+      const sourceBrand =
+        record.BRAND === undefined ? undefined : field("BRAND");
+      if (!sourceBrand) missingSourceBrandRows++;
       const row = datasetSchemas.reference.parse({
         period,
         client: "300",
         company: "GLOB",
-        ...(record.BRAND === undefined ? {} : { source_brand: field("BRAND") }),
+        ...(sourceBrand ? { source_brand: sourceBrand } : {}),
+        ...(record.PSTKY === undefined ? {} : { posting_key: field("PSTKY") }),
         cost_element: account.padStart(10, "0"),
         brand: field("WWBRD").toUpperCase(),
         cfu: field("WWSPA").toUpperCase(),
@@ -80,6 +89,7 @@ export function convertLegacyReference(
       inputRows,
       rowCount: rows.length,
       skippedClientRows,
+      missingSourceBrandRows,
       sourceSha256: hash(bytes),
       sha256: hash(output),
       verifiedMappingSource: false,

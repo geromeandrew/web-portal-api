@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { sha256 } from "../infrastructure/prepaidStorage.js";
 import type { PoolClient } from "pg";
 import { AppError } from "../../../errors.js";
 import { prepaidMaximumSourceBytes } from "../domain/limits.js";
@@ -6,16 +8,37 @@ import {
   expectedName,
   sourceCodes,
   manualIntegrationSchema,
+  requiredBillingSources,
+  matchesSourceName,
+  sourceFileRequirement,
 } from "../domain/contracts.js";
+import type { PrepaidFullBatch } from "./fullBatch.js";
 import { PrepaidRunService } from "./runService.js";
 import {
   sourceWorkflows,
+  selectedSourceWorkflows,
   unprovidedExtractionDependencies,
 } from "../domain/sourceExtraction.js";
+import {
+  isUploadCollection,
+  uploadCollectionConfiguration,
+  uploadCollectionMessage,
+  uploadCollectionSources,
+  uploadCollectionGuidelines,
+} from "../domain/uploadCollection.js";
 
 /** Upload ownership exists before a financial period/run is known. */
 export class PrepaidWorkspaceService {
-  constructor(readonly runs: PrepaidRunService) {}
+  constructor(readonly runs: PrepaidRunService, readonly fullBatch?: PrepaidFullBatch) {}
+  private async assertNoActiveBatch(db: PoolClient, sessionId: string) {
+    if (!this.fullBatch) return;
+    const active = await db.query(
+      `SELECT 1 FROM ${this.t("full_batches")} WHERE session_id=$1 AND status<>'closed'`,
+      [sessionId],
+    );
+    if (active.rowCount)
+      throw new AppError(409, "PREPAID_BATCH_ACTIVE", "Wait for processing to finish, then reset before changing the uploaded files.");
+  }
   private t = (name: string) => this.runs.repo.table(name);
   async extractions(userId: string) {
     const repo = this.runs.repo;
@@ -28,9 +51,25 @@ export class PrepaidWorkspaceService {
       WHERE w.user_id=$1 AND s.active ORDER BY p.created_at,x.workflow`,
       [userId],
     );
+    const preparation =
+      (
+        await repo.pool.query(
+          `SELECT p.id,p.status,p.error,p.source_version,p.available_at,p.lease_until,p.created_at,s.configuration->'sourceExtraction' source_settings
+         FROM ${this.t("preparation_jobs")} p JOIN ${this.t("upload_sessions")} s ON s.id=p.session_id
+         JOIN ${repo.schema}.workspaces w ON w.id=s.workspace_id
+         WHERE w.user_id=$1 AND s.active ORDER BY p.created_at DESC LIMIT 1`,
+          [userId],
+        )
+      ).rows[0] ?? null;
+    const expectedWorkflows = preparation?.source_settings
+      ? selectedSourceWorkflows(preparation.source_settings)
+      : [];
+    if (preparation) delete preparation.source_settings;
     return {
       workflows: sourceWorkflows,
+      expectedWorkflows,
       executions: rows.rows,
+      preparation,
       remainingDependencies: unprovidedExtractionDependencies,
     };
   }
@@ -40,11 +79,25 @@ export class PrepaidWorkspaceService {
     ]);
   }
   private required(configuration: unknown) {
+    if (isUploadCollection(configuration))
+      return sourceCodes.map(sourceFileRequirement);
     const config = manualIntegrationSchema.parse(configuration);
-    return [
-      ...sourceCodes,
-      ...config.expectedCycles.flatMap((c) => [`308_${c}`, `318_${c}`]),
-    ].map((code) => ({ code, fileName: expectedName(code) }));
+    return [...sourceCodes, ...requiredBillingSources(config)].map(
+      sourceFileRequirement,
+    );
+  }
+  private accepted(configuration: unknown) {
+    return isUploadCollection(configuration)
+      ? uploadCollectionSources()
+      : this.required(configuration);
+  }
+  private preparation(configuration: unknown) {
+    return {
+      configured: !isUploadCollection(configuration),
+      message: isUploadCollection(configuration)
+        ? uploadCollectionMessage
+        : null,
+    };
   }
   async state(userId: string) {
     const repo = this.runs.repo;
@@ -66,64 +119,111 @@ export class PrepaidWorkspaceService {
       const missing = required
         .filter((x) => !files.some((f) => f.source_code === x.code))
         .map((x) => x.code);
+      const collectionOnly = isUploadCollection(session.configuration);
+      const unexpected = collectionOnly
+        ? []
+        : files
+            .filter((f) => !required.some((x) => x.code === f.source_code))
+            .map((f) => f.source_code);
+      // A source change hides the review run, but Reset still needs its
+      // versioned regional context. Do not discard that context with the UI.
+      const runId = session.run_id as string | null;
+      const [resetContext, run] = await Promise.all([
+        runId
+          ? Promise.all([
+              repo.revision(repo.pool, runId, "eg"),
+              repo.revision(repo.pool, runId, "sg"),
+            ]).then(([eg, sg]) => ({ runId, eg: eg.version, sg: sg.version }))
+          : null,
+        session.status === "ready" && runId ? this.runs.get(userId, runId) : null,
+      ]);
+      let error: string | null = session.error ?? null;
+      if (
+        session.status === "failed" &&
+        error?.includes("EG_REPORT_MAPPING_REQUIRED")
+      ) {
+        const approved = (await this.runs.availableIntegration())
+          ?.sourceExtraction?.egReportMapping;
+        const pinned = session.configuration?.sourceExtraction?.egReportMapping;
+        if (
+          approved?.approved &&
+          approved.callcardScope === "eg_report" &&
+          approved.loadupAmount &&
+          (!pinned?.callcardScope || !pinned?.loadupAmount)
+        ) {
+          error =
+            "The EG report mappings are now configured, but this failed upload session still uses its earlier settings. Reset the workspace, then upload the complete file set again. Original stored files and frozen reports are retained.";
+        }
+      }
       return {
         session,
-        run:
-          session.status === "ready" && session.run_id
-            ? await this.runs.get(userId, session.run_id)
-            : null,
+        resetContext,
+        run,
         sources: {
           required,
+          accepted: this.accepted(session.configuration),
+          collectionOnly,
+          ...(collectionOnly
+            ? { guidelines: uploadCollectionGuidelines() }
+            : {}),
+          unexpected,
           files,
           missing,
-          valid: !missing.length,
+          valid: !collectionOnly && !missing.length && !unexpected.length,
           upstream: null,
         },
-        error: session.error,
+        preparation: this.preparation(session.configuration),
+        error:
+          error ??
+          (unexpected.length
+            ? `These uploaded sources are outside the approved cycle coverage: ${unexpected.join(", ")}. Remove them before preparation; no file was silently discarded.`
+            : null),
       };
     }
     // Adopt old selected runs read-only; viewing never creates a session/run.
     try {
       const id = await this.runs.active(userId);
-      return {
-        session: null,
-        run: await this.runs.get(userId, id),
-        sources: await this.runs.sources(userId, id),
-        error: null,
-      };
+      const [run, sources] = await Promise.all([
+        this.runs.get(userId, id),
+        this.runs.sources(userId, id),
+      ]);
+      return { session: null, run, sources, error: null };
     } catch (e) {
       if (!(e instanceof AppError) || e.code !== "PREPAID_RUN_REQUIRED")
         throw e;
     }
-    let required: { code: string; fileName: string }[] = sourceCodes.map(
-      (code) => ({ code, fileName: expectedName(code) }),
-    );
-    let error: string | null = null;
-    try {
-      required = this.required(await this.runs.integration());
-    } catch (e) {
-      if (
-        !(e instanceof AppError) ||
-        e.code !== "PREPAID_INTEGRATION_NOT_CONFIGURED"
-      )
-        throw e;
-      error = e.message;
-    }
+    const configuration =
+      (await this.runs.availableIntegration()) ?? uploadCollectionConfiguration;
+    const required = this.required(configuration);
     return {
       session: null,
       run: null,
       sources: {
         required,
+        accepted: this.accepted(configuration),
+        collectionOnly: isUploadCollection(configuration),
+        ...(isUploadCollection(configuration)
+          ? { guidelines: uploadCollectionGuidelines() }
+          : {}),
+        unexpected: [],
         missing: required.map((x) => x.code),
         files: [],
         valid: false,
         upstream: null,
       },
-      error,
+      preparation: this.preparation(configuration),
+      error: null,
     };
   }
   private async session(db: PoolClient, userId: string, create: boolean) {
     await this.lock(db, userId);
+    const existing = (
+      await db.query(
+        `SELECT s.* FROM ${this.t("upload_sessions")} s JOIN ${this.runs.repo.schema}.workspaces w ON w.id=s.workspace_id WHERE w.user_id=$1 AND s.active FOR UPDATE OF s`,
+        [userId],
+      )
+    ).rows[0];
+    if (existing || !create) return existing ?? null;
     const workspace = create
       ? await this.runs.repo.workspace(db, userId)
       : (
@@ -140,7 +240,9 @@ export class PrepaidWorkspaceService {
       )
     ).rows[0];
     if (!session && create) {
-      const configuration = await this.runs.integration();
+      const configuration =
+        (await this.runs.availableIntegration(db)) ??
+        uploadCollectionConfiguration;
       // Existing reviewed/frozen runs must be explicitly reset, not overwritten.
       const current = (
         await db.query(
@@ -171,6 +273,7 @@ export class PrepaidWorkspaceService {
         "PREPAID_SESSION_REQUIRED",
         "Upload source files first.",
       );
+    await this.assertNoActiveBatch(db, s.id);
     if (s.status === "pending")
       throw new AppError(
         409,
@@ -196,7 +299,9 @@ export class PrepaidWorkspaceService {
     userId: string,
     code: string,
     file: { originalname: string; buffer: Buffer; mimetype: string },
+    uploadId?: string,
   ) {
+    if (uploadId !== undefined) z.string().uuid().parse(uploadId);
     if (file.buffer.length > prepaidMaximumSourceBytes)
       throw new AppError(
         413,
@@ -209,7 +314,7 @@ export class PrepaidWorkspaceService {
         "PREPAID_EMPTY_FILE",
         "The uploaded file is empty.",
       );
-    if (expectedName(code).toLowerCase() !== file.originalname.toLowerCase())
+    if (!matchesSourceName(code, file.originalname))
       throw new AppError(
         400,
         "PREPAID_FILE_NAME_INVALID",
@@ -224,21 +329,56 @@ export class PrepaidWorkspaceService {
         "PREPAID_FILE_TYPE_INVALID",
         "Excel inputs must be XLSX workbooks.",
       );
-    const s = await this.runs.repo.transaction(async (db) => {
+    const id = uploadId ?? randomUUID();
+    const digest = uploadId ? sha256(file.buffer) : undefined;
+    const replay = async (db: PoolClient) => {
+      if (!uploadId) return null;
+      const prior = (
+        await db.query(
+          `SELECT f.*,s.active session_active FROM ${this.t("session_files")} f JOIN ${this.t("upload_sessions")} s ON s.id=f.session_id JOIN ${this.runs.repo.schema}.workspaces w ON w.id=s.workspace_id WHERE f.id=$1 AND w.user_id=$2`,
+          [id, userId],
+        )
+      ).rows[0];
+      if (!prior) return null;
+      if (
+        !prior.active ||
+        !prior.session_active ||
+        prior.source_code !== code ||
+        prior.sha256 !== digest ||
+        Number(prior.size_bytes) !== file.buffer.length
+      )
+        throw new AppError(
+          409,
+          "PREPAID_UPLOAD_ID_CONFLICT",
+          "This upload ID belongs to different bytes or an inactive source. Refresh before retrying.",
+        );
+      return {
+        id: prior.id,
+        key: prior.object_key,
+        sha256: prior.sha256,
+        size: Number(prior.size_bytes),
+      };
+    };
+    const context = await this.runs.repo.transaction(async (db) => {
+      if (uploadId) {
+        await this.lock(db, userId);
+        const prior = await replay(db);
+        if (prior) return { prior, session: null };
+      }
       const session = await this.mutable(db, userId, true);
-      if (!this.required(session.configuration).some((x) => x.code === code))
+      if (!this.accepted(session.configuration).some((x) => x.code === code))
         throw new AppError(
           400,
           "PREPAID_SOURCE_NOT_REQUIRED",
           "This source is outside the configured billing-cycle coverage.",
         );
-      return session;
+      return { session, prior: null };
     });
+    if (context.prior) return context.prior;
+    const s = context.session!;
     if (
-      !this.required(s.configuration).some(
-        (x) =>
-          x.code === code &&
-          x.fileName.toLowerCase() === file.originalname.toLowerCase(),
+      !this.accepted(s.configuration).some(
+        (x) => x.code === code && matchesSourceName(x.code, file.originalname),
       )
     )
       throw new AppError(
@@ -255,16 +395,36 @@ export class PrepaidWorkspaceService {
         "PREPAID_FILE_TYPE_INVALID",
         "Excel inputs must be XLSX workbooks.",
       );
-    const id = randomUUID(),
-      key = `${this.runs.storage.sessionPrefix(s.id)}sources/${id}/${expectedName(code)}`;
-    const saved = await this.runs.storage.put(key, file.buffer, file.mimetype);
+    const key = `${this.runs.storage.sessionPrefix(s.id)}sources/${id}/${expectedName(code)}`;
+    const saved = uploadId
+      ? await this.runs.storage.putVerified(
+          key,
+          this.runs.storage.sessionPrefix(s.id),
+          file.buffer,
+          file.mimetype,
+        )
+      : await this.runs.storage.put(key, file.buffer, file.mimetype);
     await this.runs.repo.transaction(async (db) => {
+      if (uploadId) {
+        await this.lock(db, userId);
+        if (await replay(db)) return;
+      }
       const current = await this.mutable(db, userId, false);
       if (current.id !== s.id)
         throw new AppError(
           409,
           "PREPAID_SESSION_CHANGED",
           "The workspace was reset; this upload was not attached.",
+        );
+      if (
+        !this.accepted(current.configuration).some(
+          (source) => source.code === code,
+        )
+      )
+        throw new AppError(
+          409,
+          "PREPAID_SOURCE_COVERAGE_CHANGED",
+          "The approved billing-cycle coverage changed while this file uploaded. Refresh the workspace; this file was not attached.",
         );
       await db.query(
         `UPDATE ${this.t("session_files")} SET active=false WHERE session_id=$1 AND source_code=$2 AND active`,
@@ -292,25 +452,53 @@ export class PrepaidWorkspaceService {
     return { id, ...saved };
   }
   private async enqueue(db: PoolClient, sessionId: string) {
-    const s = (
+    let s = (
       await db.query(
         `SELECT * FROM ${this.t("upload_sessions")} WHERE id=$1 FOR UPDATE`,
         [sessionId],
       )
     ).rows[0];
-    if (s.status === "pending" || s.status === "ready") return;
+    if (s.status === "pending" || (s.status === "ready" && !this.fullBatch)) return false;
+    if (isUploadCollection(s.configuration)) {
+      const configuration = await this.runs.availableIntegration(db);
+      if (!configuration) return false;
+      // Bind once, before a preparation job exists. File identity/bytes are kept;
+      // a version increment fences the new processing configuration as context.
+      s = (
+        await db.query(
+          `UPDATE ${this.t("upload_sessions")} SET configuration=$2,version=version+1,error=NULL WHERE id=$1 RETURNING *`,
+          [sessionId, JSON.stringify(configuration)],
+        )
+      ).rows[0];
+    }
+    if (this.fullBatch) {
+      try {
+        const queued = await this.fullBatch.enqueueSession(db, s);
+        if (queued) await db.query(`UPDATE ${this.t("upload_sessions")} SET error=NULL WHERE id=$1`,[s.id]);
+        return queued;
+      } catch (error) {
+        if (!(error instanceof AppError)) throw error;
+        if (error.code === "PREPAID_BATCH_INPUT_REQUIRED") return false;
+        if (!["PREPAID_BATCH_BUSY", "PREPAID_BATCH_LAYOUT_REQUIRED", "PREPAID_BATCH_UNEXPECTED_SOURCE"].includes(error.code))
+          throw error;
+        const message = ["PREPAID_BATCH_BUSY", "PREPAID_BATCH_LAYOUT_REQUIRED"].includes(error.code)
+          ? "AWS batch is waiting: " + error.message : error.message;
+        await db.query(`UPDATE ${this.t("upload_sessions")} SET error=$2 WHERE id=$1 AND error IS DISTINCT FROM $2`,[s.id,message]);
+        return false;
+      }
+    }
     const files = (
       await db.query(
         `SELECT * FROM ${this.t("session_files")} WHERE session_id=$1 AND active ORDER BY source_code`,
         [sessionId],
       )
     ).rows;
+    const required = this.required(s.configuration);
     if (
-      !this.required(s.configuration).every((x) =>
-        files.some((f) => f.source_code === x.code),
-      )
+      files.some((f) => !required.some((x) => x.code === f.source_code)) ||
+      !required.every((x) => files.some((f) => f.source_code === x.code))
     )
-      return;
+      return false;
     const attempt = Number(
       (
         await db.query(
@@ -335,6 +523,37 @@ export class PrepaidWorkspaceService {
       `UPDATE ${this.t("upload_sessions")} SET status='pending',error=NULL WHERE id=$1`,
       [sessionId],
     );
+    return true;
+  }
+  /** Worker-only transition: viewing the workspace never creates jobs/runs.
+   * A complete approved config is still mandatory before binding/queuing.
+   */
+  async resumeCollectingUploads() {
+    if (!this.fullBatch && !(await this.runs.availableIntegration())) return false;
+    const rows = await this.runs.repo.pool.query(
+      `SELECT s.id,w.user_id FROM ${this.t("upload_sessions")} s
+      JOIN ${this.runs.repo.schema}.workspaces w ON w.id=s.workspace_id
+      WHERE s.active AND (s.status='collecting' OR ($2 AND s.status='ready'))
+        AND (s.configuration=$1::jsonb OR ($2 AND (s.error LIKE 'AWS batch is waiting:%' OR s.status='ready')))
+      ORDER BY s.created_at LIMIT 20`,
+      [JSON.stringify(uploadCollectionConfiguration), !!this.fullBatch],
+    );
+    let queued = false;
+    for (const row of rows.rows) {
+      const result = await this.runs.repo.transaction(async (db) => {
+        const current = await this.session(db, row.user_id, false);
+        if (
+          !current ||
+          current.id !== row.id ||
+          !["collecting", ...(this.fullBatch ? ["ready"] : [])].includes(current.status) ||
+          !isUploadCollection(current.configuration) && !(this.fullBatch && (current.status === "ready" || current.error?.startsWith("AWS batch is waiting:")))
+        )
+          return false;
+        return this.enqueue(db, current.id);
+      });
+      queued = result || queued;
+    }
+    return queued;
   }
   async prepare(userId: string) {
     await this.runs.repo.transaction(async (db) => {
@@ -354,6 +573,7 @@ export class PrepaidWorkspaceService {
         `UPDATE ${this.t("upload_sessions")} SET version=version+1,status='collecting',error=NULL WHERE id=$1`,
         [s.id],
       );
+      await this.enqueue(db, s.id);
     });
     return this.state(userId);
   }
@@ -387,11 +607,13 @@ export class PrepaidWorkspaceService {
           "PREPAID_RUN_CHANGED",
           "Refresh the workspace before resetting its reviewed run.",
         );
-      if (s)
+      if (s) {
+        await this.fullBatch?.closeForReset(db, s.id);
         await db.query(
           `UPDATE ${this.t("upload_sessions")} SET active=false WHERE id=$1`,
           [s.id],
         );
+      }
       await db.query(
         `DELETE FROM ${this.t("workspace_selection")} WHERE workspace_id IN(SELECT id FROM ${this.runs.repo.schema}.workspaces WHERE user_id=$1)`,
         [userId],

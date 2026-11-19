@@ -19,7 +19,8 @@ export function createPrepaidUpload(
   }).single("file");
   let active = 0;
   return (req, res, next) => {
-    if (active >= 2)
+    if (active >= 2) {
+      res.setHeader("Retry-After", "1");
       return next(
         new AppError(
           503,
@@ -27,6 +28,7 @@ export function createPrepaidUpload(
           "Two source uploads are already in progress on this server. Retry shortly.",
         ),
       );
+    }
     active++;
     let released = false;
     const release = () => {
