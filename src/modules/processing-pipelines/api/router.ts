@@ -9,6 +9,7 @@ import type { AppDependencies } from "../../../app/dependencies.js";
 import {
   canonicalizeProcessingPipelineExpectedFileName,
   matchesBillCycleUploadFile,
+  matchesEomUpload,
   matchesAprmAccrualAurUpload,
   matchesProcessingPipelineRequirement,
   isProcessingPipelineWebUploadRequirement,
@@ -633,6 +634,8 @@ export function createProcessingPipelinesRouter(
       /^AUR Extract FINAL(?:_BILLING)?\.XLSX$/i.test(requirement.fileName);
     const validUploadName = isAurUpload
       ? matchesAprmAccrualAurUpload(localName)
+      : pipelineCode.startsWith("bss_eom_") && requirement.match === "exact"
+        ? matchesEomUpload(requirement.fileName, localName)
       : pipelineCode.startsWith("bss_billcycle_")
         ? matchesBillCycleUploadFile(requirement, localName)
         : requirement.match === "glob"

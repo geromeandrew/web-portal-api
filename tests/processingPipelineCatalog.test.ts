@@ -5,6 +5,7 @@ import {
   bayanBillCycleSuffixes,
   canonicalizeProcessingPipelineExpectedFileName,
   matchesBillCycleUploadFile,
+  matchesEomUpload,
   matchesAprmAccrualAurUpload,
   globeBillCycleStateMachines,
   matchesProcessingPipelineRequirement,
@@ -299,5 +300,18 @@ describe("Processing Pipeline catalogue", () => {
     expect([...migrated.values()].map(mappingKey).sort()).toEqual(
       processingPipelineSeedRequirements.map(mappingKey).sort(),
     );
+  });
+});
+
+describe("EOM upload filenames", () => {
+  it("matches longer names and distinguishes SAP mappings", () => {
+    for (const entity of ["G", "I", "B"]) {
+      const name = `sap_glunbilled_unconf_${entity}_20261101_160510_dos.txt`;
+      expect(matchesEomUpload(`sap_glunbilled_unconf_${entity}.txt`, name)).toBe(true);
+      expect(matchesEomUpload(`sap_glunbilled_${entity}.txt`, name)).toBe(false);
+      expect(matchesEomUpload(`307. Report_${entity}.XLSX`, `307. Other_${entity}_date.xlsx`)).toBe(true);
+      expect(matchesEomUpload(`307. Report_${entity}.XLSX`, `317. Other_${entity}.xlsx`)).toBe(false);
+      expect(matchesEomUpload(`sap_airc_${entity}.txt`, `sap_airc_${entity}_date.xlsx`)).toBe(false);
+    }
   });
 });
