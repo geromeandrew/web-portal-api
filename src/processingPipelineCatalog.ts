@@ -485,6 +485,16 @@ export function matchesProcessingPipelineRequirement(
   return createProcessingPipelineFileMatcher(requirement)(fileName);
 }
 
+export function matchesEomUpload(expected: string, name: string) {
+  const ext = expected.match(/\.[^.]+$/)?.[0].toLowerCase();
+  if (!ext || !name.toLowerCase().endsWith(ext)) return false;
+  const number = expected.match(/^(\d+)(?=[.\s_-])/i)?.[1];
+  if (number) return name.match(/^(\d+)(?=[.\s_-])/i)?.[1] === number;
+  const stem = expected.slice(0, -ext.length).toLowerCase();
+  const uploaded = name.slice(0, -ext.length).toLowerCase();
+  return uploaded === stem || uploaded.startsWith(`${stem}_`);
+}
+
 export function matchesBillCycleUploadFile(
   requirement: ProcessingPipelineFileRequirement,
   fileName: string,
