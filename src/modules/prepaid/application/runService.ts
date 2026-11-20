@@ -497,12 +497,13 @@ export class PrepaidRunService {
     runId: string,
     region: Region,
     action: "import" | "reset" | "validate",
-    version: number,
+    version: number | undefined,
   ) {
     await this.repo.transaction(async (db) => {
       await this.repo.own(db, userId, runId, true);
       const rev = await this.repo.revision(db, runId, region, true);
-      this.repo.checkVersion(rev, version);
+      if (action !== "reset" || version !== undefined)
+        this.repo.checkVersion(rev, version);
       if (action === "validate")
         await this.assertCurrentSources(
           db,

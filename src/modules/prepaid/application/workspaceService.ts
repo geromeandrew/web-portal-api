@@ -224,22 +224,14 @@ export class PrepaidWorkspaceService {
       )
     ).rows[0];
     if (existing || !create) return existing ?? null;
-    const workspace = create
-      ? await this.runs.repo.workspace(db, userId)
-      : (
-          await db.query(
-            `SELECT id FROM ${this.runs.repo.schema}.workspaces WHERE user_id=$1`,
-            [userId],
-          )
-        ).rows[0]?.id;
-    if (!workspace) return null;
+    const workspace = await this.runs.repo.workspace(db, userId);
     let session = (
       await db.query(
         `SELECT * FROM ${this.t("upload_sessions")} WHERE workspace_id=$1 AND active FOR UPDATE`,
         [workspace],
       )
     ).rows[0];
-    if (!session && create) {
+    if (!session) {
       const configuration =
         (await this.runs.availableIntegration(db)) ??
         uploadCollectionConfiguration;

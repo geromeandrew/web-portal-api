@@ -52,6 +52,27 @@ type Receipt = z.infer<typeof extractionReceiptSchema>;
 type Summary = Pick<Receipt, "workflow" | "executionArn" | "artifacts"> & {
   receiptKey: string;
 };
+function validateNormalizedFragment(
+  workflow: SourceWorkflow,
+  sourceCode: string,
+  name: Receipt["artifacts"][number]["name"],
+  values: readonly unknown[],
+) {
+  if (
+    (["loadapi", "loadup", "adjustment_headers", "charge_headers"].includes(
+      name,
+    ) &&
+      values.length !== 1) ||
+    (workflow === "callcard_sg" &&
+      name === "callcard" &&
+      values.length !== 2) ||
+    (name === "ke24" && values.length === 0)
+  )
+    throw Error("Unexpected source aggregate/header row count.");
+  for (const value of values)
+    validateSourceFragment(workflow, sourceCode, name, value);
+}
+
 export class PrepaidSourceExtractionWorker {
   readonly normalizer: SourceNormalizer;
   readonly landing: SourceLanding;
@@ -184,7 +205,7 @@ export class PrepaidSourceExtractionWorker {
       throw new PrepaidSourceExtractionError(
         "Reading Glue financial output requires verification of the native scripts and row-identity implementation before dispatch.",
       );
-    if (parallel && (!this.landing.release || !this.inspector.verifyIsolation))
+    if (parallel && !this.landing.release)
       throw new PrepaidSourceExtractionError(
         "Parallel extraction requires verified job isolation and preparation-owned landing coordination.",
       );
@@ -598,27 +619,12 @@ export class PrepaidSourceExtractionWorker {
               for (const [name, values] of Object.entries(fragments)) {
                 const artifactName =
                   name as Receipt["artifacts"][number]["name"];
-                if (
-                  ([
-                    "loadapi",
-                    "loadup",
-                    "adjustment_headers",
-                    "charge_headers",
-                  ].includes(name) &&
-                    values.length !== 1) ||
-                  (workflow === "callcard_sg" &&
-                    name === "callcard" &&
-                    values.length !== 2) ||
-                  (name === "ke24" && values.length === 0)
-                )
-                  throw Error("Unexpected source aggregate/header row count.");
-                for (const value of values)
-                  validateSourceFragment(
-                    workflow,
-                    source.code,
-                    artifactName,
-                    value,
-                  );
+                validateNormalizedFragment(
+                  workflow,
+                  source.code,
+                  artifactName,
+                  values,
+                );
                 const body = Buffer.from(
                   values.map((v) => JSON.stringify(v) + "\n").join(""),
                 );
@@ -797,69 +803,90 @@ export class PrepaidSourceExtractionWorker {
             }
           }
           progress("acquire_shared_inputs");
-          await this.landing.acquire(landingOwner);
-          if (!context.staged) {
-            progress("check_shared_jobs_idle");
-            await idle(
-              machines,
-              settings.envPrefix,
-              expectedArn,
-              parallel ? cohort() : undefined,
-            );
-            const files = [];
-            for (const [index, source] of sources.entries()) {
-              const bytes = await this.storage.bytes(
-                source.key,
-                `${this.storage.sessionPrefix(session.id)}sources/${source.id}/`,
-                prepaidMaximumSourceBytes,
+          try {
+            await this.landing.acquire(landingOwner);
+            if (!context.staged) {
+              progress("check_shared_jobs_idle");
+              await idle(
+                machines,
+                settings.envPrefix,
+                expectedArn,
+                parallel ? cohort() : undefined,
               );
-              if (sha256(bytes) !== source.sha256)
-                throw new PrepaidSourceExtractionError(
-                  "Uploaded source checksum mismatch before dispatch.",
-                );
-              const adapted = nativeInputs.find(
-                (input) => input.sourceId === source.id,
-              );
-              if (adapted) {
-                const native = await this.storage.bytes(
-                  adapted.key,
-                  outputPrefix,
+              const files = [];
+              for (const [index, source] of sources.entries()) {
+                const bytes = await this.storage.bytes(
+                  source.key,
+                  `${this.storage.sessionPrefix(session.id)}sources/${source.id}/`,
                   prepaidMaximumSourceBytes,
                 );
-                if (
-                  sha256(native) !== adapted.sha256 ||
-                  native.length !== adapted.size
-                )
+                if (sha256(bytes) !== source.sha256)
                   throw new PrepaidSourceExtractionError(
-                    "Adapted native input checksum mismatch.",
+                    "Uploaded source checksum mismatch before dispatch.",
                   );
-                files.push({
-                  ...copyNames[index],
-                  bytes: native,
-                  original: { bytes, sha256: source.sha256 },
-                });
-              } else files.push({ ...copyNames[index], bytes });
-            }
-            await owns();
-            progress("stage_shared_inputs", {
-              inputNames: copyNames.map((file: any) => file.name),
-            });
-            if (parallel && !context.stagingStarted) {
-              // Persist intent BEFORE the first S3 file mutation. A partial or
-              // acknowledged-but-lost stage must keep the cohort lock, while
-              // staged=false still permits idempotent completion on retry.
+                const adapted = nativeInputs.find(
+                  (input) => input.sourceId === source.id,
+                );
+                if (adapted) {
+                  const native = await this.storage.bytes(
+                    adapted.key,
+                    outputPrefix,
+                    prepaidMaximumSourceBytes,
+                  );
+                  if (
+                    sha256(native) !== adapted.sha256 ||
+                    native.length !== adapted.size
+                  )
+                    throw new PrepaidSourceExtractionError(
+                      "Adapted native input checksum mismatch.",
+                    );
+                  files.push({
+                    ...copyNames[index],
+                    bytes: native,
+                    original: { bytes, sha256: source.sha256 },
+                  });
+                } else files.push({ ...copyNames[index], bytes });
+              }
+              await owns();
+              progress("stage_shared_inputs", {
+                inputNames: copyNames.map((file: any) => file.name),
+              });
+              if (!context.stagingStarted) {
+                // Persist intent BEFORE the first S3 file mutation. A partial or
+                // acknowledged-but-lost stage must keep the landing lock, while
+                // staged=false still permits idempotent completion on retry.
+                await save(
+                  `UPDATE ${this.t("source_extractions")} SET context=jsonb_set(context,'{stagingStarted}','true') WHERE id=$1`,
+                  [row.id],
+                );
+                context.stagingStarted = true;
+              }
+              await this.landing.stage(landingOwner, workflow, files);
               await save(
-                `UPDATE ${this.t("source_extractions")} SET context=jsonb_set(context,'{stagingStarted}','true') WHERE id=$1`,
+                `UPDATE ${this.t("source_extractions")} SET context=jsonb_set(context,'{staged}','true') WHERE id=$1`,
                 [row.id],
               );
-              context.stagingStarted = true;
+              context.staged = true;
             }
-            await this.landing.stage(landingOwner, workflow, files);
-            await save(
-              `UPDATE ${this.t("source_extractions")} SET context=jsonb_set(context,'{staged}','true') WHERE id=$1`,
-              [row.id],
-            );
-            context.staged = true;
+          } catch (error) {
+            // A staged or partially staged workflow owns shared files until cleanup.
+            if (
+              !parallel &&
+              !context.staged &&
+              !context.stagingStarted &&
+              this.landing.release
+            ) {
+              try {
+                await owns();
+                await this.landing.release(landingOwner, true);
+              } catch (cleanupError) {
+                throw new AggregateError(
+                  [error, cleanupError],
+                  "Could not release Prepaid landing lock after pre-dispatch failure.",
+                );
+              }
+            }
+            throw error;
           }
           await owns();
           progress("start_step_function", {

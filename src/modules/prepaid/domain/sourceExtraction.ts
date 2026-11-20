@@ -266,12 +266,17 @@ export const unprovidedExtractionDependencies = [
 function choiceMatches(
   condition: any,
   input: Record<string, unknown>,
+  depth = 0,
 ): boolean {
+  if (depth >= 64)
+    throw new Error(
+      "Step Functions Choice nesting exceeds the verification limit.",
+    );
   if (condition.And)
-    return condition.And.every((c: any) => choiceMatches(c, input));
+    return condition.And.every((c: any) => choiceMatches(c, input, depth + 1));
   if (condition.Or)
-    return condition.Or.some((c: any) => choiceMatches(c, input));
-  if (condition.Not) return !choiceMatches(condition.Not, input);
+    return condition.Or.some((c: any) => choiceMatches(c, input, depth + 1));
+  if (condition.Not) return !choiceMatches(condition.Not, input, depth + 1);
   if (
     typeof condition.Variable !== "string" ||
     !/^\$\.[A-Za-z0-9_.]+$/.test(condition.Variable)

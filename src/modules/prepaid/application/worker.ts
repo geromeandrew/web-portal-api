@@ -92,75 +92,77 @@ export class PrepaidWorker {
         phase: job.phase,
         message,
       });
-      // A transport failure after dispatch might hide a successful remote push.
-      // Named executions are reconciled on a later tick; do not send another copy.
-      const uncertain =
-        job.kind === "delivery" &&
-        (job.phase.endsWith("starting") || !!job.execution_arn);
-      if (!leaseLost)
-        await this.repo.transaction(async (db) => {
-          await db.query(
-            `SELECT id FROM ${this.t("runs")} WHERE id=$1 FOR UPDATE`,
-            [job.run_id],
-          );
-          const locked = (
-            await db.query(
-              `SELECT * FROM ${this.t("jobs")} WHERE id=$1 AND lease_token=$2 AND status='running' FOR UPDATE`,
-              [job.id, token],
-            )
-          ).rows[0];
-          if (!locked) return;
-          const consecutiveFailures =
-            Number(locked.error?.consecutiveFailures ?? 0) + 1;
-          if (uncertain && consecutiveFailures < 20) {
-            await db.query(
-              `UPDATE ${this.t("jobs")} SET status='waiting',error=$3,available_at=now()+interval '30 seconds',lease_until=NULL WHERE id=$1 AND lease_token=$2`,
-              [
-                job.id,
-                token,
-                JSON.stringify({
-                  message,
-                  reconciling: true,
-                  consecutiveFailures,
-                }),
-              ],
-            );
-          } else {
-            const status = uncertain ? "unknown" : "failed";
-            await db.query(
-              `UPDATE ${this.t("jobs")} SET status=$3,error=$4,lease_until=NULL,updated_at=now() WHERE id=$1 AND lease_token=$2`,
-              [
-                job.id,
-                token,
-                status,
-                JSON.stringify({ message, consecutiveFailures }),
-              ],
-            );
-            if (job.kind === "ingest")
-              await db.query(
-                `UPDATE ${this.t("source_snapshots")} SET status='failed' WHERE id=$1`,
-                [job.payload.snapshotId],
-              );
-            else
-              await db.query(
-                `UPDATE ${this.t("deliveries")} SET status=$2 WHERE id=$1`,
-                [job.payload.deliveryId, status],
-              );
-            await this.repo.event(
-              db,
-              job.run_id,
-              `job.${status}`,
-              { message },
-              undefined,
-              job.revision_id ?? undefined,
-              job.id,
-            );
-          }
-        });
+      if (!leaseLost) await this.recordFailure(job, token, message);
     } finally {
       clearInterval(heartbeat);
     }
     return true;
+  }
+  private async recordFailure(job: Job, token: string, message: string) {
+    // A transport failure after dispatch might hide a successful remote push.
+    // Named executions are reconciled on a later tick; do not send another copy.
+    const uncertain =
+      job.kind === "delivery" &&
+      (job.phase.endsWith("starting") || !!job.execution_arn);
+    await this.repo.transaction(async (db) => {
+      await db.query(
+        `SELECT id FROM ${this.t("runs")} WHERE id=$1 FOR UPDATE`,
+        [job.run_id],
+      );
+      const locked = (
+        await db.query(
+          `SELECT * FROM ${this.t("jobs")} WHERE id=$1 AND lease_token=$2 AND status='running' FOR UPDATE`,
+          [job.id, token],
+        )
+      ).rows[0];
+      if (!locked) return;
+      const consecutiveFailures =
+        Number(locked.error?.consecutiveFailures ?? 0) + 1;
+      if (uncertain && consecutiveFailures < 20) {
+        await db.query(
+          `UPDATE ${this.t("jobs")} SET status='waiting',error=$3,available_at=now()+interval '30 seconds',lease_until=NULL WHERE id=$1 AND lease_token=$2`,
+          [
+            job.id,
+            token,
+            JSON.stringify({
+              message,
+              reconciling: true,
+              consecutiveFailures,
+            }),
+          ],
+        );
+        return;
+      }
+      const status = uncertain ? "unknown" : "failed";
+      await db.query(
+        `UPDATE ${this.t("jobs")} SET status=$3,error=$4,lease_until=NULL,updated_at=now() WHERE id=$1 AND lease_token=$2`,
+        [
+          job.id,
+          token,
+          status,
+          JSON.stringify({ message, consecutiveFailures }),
+        ],
+      );
+      if (job.kind === "ingest")
+        await db.query(
+          `UPDATE ${this.t("source_snapshots")} SET status='failed' WHERE id=$1`,
+          [job.payload.snapshotId],
+        );
+      else
+        await db.query(
+          `UPDATE ${this.t("deliveries")} SET status=$2 WHERE id=$1`,
+          [job.payload.deliveryId, status],
+        );
+      await this.repo.event(
+        db,
+        job.run_id,
+        `job.${status}`,
+        { message },
+        undefined,
+        job.revision_id ?? undefined,
+        job.id,
+      );
+    });
   }
   private async persist(
     job: Job,

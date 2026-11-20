@@ -157,8 +157,7 @@ export function prepaidRawSourceMigrationSql(
   _portalSchema: string,
   rawSchema = prepaidRawSchema,
 ) {
-  if (!/^[a-z_][a-z0-9_]*$/.test(rawSchema))
-    throw new Error("Invalid raw source schema");
+  const initialValidation = prepaidRawSourceValidationSql(rawSchema, false);
   const s = quote(rawSchema);
   return `CREATE SCHEMA IF NOT EXISTS ${s};
 ${Object.entries(prepaidRawTables)
@@ -172,7 +171,7 @@ ${Object.entries(prepaidRawTables)
         .join(",\n")}\n);`,
   )
   .join("\n")}
-${prepaidRawSourceValidationSql(rawSchema, false)}
+${initialValidation}
 CREATE UNIQUE INDEX IF NOT EXISTS "IX_billed_adjustments_lineitem_cycles_ClusteredIndex-20231012-2"
  ON ${s}.billed_adjustments_lineitem_cycles(sequentialid);
 ${prepaidRawSourceValidationSql(rawSchema)}`;

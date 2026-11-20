@@ -8,8 +8,44 @@ import {
 import { createAwsClientOptions } from "./aws.js";
 import { loadConfig } from "./config.js";
 import { createPool } from "./db.js";
-import { migratePrepaid } from "./modules/prepaid/infrastructure/migrationRunner.js";
+import {
+  migratePrepaid,
+  type MigrationConnection,
+} from "./modules/prepaid/infrastructure/migrationRunner.js";
 import { splitSqlStatements } from "./modules/prepaid/infrastructure/sqlStatements.js";
+
+function dataApiConnection(
+  client: RDSDataClient,
+  target: { resourceArn: string; secretArn: string; database: string },
+  transactionId: string,
+): MigrationConnection {
+  return {
+    async query(sql, values) {
+      // Only the fixed catalog queries have parameters. DDL is split separately.
+      const statements = values
+        ? [sql.replace(/\$(\d+)\b/g, ":value$1")]
+        : splitSqlStatements(sql);
+      const parameters = values?.map((stringValue, index) => ({
+        name: `value${index + 1}`,
+        value: { stringValue },
+      }));
+      let rows: Record<string, unknown>[] = [];
+      for (const statement of statements) {
+        const response = await client.send(
+          new ExecuteStatementCommand({
+            ...target,
+            transactionId,
+            sql: statement,
+            parameters,
+            formatRecordsAs: "JSON",
+          }),
+        );
+        rows = JSON.parse(response.formattedRecords ?? "[]");
+      }
+      return { rows };
+    },
+  };
+}
 
 const config = loadConfig();
 const resourceArn = process.env.PREPAID_MIGRATION_DATA_API_RESOURCE_ARN;
@@ -31,23 +67,7 @@ try {
       if (!transactionId)
         throw new Error("Data API did not return a transaction ID.");
       const applied = await migratePrepaid(
-        {
-          async query(sql) {
-            let rows: Record<string, unknown>[] = [];
-            for (const statement of splitSqlStatements(sql)) {
-              const response = await client.send(
-                new ExecuteStatementCommand({
-                  ...target,
-                  transactionId,
-                  sql: statement,
-                  formatRecordsAs: "JSON",
-                }),
-              );
-              rows = JSON.parse(response.formattedRecords ?? "[]");
-            }
-            return { rows };
-          },
-        },
+        dataApiConnection(client, target, transactionId),
         config.DATABASE_SCHEMA,
       );
       await client.send(
@@ -67,7 +87,14 @@ try {
               transactionId,
             }),
           )
-          .catch(() => {});
+          .catch((rollbackError: unknown) => {
+            console.error(
+              "Prepaid Data API rollback failed:",
+              rollbackError instanceof Error
+                ? rollbackError.name
+                : "unknown error",
+            );
+          });
       throw error;
     } finally {
       client.destroy();

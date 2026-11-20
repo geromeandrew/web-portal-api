@@ -209,11 +209,13 @@ const allOpenApiDocument: OpenAPIV3.Document = {
       post: {
         ...success("Reset selected-run draft"),
         parameters: [regionPath],
-        requestBody: jsonBody({
-          type: "object",
-          required: ["version"],
-          properties: { version: { type: "integer", minimum: 0 } },
-        }),
+        requestBody: {
+          ...jsonBody({
+            type: "object",
+            properties: { version: { type: "integer", minimum: 0 } },
+          }),
+          required: false,
+        },
       },
     },
     "/api/workflows/prepaid/layouts/{region}/import": {

@@ -90,6 +90,27 @@ describe("Unchanged source workflow compatibility (read-only)", () => {
       ),
     ).toThrow("override");
   });
+  it("fails verification for a Choice beyond the nesting limit", () => {
+    const definition = legacyDefinition("load_api_eg") as any;
+    let condition: Record<string, unknown> = {
+      Variable: "$.env_prefix",
+      IsPresent: true,
+    };
+    for (let depth = 0; depth < 64; depth++) condition = { Not: condition };
+    definition.StartAt = "NestedChoice";
+    definition.States.NestedChoice = {
+      Type: "Choice",
+      Choices: [{ ...condition, Next: "Extract_2" }],
+      Default: "Extract_2",
+    };
+    expect(() =>
+      validateLegacySourceDefinition(
+        "load_api_eg",
+        JSON.stringify(definition),
+        "isg-esatp-dv",
+      ),
+    ).toThrow("Choice nesting exceeds");
+  });
   it("requires approval for unchanged shared raw-table writes, not a script location", () => {
     expect(
       sourceExtractionSchema.parse({

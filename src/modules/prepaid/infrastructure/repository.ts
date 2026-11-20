@@ -104,7 +104,7 @@ export class PrepaidRepository {
       );
     return result.rows[0];
   }
-  checkVersion(revision: Record<string, unknown>, version: number) {
+  checkVersion(revision: Record<string, unknown>, version: number | undefined) {
     if (revision.version !== version)
       throw new AppError(
         409,

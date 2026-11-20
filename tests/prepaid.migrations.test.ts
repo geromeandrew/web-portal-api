@@ -81,10 +81,10 @@ describe.skipIf(!testUrl)("Prepaid migrations (isolated PostgreSQL)", () => {
       // Exercise exactly the single-statement transport used by Data API.
       const result = await migratePrepaid(
         {
-          async query(sql) {
+          async query(sql, values) {
             let rows: Record<string, unknown>[] = [];
             for (const statement of splitSqlStatements(sql))
-              rows = (await client.query(statement)).rows;
+              rows = (await client.query(statement, values)).rows;
             return { rows };
           },
         },
@@ -116,6 +116,11 @@ describe.skipIf(!testUrl)("Prepaid migrations (isolated PostgreSQL)", () => {
       is_identity: "YES",
       identity_generation: "ALWAYS",
     });
+    const { rows: [guard] } = await pool.query(
+      "SELECT convalidated FROM pg_constraint WHERE conrelid=to_regclass($1) AND conname='prepaid_layout_tax_rate_nonzero_multiplier'",
+      [`"${schema}".prepaid_region_revisions`],
+    );
+    expect(guard?.convalidated).toBe(true);
   });
   it("repeats safely, preserving existing rows and the separate mixed-case table", async () => {
     await pool.query(

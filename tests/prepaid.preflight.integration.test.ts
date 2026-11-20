@@ -109,7 +109,7 @@ describe.skipIf(!url)(
         prepaidPending: [],
       });
       expect(result.report.objects).toMatchObject({
-        expected: 78,
+        expected: 79,
         missing: [],
       });
       expect(result.report.integration.configured).toBe(false);

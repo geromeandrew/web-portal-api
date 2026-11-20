@@ -23,6 +23,26 @@ import { verifyGlueSourceCapture } from "./glueSourceSnapshot.js";
 type Summary = NonNullable<
   z.infer<typeof sessionManifestSchema>["extractionReceipts"]
 >[number];
+function validateBillingHeader(
+  configuration: z.infer<typeof manualIntegrationSchema>,
+  workflow: "adjustments" | "charges",
+  sourceCode: string,
+  value: unknown,
+) {
+  const header = z
+    .object({
+      cycle: z.string().regex(/^\d{2}$/),
+      cycleYear: z.string().regex(/^\d{4}$/),
+      cycleInstance: z.string().min(1),
+    })
+    .parse(value);
+  if (
+    header.cycle !== sourceCode.slice(4) ||
+    !expectedReportCycles(configuration, workflow).includes(header.cycle)
+  )
+    throw Error("Native billing header is outside expected cycle coverage.");
+}
+
 /** Backend V2 producer, not an invented AWS execution. It only combines exact
  * verified native-source records and an explicitly approved immutable reference.
  * Financial reclassification still belongs to the existing PostgreSQL functions.
@@ -190,53 +210,39 @@ export class PrepaidNativeManifestBuilder {
       lines[name].push(line);
     };
     const headers = new Set<string>();
-    for (const receipt of verified)
-      for (const artifact of receipt.artifacts) {
-        await owns();
-        for await (const value of this.storage.rows(
-          artifact.key,
-          prefix,
-          artifact.sha256,
-          artifact.rowCount,
-        )) {
-          const row = value as Record<string, unknown>;
-          if (
-            artifact.name === "adjustment_headers" ||
-            artifact.name === "charge_headers"
-          ) {
-            const header = z
-              .object({
-                cycle: z.string().regex(/^\d{2}$/),
-                cycleYear: z.string().regex(/^\d{4}$/),
-                cycleInstance: z.string().min(1),
-              })
-              .parse(row);
-            if (
-              header.cycle !== artifact.sourceCode.slice(4) ||
-              !expectedReportCycles(
-                configuration,
-                artifact.name === "adjustment_headers"
-                  ? "adjustments"
-                  : "charges",
-              ).includes(header.cycle)
-            )
-              throw Error(
-                "Native billing header is outside expected cycle coverage.",
-              );
-            headers.add(artifact.sourceCode);
-            continue;
-          }
-          if (row.period !== undefined && row.period !== period)
-            throw Error("Source fragment disagrees with KE24 period.");
-          if (
-            artifact.name === "callcard" &&
-            row.region === "sg" &&
-            row.sourcePeriod !== period
-          )
-            throw Error("Latest SG Call Card period disagrees with KE24.");
-          append(artifact.name, { ...row, period });
+    for (const artifact of verified.flatMap((receipt) => receipt.artifacts)) {
+      await owns();
+      for await (const value of this.storage.rows(
+        artifact.key,
+        prefix,
+        artifact.sha256,
+        artifact.rowCount,
+      )) {
+        const row = value as Record<string, unknown>;
+        if (
+          artifact.name === "adjustment_headers" ||
+          artifact.name === "charge_headers"
+        ) {
+          validateBillingHeader(
+            configuration,
+            artifact.name === "adjustment_headers" ? "adjustments" : "charges",
+            artifact.sourceCode,
+            row,
+          );
+          headers.add(artifact.sourceCode);
+          continue;
         }
+        if (row.period !== undefined && row.period !== period)
+          throw Error("Source fragment disagrees with KE24 period.");
+        if (
+          artifact.name === "callcard" &&
+          row.region === "sg" &&
+          row.sourcePeriod !== period
+        )
+          throw Error("Latest SG Call Card period disagrees with KE24.");
+        append(artifact.name, { ...row, period });
       }
+    }
     for (const code of requiredBillingSources(configuration))
       if (!headers.has(code))
         throw Error("Native preparation is missing a 308/318 cycle header.");

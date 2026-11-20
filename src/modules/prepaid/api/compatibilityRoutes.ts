@@ -91,7 +91,9 @@ export function registerPrepaidCompatibilityRoutes(
           await service.active(req.auth!.userId),
           regionSchema.parse(req.params.region),
           action,
-          commandSchema.parse(req.body).version,
+          action === "reset"
+            ? commandSchema.partial().optional().parse(req.body)?.version
+            : commandSchema.parse(req.body).version,
         ),
       });
     });

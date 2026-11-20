@@ -23,8 +23,11 @@ for(const [name,rows] of Object.entries(datasets)) for(const row of rows) datase
 const xml=value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 function column(i){let result='';do{result=String.fromCharCode(65+i%26)+result;i=Math.floor(i/26)-1;}while(i>=0);return result;}
 function workbook(rows, sheetName='Data'){
-  const headers=Object.keys(rows[0]);
-  const values=Array.isArray(rows[0]) ? rows : [headers,...rows.map(row=>headers.map(field=>row[field]))];
+  let values=rows;
+  if(!Array.isArray(rows[0])){
+    const headers=Object.keys(rows[0]);
+    values=[headers,...rows.map(row=>headers.map(field=>row[field]))];
+  }
   const dimension=`A1:${column(Math.max(...values.map(row=>row.length))-1)}${values.length}`;
   const sheet='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="'+dimension+'"/><sheetData>'+values.map((row,i)=>`<row r="${i+1}">`+row.map((v,j)=>`<c r="${column(j)}${i+1}" t="inlineStr"><is><t xml:space="preserve">${xml(v)}</t></is></c>`).join('')+'</row>').join('')+'</sheetData></worksheet>';
   const parts={

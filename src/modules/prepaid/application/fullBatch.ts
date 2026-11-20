@@ -550,6 +550,19 @@ export class PrepaidFullBatch {
       return { queued: true };
     });
   }
+  private async stageInputs(batch: Batch) {
+    await this.landing.acquire(batch.id);
+    const prefix = this.storage.sessionPrefix(batch.session_id);
+    for (const workflow of workflows) {
+      const files = batch.files.filter((file) => file.workflow === workflow);
+      const inputs = [];
+      for (const file of files) {
+        const bytes = await this.storage.bytes(file.key, prefix, prepaidMaximumSourceBytes);
+        inputs.push({ ...file, bytes });
+      }
+      await this.landing.stage(batch.id, workflow, inputs);
+    }
+  }
   async tick() {
     let claimed: string | undefined;
     try {
@@ -610,23 +623,7 @@ export class PrepaidFullBatch {
             "Prepaid AWS batch requires an active Standard state machine.",
           );
         if (phase === "import" && !batch.inputs_staged) {
-          await this.landing.acquire(id);
-          for (const workflow of workflows) {
-            const files = [];
-            for (const file of batch.files.filter(
-              (f) => f.workflow === workflow,
-            )) {
-              files.push({
-                ...file,
-                bytes: await this.storage.bytes(
-                  file.key,
-                  this.storage.sessionPrefix(batch.session_id),
-                  prepaidMaximumSourceBytes,
-                ),
-              });
-            }
-            await this.landing.stage(id, workflow, files);
-          }
+          await this.stageInputs(batch);
           await db.query(
             `UPDATE ${this.table} SET inputs_staged=true,error=NULL WHERE id=$1`,
             [id],

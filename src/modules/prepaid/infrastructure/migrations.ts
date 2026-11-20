@@ -176,6 +176,7 @@ DECLARE multiplier numeric;
 BEGIN
  PERFORM ${s}.prepaid_assert_draft(p_revision);
  SELECT 1+tax_rate INTO multiplier FROM ${s}.prepaid_region_revisions WHERE id=p_revision;
+ IF multiplier = 0 THEN RAISE EXCEPTION 'PREPAID_INVALID_LAYOUT_TAX_RATE' USING ERRCODE='P0001'; END IF;
  UPDATE ${s}.prepaid_layout_rows SET gp_mt_gross=round(gp_mt_net*multiplier,2),hy_mt_gross=round(hy_mt_net*multiplier,2),gp_bb_gross=round(gp_bb_net*multiplier,2) WHERE revision_id=p_revision AND tier=1;
  UPDATE ${s}.prepaid_layout_rows SET gp_mt_net=round(gp_mt_gross/multiplier,2),hy_mt_net=round(hy_mt_gross/multiplier,2),gp_bb_net=round(gp_bb_gross/multiplier,2) WHERE revision_id=p_revision AND tier IN(2,4);
  UPDATE ${s}.prepaid_layout_rows SET total_gross=coalesce(gp_mt_gross,0)+coalesce(hy_mt_gross,0)+coalesce(gp_bb_gross,0),total_net=coalesce(gp_mt_net,0)+coalesce(hy_mt_net,0)+coalesce(gp_bb_net,0) WHERE revision_id=p_revision AND tier IS NOT NULL;

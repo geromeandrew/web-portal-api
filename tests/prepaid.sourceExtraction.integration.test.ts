@@ -1530,6 +1530,16 @@ describe.skipIf(!testUrl)(
       await expect(advance(c)).rejects.toThrow("checksum");
       expect(start).not.toHaveBeenCalled();
     });
+    it("releases the serial landing lock when the pre-dispatch idle check fails", async () => {
+      const c = await context();
+      inspector.idle.mockImplementationOnce(async () => {
+        expect(s3.objects.has(landing.lockKey)).toBe(true);
+        throw new Error("Shared Glue job unavailable");
+      });
+      await expect(advance(c)).rejects.toThrow("Shared Glue job unavailable");
+      expect(start).not.toHaveBeenCalled();
+      expect(s3.objects.has(landing.lockKey)).toBe(false);
+    });
     it("rejects a changed immutable normalized artifact after successful native Glue execution", async () => {
       const c = await context();
       await advance(c);

@@ -1637,6 +1637,21 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
           (await service.allocationSummary(user, run.id, region, variant)).rows,
         ).toBeInstanceOf(Array);
   });
+  it("accepts bodyless legacy reset and checks explicitly supplied versions", async () => {
+    const { run, layout } = await imported();
+    await service.select(user, run.id);
+    const url = `${base}/layouts/eg/reset`;
+    const headers = { "x-test-user": user, "Content-Type": "application/json" };
+    const stale = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ version: layout.version + 1 }),
+    });
+    expect(stale.status).toBe(409);
+    const reset = await fetch(url, { method: "POST", headers });
+    expect(reset.status).toBe(200);
+    expect((await reset.json()).layout.version).toBeGreaterThan(layout.version);
+  });
   it("reads a JV page in one query while preserving exact values, ownership and empty-page totals", async () => {
     const { run, layout } = await imported();
     await service.command(user, run.id, "eg", "validate", layout.version);

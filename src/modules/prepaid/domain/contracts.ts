@@ -78,6 +78,14 @@ export function sourceFileRequirement(code: string) {
 }
 
 const base = { period: periodSchema };
+const billingRowSchema = z.object({
+  ...base,
+  cycle: z.string().regex(/^\d{2}$/),
+  customer_type: z.string(),
+  code: z.string(),
+  amount: moneySchema,
+  currency: z.literal("PHP"),
+});
 export const datasetSchemas = {
   ke24: z.object({
     ...base,
@@ -109,22 +117,8 @@ export const datasetSchemas = {
     channel: z.string(),
     amount: moneySchema,
   }),
-  adjustments: z.object({
-    ...base,
-    cycle: z.string().regex(/^\d{2}$/),
-    customer_type: z.string(),
-    code: z.string(),
-    amount: moneySchema,
-    currency: z.literal("PHP"),
-  }),
-  charges: z.object({
-    ...base,
-    cycle: z.string().regex(/^\d{2}$/),
-    customer_type: z.string(),
-    code: z.string(),
-    amount: moneySchema,
-    currency: z.literal("PHP"),
-  }),
+  adjustments: billingRowSchema,
+  charges: billingRowSchema,
   reference: z.object({
     ...base,
     client: z.literal("300"),
