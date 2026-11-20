@@ -129,12 +129,7 @@ export function registerPrepaidCompatibilityRoutes(
       region = regionSchema.parse(req.query.region ?? "eg");
     await service.repo.own(pool, req.auth!.userId, id);
     const revision = await service.repo.revision(pool, id, region);
-    const rows = (
-      await pool.query(
-        `SELECT revenue_type,allocation_type,tax_rate,gross,amount,tax_amount,total_gross,difference FROM ${service.repo.table("reconciliation_rows")} WHERE revision_id=$1 ORDER BY revenue_type,allocation_type,tax_rate`,
-        [revision.id],
-      )
-    ).rows;
+    const rows = await service.repo.reconciliationCsvRows(revision.id);
     res
       .attachment("prepaid-reclass-report.csv")
       .type("text/csv")

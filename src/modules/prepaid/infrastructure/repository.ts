@@ -15,7 +15,26 @@ export class PrepaidRepository {
     this.schema = `"${schema}"`;
   }
   table(name: string) {
+    // PostgreSQL parameters bind values only. Accept a single identifier suffix.
+    if (!/^[a-z][a-z0-9_]*$/.test(name))
+      throw new Error("Invalid Prepaid table identifier");
     return `${this.schema}.prepaid_${name}`;
+  }
+  async reconciliationCsvRows(revisionId: string) {
+    return this.transaction(async (db) => {
+      // Use the configured schema on this transaction only so the report SQL is static.
+      await db.query("SELECT pg_catalog.set_config('search_path', $1, true)", [
+        `${this.schema}, pg_temp`,
+      ]);
+      const result = await db.query(
+        `SELECT revenue_type,allocation_type,tax_rate,gross,amount,tax_amount,total_gross,difference
+         FROM prepaid_reconciliation_rows
+         WHERE revision_id=$1
+         ORDER BY revenue_type,allocation_type,tax_rate`,
+        [revisionId],
+      );
+      return result.rows;
+    });
   }
   async transaction<T>(fn: (db: PoolClient) => Promise<T>) {
     try {

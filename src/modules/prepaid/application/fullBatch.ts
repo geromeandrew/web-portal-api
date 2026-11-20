@@ -9,6 +9,7 @@ import type { Config } from "../../../config.js";
 import { AppError } from "../../../errors.js";
 import {
   manualIntegrationSchema,
+  regionSchema,
   type editSchema,
   requiredBillingSources,
   sourceCodes,
@@ -185,6 +186,7 @@ export class PrepaidFullBatch {
     variant: "mt" | "bb",
     offset: number,
   ) {
+    regionSchema.parse(region);
     return this.repo.transaction(async (db) => {
       const batch = await this.owned(user, db, true);
       if (!batch || batch.id !== id || !this.snapshot(batch)?.canReview)
@@ -278,6 +280,7 @@ export class PrepaidFullBatch {
     layoutVersion: string,
     changes: LayoutChange[],
   ) {
+    regionSchema.parse(region);
     return this.repo.transaction(async (db) => {
       const batch = await this.owned(user, db, true);
       if (!batch || batch.id !== id || !this.snapshot(batch)?.canReview || batch.status !== "review")
@@ -498,7 +501,10 @@ export class PrepaidFullBatch {
   async action(user: string, action: Region | "close") {
     return this.repo.transaction(async (db) => {
       const batch = await this.owned(user, db, true);
-      if (!batch || !(action === "close" ? this.canClose(batch) : ["review", "failed"].includes(batch.status)))
+      if (
+        !batch ||
+        !(action === "close" ? this.canClose(batch) : batch.status === "review")
+      )
         throw new AppError(
           409,
           "PREPAID_BATCH_NOT_READY",
@@ -515,7 +521,6 @@ export class PrepaidFullBatch {
           (row) => row.label === "Variance",
         )?.gross;
         if (
-          batch.status !== "review" ||
           batch.executions.import?.status !== "SUCCEEDED" ||
           batch.executions[action] ||
           !variance ||

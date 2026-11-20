@@ -78,7 +78,7 @@ These are genuine Excel OOXML workbooks and CSV. Call Card SG, Load API EG/SG an
 
 adapter-fixtures contains eight schema-validated canonical JSONL datasets corresponding to the sample inputs. reference.jsonl is a synthetic SAP mapping for this test data, not an upload and not a production mapping. Reference data is a backend adapter dependency. Do not put fake approved mappings into production.
 
-Implement the version-2 upload-session contract documented in esatp-coreapi/docs/PREPAID_RECLASS_GUIDE.md. The adapter must verify source hashes and derive the period from KE24. Do not copy session UUIDs, source IDs, checksums, execution ARNs or manifests from examples; compute them for the actual execution.
+Implement the version-2 upload-session contract defined by the Prepaid upload-session API. The adapter must verify source hashes and derive the period from KE24. Do not copy session UUIDs, source IDs, checksums, execution ARNs or manifests from examples; compute them for the actual execution.
 
 No database configuration or data was changed to generate this pack. No S3 upload, AWS execution or SAP posting was performed.
 `);

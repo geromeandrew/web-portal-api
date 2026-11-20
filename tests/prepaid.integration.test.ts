@@ -1608,6 +1608,12 @@ describe.skipIf(!testUrl)("Prepaid backend (disposable PostgreSQL)", () => {
     );
     expect(response.status).toBe(200);
     const csv = await response.text();
+    await service.select(user, run.id);
+    const compatibilityCsv = await fetch(`${base}/report.csv?region=eg`, {
+      headers: { "x-test-user": user },
+    });
+    expect(compatibilityCsv.status).toBe(200);
+    expect(await compatibilityCsv.text()).toBe(csv);
     await service.edit(
       user,
       run.id,

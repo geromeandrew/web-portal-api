@@ -80,6 +80,18 @@ class StreamingTests(unittest.TestCase):
             while checked.read(4):
                 pass
 
+    def test_utf16_doctype_is_rejected_in_metadata_and_worksheet(self):
+        def add_doctype(content):
+            xml = re.sub(r"^<\?xml.*?\?>", "", content.decode("utf-8"))
+            return ('<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE workbook>' + xml).encode("utf-16")
+
+        for name in ("xl/workbook.xml", "xl/worksheets/sheet1.xml"):
+            with self.subTest(part=name):
+                body = edit_part(workbook([[1]]), name, add_doctype)
+                with self.assertRaisesRegex(ValueError, "entity declarations"):
+                    with closing(iter_workbook_rows(body, "ke24")) as rows:
+                        list(rows)
+
     def test_duplicate_coordinates_and_nonfinite_numbers_fail_closed(self):
         for transform, reason in [
             (lambda b: b.replace(b'</row>', b'<c r="A1"><v>1</v></c></row>', 1), "Duplicate"),

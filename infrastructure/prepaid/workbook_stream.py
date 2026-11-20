@@ -9,7 +9,8 @@ import io
 import re
 import zipfile
 from decimal import Decimal, InvalidOperation
-from xml.etree.ElementTree import iterparse
+from defusedxml import DefusedXmlException
+from defusedxml.ElementTree import iterparse
 
 MAX_EXPANDED_BYTES = 768 * 1024 * 1024
 MAX_WORKSHEET_BYTES = 600 * 1024 * 1024
@@ -39,6 +40,15 @@ class BoundedXml:
         return data
 
 
+def xml_events(source, events):
+    try:
+        yield from iterparse(
+            source, events=events, forbid_dtd=True, forbid_entities=True, forbid_external=True
+        )
+    except DefusedXmlException as error:
+        raise ValueError("Workbook XML entity declarations are not permitted") from error
+
+
 def iter_workbook_rows(body, workflow):
     import openpyxl
     from openpyxl.utils.cell import column_index_from_string
@@ -59,8 +69,8 @@ def iter_workbook_rows(body, workflow):
                     raise ValueError("Workbook metadata exceeds streaming limit")
                 with archive.open(item) as part:
                     checked = BoundedXml(part, MAX_METADATA_BYTES)
-                    while checked.read(65536):
-                        pass
+                    for _, element in xml_events(checked, ("end",)):
+                        element.clear()
     book = openpyxl.load_workbook(io.BytesIO(body), read_only=True, data_only=False, keep_links=False)
     try:
         sheets = [s for s in book if "callcard" in s.title.lower().replace(" ", "")] if workflow == "callcard_sg" else list(book)
@@ -120,7 +130,7 @@ def iter_workbook_rows(body, workflow):
         populated, scanned = 0, 0
         with book._archive.open(sheet._worksheet_path.lstrip("/")) as part:
             source = BoundedXml(part, MAX_WORKSHEET_BYTES)
-            for event, element in iterparse(source, events=("start", "end")):
+            for event, element in xml_events(source, ("start", "end")):
                 if event == "start":
                     if element.tag == NS + "sheetData":
                         sheet_data = element

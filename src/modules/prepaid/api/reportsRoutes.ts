@@ -9,9 +9,9 @@ import type { PrepaidRouteContext } from "./routeContext.js";
 import { uuid, page } from "./requestSchemas.js";
 export function registerPrepaidReportsRoutes(
   router: Router,
-  context: Pick<PrepaidRouteContext, "pool" | "service" | "workspace">,
+  context: Pick<PrepaidRouteContext, "service" | "workspace">,
 ) {
-  const { pool, service } = context;
+  const { service } = context;
   router.get("/report-history", async (req, res) => {
     const input = z
       .object({
@@ -91,12 +91,7 @@ export function registerPrepaidReportsRoutes(
         "total_gross",
         "difference",
       ];
-      const rows = (
-        await pool.query(
-          `SELECT ${fields.join(",")} FROM ${service.repo.table("reconciliation_rows")} WHERE revision_id=$1 ORDER BY revenue_type,allocation_type,tax_rate`,
-          [output.revisionId],
-        )
-      ).rows;
+      const rows = await service.repo.reconciliationCsvRows(output.revisionId);
       res
         .attachment(`prepaid-${region}-reconciliation.csv`)
         .type("text/csv")
