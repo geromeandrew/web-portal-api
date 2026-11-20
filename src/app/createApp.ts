@@ -14,6 +14,7 @@ import { createOpenApiDocument } from "../openapi.js";
 import { createAuthRouter } from "../modules/auth/api/router.js";
 import { createAdminRouter } from "../modules/auth/api/adminRouter.js";
 import { createPrepaidRouter } from "../modules/prepaid/api/router.js";
+import { createPrepaidUpload } from "../modules/prepaid/api/upload.js";
 import { createProcessingPipelinesRouter } from "../modules/processing-pipelines/api/router.js";
 import {
   clientIpKey,
@@ -187,7 +188,13 @@ function registerFeatureRoutes(
 ) {
   app.use("/api/auth", createAuthRouter(dependencies));
   app.use("/api/admin", createAdminRouter(dependencies));
-  app.use("/api/workflows/prepaid", createPrepaidRouter(dependencies));
+  app.use(
+    "/api/workflows/prepaid",
+    createPrepaidRouter(
+      dependencies,
+      createPrepaidUpload(dependencies.config.PREPAID_MAX_UPLOAD_BYTES),
+    ),
+  );
   app.use(
     "/api/processing-pipelines",
     createProcessingPipelinesRouter(dependencies, singleFileUpload),

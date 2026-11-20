@@ -23,6 +23,7 @@ const config: Config = {
   TRUST_PROXY_HOPS: 0,
   S3_BUCKET: "billing-cycle-files",
   AWS_REGION: "ap-southeast-1",
+  PREPAID_MAX_UPLOAD_BYTES: 104_857_600,
   OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: false,
 };
 

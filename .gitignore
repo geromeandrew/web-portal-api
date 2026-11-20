@@ -18,6 +18,9 @@ outputs/
 scripts/
 *.docx
 *.xlsx
+__pycache__/
+.venv-prepaid/
+*.pyc
 
 # Local security-validation output and operator settings.
 *.log

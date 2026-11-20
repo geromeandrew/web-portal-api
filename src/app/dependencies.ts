@@ -5,6 +5,7 @@ import type { StepFunctionsRunner } from "../stepFunctionsRunner.js";
 import type { Logger } from "../platform/logger.js";
 import type { PostgresRateLimiter } from "./security.js";
 import type { RequestHandler } from "express";
+import type { PrepaidStorage } from "../modules/prepaid/infrastructure/prepaidStorage.js";
 
 /**
  * The application receives its outside-world dependencies here.
@@ -21,4 +22,5 @@ export type AppDependencies = {
   logger: Logger;
   rateLimiter: PostgresRateLimiter;
   authenticate: RequestHandler;
+  prepaidStorage?: PrepaidStorage;
 };

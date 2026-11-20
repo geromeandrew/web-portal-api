@@ -1,0 +1,193 @@
+{
+  "1": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--sql_filter": "column1 IS NOT NULL AND column1 NOT LIKE 'year%'",
+      "--valid_columns": "column1,trade,column3,column4,column5,column6,INTERNAL (BASED ON SALES),column8,column9,column10,column11,column12,total,column14",
+      "--row_number_label": "rownum",
+      "--date_format": "%B %Y",
+      "--include_sequenceId": "sequentialid",
+      "--skip_header_lines": "4",
+      "--include_filename": "filename",
+      "--fail_safe": "false",
+      "--target_sheet": "CALLCARD",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  },
+  "2": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--sql_filter": "type IS NOT NULL AND type NOT LIKE 'Type%'",
+      "--valid_columns": "type,App ID,Wallet ID,Company Name,Dev Email,Top up Amount,TOP UP Date,OR Number,OR Date,Payment Type,Date deposited,Gcash Number,Credit Card Reference,column14",
+      "--row_number_label": "rownum",
+      "--include_sequenceId": "sequentialid",
+      "--skip_header_lines": "3",
+      "--include_filename": "filename",
+      "--fail_safe": "false",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  },
+  "3": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--sql_filter": "type IS NOT NULL AND type != 'Type'",
+      "--valid_columns": "type,Transactional Discount,App ID,Wallet ID,Company Name,Dev Email,discard_gross,discard_vat,Top up Amount,TOP UP Date,OR Number,OR Date,Payment Type,Date deposited,Transaction ID,discard_bank,discard_remarks,discard_orremarks",
+      "--row_number_label": "rownum",
+      "--date_format": "%d-%b-%Y",
+      "--include_sequenceId": "sequentialid",
+      "--skip_header_lines": "2",
+      "--include_filename": "filename",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  },
+  "4": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--row_number_label": "rownum",
+      "--include_sequenceId": "sequentialid",
+      "--include_filename": "filename",
+      "--move_to_success": "false",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  },
+  "5": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--target_headers": "Customer Type,Customer Sub Type,Subscriber Type,Adjustment Type,Adjustment Code,Adjustment Reason,Legal Entity,Currency,Amount,Write-Off Activity Indicator",
+      "--row_number_label": "rownum",
+      "--include_sequenceId": "sequentialid",
+      "--include_filename": "filename",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  },
+  "6": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--sql_filter": "count IS NOT NULL AND count != 'Company Code'",
+      "--valid_columns": "count,CUSTOMER NAME,business,date,Doc#,SO#,BillDoc#,description,GROSS AMOUNT,PREPAID CARDS,simcard,SOA AMOUNT,payment,balance,remarks,column16,column17,column18,column19,column20,column21,column22,column23,column24,column25,column26",
+      "--row_number_label": "rownum",
+      "--include_sequenceId": "sequentialid",
+      "--skip_header_lines": "1",
+      "--include_filename": "filename",
+      "--fail_safe": "false",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  },
+  "7": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--sql_filter": "`SFA#` IS NOT NULL AND `SFA#` != 'CFU'",
+      "--valid_columns": "SFA#,type,Company Name,Merchant Name,Merchant Email,Merchant Mobile,Transaction ID,Transaction Date,Payment Method,amount,log,PAYMENT STATUS,status,remarks,Actual Disc (%),Check,column17,column18",
+      "--row_number_label": "rownum",
+      "--include_sequenceId": "sequentialid",
+      "--skip_header_lines": "4",
+      "--include_filename": "filename",
+      "--fail_safe": "false",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  },
+  "8": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--sql_filter": "type IS NOT NULL AND type != 'CFU'",
+      "--valid_columns": "type,Company Name,Merchant Name,Merchant Email,Merchant Mobile,Transaction ID,Transaction Date,Payment Method,amount,log,status,remarks,Actual Discount,OR Status,column15,column16,column17,column18",
+      "--row_number_label": "rownum",
+      "--include_sequenceId": "sequentialid",
+      "--skip_header_lines": "4",
+      "--include_filename": "filename",
+      "--fail_safe": "false",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  },
+  "9": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--target_headers": "RECHARGE DATE,BRAND,CUSTOMER TYPE,SUBSCRIBER TYPE,RECHARGE METHOD,RECHARGE CHANNEL,CR/DR INDICATOR,RECHARGE AMOUNT,FREE TEXT AWARDED,STATUS",
+      "--row_number_label": "rownum",
+      "--include_sequenceId": "sequentialid",
+      "--include_filename": "filename",
+      "--delimiter_regex": ",",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueCsv.py"
+    }
+  },
+  "10": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--target_headers": "Period/Year,Document number,Reference document,Item number,Cost Element,Profit Center,Sub-Product Group B,Created On,CACur,Value TranCurr,Total Quantity,Unit of Measure,Posting date,Sub-Product Group A,Brand,Product-Rev Type",
+      "--row_number_label": "rownum",
+      "--include_sequenceId": "sequentialid",
+      "--include_filename": "filename",
+      "--fail_safe": "false",
+      "--move_to_success": "true",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  },
+  "11": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--row_number_label": "rownum",
+      "--include_sequenceId": "sequentialid",
+      "--include_filename": "filename",
+      "--move_to_success": "false",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  },
+  "12": {
+    "arguments": {
+      "--connection_name": "isg-esatp-dv-prep_reclass-glco-postgres",
+      "--target_headers": "Customer Type,Customer SubType,Subscriber Type,Revenue Type,Charge Code/Tax Code,Charge Type/Tax Type,Discount Plan Code,Total Amount,Document Demand Type,Legal Entity,Currency",
+      "--row_number_label": "rownum",
+      "--include_sequenceId": "sequentialid",
+      "--include_filename": "filename",
+      "--include_date": "dateread"
+    },
+    "command": {
+      "Name": "glueetl",
+      "ScriptLocation": "s3://isg-esatp-rcc-scripts-os/glue/dv-v0.0.1/core/commons/scripts/GlueSpreadsheetWildcard.py"
+    }
+  }
+}

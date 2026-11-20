@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { prepaidMaximumSourceBytes } from "./modules/prepaid/domain/limits.js";
 
 export const corsAllowedOrigins = [
   "http://localhost:5173",
@@ -57,6 +58,18 @@ const envSchema = z
       .transform((value) => value === "true"),
     AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
     AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+    SFN_PREFIX: z
+      .union([z.enum(["isg-esatp-dv", "isg-esatp-st"]), z.literal("")])
+      .optional()
+      .transform((value) => value || undefined),
+    PREPAID_FULL_BATCH_DELIVERY_ENABLED: z.enum(["true", "false"]).optional(),
+    PREPAID_CONFIGURATION_JSON: z.string().optional().transform((value) => value || undefined),
+    PREPAID_MAX_UPLOAD_BYTES: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(prepaidMaximumSourceBytes)
+      .default(prepaidMaximumSourceBytes),
     OPENAPI_INCLUDE_NON_ESSENTIAL_ENDPOINTS: z
       .enum(["true", "false"])
       .default("false")

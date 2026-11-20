@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createAwsClientOptions } from "../src/aws.js";
 import { loadConfig } from "../src/config.js";
+import { prepaidFullBatchPrefix } from "../src/modules/prepaid/application/fullBatch.js";
 
 const base = {
   DATABASE_HOST: "127.0.0.1",
@@ -17,6 +18,22 @@ const base = {
 };
 
 describe("loadConfig", () => {
+  it.each(["isg-esatp-dv", "isg-esatp-st"])(
+    "uses SFN_PREFIX=%s for Prepaid batch routing automatically",
+    (prefix) => {
+      const config = loadConfig({ ...base, SFN_PREFIX: prefix });
+      expect(prepaidFullBatchPrefix(config)).toBe(prefix);
+    },
+  );
+
+  it("keeps Prepaid batch routing active with a legacy disable flag", () => {
+    const config = loadConfig({
+      ...base,
+      SFN_PREFIX: "isg-esatp-st",
+      PREPAID_FULL_BATCH_ENABLED: "false",
+    });
+    expect(prepaidFullBatchPrefix(config)).toBe("isg-esatp-st");
+  });
   it("needs no deployment label or migration timeout settings", () => {
     const config = loadConfig(base);
     expect(config).not.toHaveProperty("DEPLOYMENT_ENV");

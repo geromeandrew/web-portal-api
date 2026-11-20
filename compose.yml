@@ -2,7 +2,9 @@ name: web-portal-api
 
 services:
   migrate:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile-local
     image: web-portal-api:local
     pull_policy: build
     environment: &api_environment
@@ -13,6 +15,7 @@ services:
       DATABASE_NAME: ${DATABASE_NAME}
       DATABASE_USER: ${DATABASE_USER}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      DATABASE_SSL: ${DATABASE_SSL:-true}
       DATABASE_SCHEMA: ${DATABASE_SCHEMA}
       OKTA_ISSUER: ${OKTA_ISSUER}
       OKTA_AUDIENCE: ${OKTA_AUDIENCE:-api://default}
@@ -27,13 +30,20 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES}
+      SFN_PREFIX: ${SFN_PREFIX:-}
+      PREPAID_CONFIGURATION_JSON: ${PREPAID_CONFIGURATION_JSON:-}
+      PREPAID_FULL_BATCH_DELIVERY_ENABLED: ${PREPAID_FULL_BATCH_DELIVERY_ENABLED:-false}
+      PREPAID_MAX_UPLOAD_BYTES: ${PREPAID_MAX_UPLOAD_BYTES:-104857600}
       ALLOWED_MIME_TYPES: ${ALLOWED_MIME_TYPES}
     command: ["node", "dist/migrate.js"]
     networks: [portal]
     restart: "no"
 
   api:
-    build: .
+    command: ["node", "dist/api.js"]
+    build:
+      context: .
+      dockerfile: Dockerfile-local
     image: web-portal-api:local
     pull_policy: build
     ports:
@@ -41,7 +51,7 @@ services:
     environment:
       <<: *api_environment
     depends_on:
-      migrate:
+      prepaid-migrate:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -60,6 +70,34 @@ services:
     networks:
       portal:
         aliases: [web-portal-api]
+    restart: unless-stopped
+
+  prepaid-migrate:
+    image: web-portal-api:local
+    environment:
+      <<: *api_environment
+    command: ["node", "dist/migratePrepaid.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [portal]
+    restart: "no"
+
+  prepaid-worker:
+    image: web-portal-api:local
+    environment:
+      <<: *api_environment
+    command: ["node", "dist/prepaidWorker.js"]
+    depends_on:
+      prepaid-migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [portal]
     restart: unless-stopped
 
 networks:
