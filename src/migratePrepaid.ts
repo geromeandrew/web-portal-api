@@ -48,6 +48,7 @@ function dataApiConnection(
 }
 
 const config = loadConfig();
+const includeBillingScope = process.argv.includes("--billing-scope");
 const resourceArn = process.env.PREPAID_MIGRATION_DATA_API_RESOURCE_ARN;
 const secretArn = process.env.PREPAID_MIGRATION_DATA_API_SECRET_ARN;
 // Data API is explicit opt-in, never an automatic fallback to another database.
@@ -69,6 +70,8 @@ try {
       const applied = await migratePrepaid(
         dataApiConnection(client, target, transactionId),
         config.DATABASE_SCHEMA,
+        undefined,
+        includeBillingScope,
       );
       await client.send(
         new CommitTransactionCommand({ resourceArn, secretArn, transactionId }),
@@ -105,7 +108,12 @@ try {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const applied = await migratePrepaid(client, config.DATABASE_SCHEMA);
+        const applied = await migratePrepaid(
+          client,
+          config.DATABASE_SCHEMA,
+          undefined,
+          includeBillingScope,
+        );
         await client.query("COMMIT");
         console.log(
           `Prepaid-only migrations are current. Applied: ${applied.join(", ") || "none"}.`,

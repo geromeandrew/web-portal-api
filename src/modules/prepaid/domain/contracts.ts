@@ -242,6 +242,15 @@ type BillingConfiguration = {
   expectedCycles: string[];
   reportCycles?: z.infer<typeof reportCyclesSchema>;
 };
+export const prepaidBillCycleSchema = z.enum([
+  "01", "06", "10", "11", "13", "16", "18", "21", "24", "27",
+]);
+export type PrepaidBillCycle = z.infer<typeof prepaidBillCycleSchema>;
+export const prepaidBillCycles = prepaidBillCycleSchema.options;
+const legacyPrepaidBillingCycles = new Set<string>(prepaidBillCycles);
+export function unsupportedLegacyPrepaidCycles(config: BillingConfiguration) {
+  return config.expectedCycles.filter((cycle) => !legacyPrepaidBillingCycles.has(cycle));
+}
 // Legacy 308 and 318 extraction jobs run independently. Retain the historical
 // portal paired default unless native configuration explicitly supplies both lists.
 export function expectedReportCycles(
@@ -446,6 +455,15 @@ export const editSchema = z.object({
 export const commandSchema = z.object({
   version: z.number().int().nonnegative(),
   reason: z.string().trim().min(1).max(1000).optional(),
+});
+export const batchLayoutEditSchema = z.object({
+  batchId: z.string().uuid(),
+  layoutVersion: z.string().regex(/^[a-f0-9]{64}$/),
+  changes: z.array(z.object({
+    layoutNumber: z.number().int().min(0).max(27),
+    field: z.enum(["gp_mt_gross", "hy_mt_gross", "gp_bb_gross", "gp_mt_net", "hy_mt_net"]),
+    value: moneySchema.nullable(),
+  })).min(1).max(100),
 });
 
 export const jvHeaders = [

@@ -18,7 +18,7 @@ const base = {
 };
 
 describe("loadConfig", () => {
-  it.each(["isg-esatp-dv", "isg-esatp-st"])(
+  it.each(["isg-esatp-dv", "isg-esatp-st", "isg-esatp-pd"])(
     "uses SFN_PREFIX=%s for Prepaid batch routing automatically",
     (prefix) => {
       const config = loadConfig({ ...base, SFN_PREFIX: prefix });

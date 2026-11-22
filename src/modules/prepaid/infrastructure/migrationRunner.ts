@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   prepaidAllSourceMigrationSql,
   prepaidAdditionalRawValidationSql,
@@ -65,6 +66,7 @@ export async function migratePrepaid(
   connection: MigrationConnection,
   schema: string,
   rawSchema = prepaidRawSchema,
+  includeBillingScope = false,
 ) {
   if (!/^[a-z_][a-z0-9_]*$/.test(schema))
     throw new Error("Invalid Prepaid database schema");
@@ -90,7 +92,14 @@ export async function migratePrepaid(
     `CREATE TABLE IF NOT EXISTS ${s}.prepaid_schema_migrations(id text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())`,
   );
   const applied: string[] = [];
-  for (const [id, sql] of prepaidMigrations(rawSchema)) {
+  const migrations = prepaidMigrations(rawSchema);
+  const entries = includeBillingScope
+    ? [
+        ...migrations,
+        ["017_prepaid_billing_batch_scope", billingScopeSql] as const,
+      ]
+    : migrations;
+  for (const [id, sql] of entries) {
     const found = await connection.query(
       "SELECT 1 FROM prepaid_schema_migrations WHERE id=$1",
       [id],
@@ -104,7 +113,7 @@ export async function migratePrepaid(
     applied.push(id);
   }
   // A recorded migration must not conceal a subsequently removed table.
-  for (const [id, sql] of prepaidMigrations(rawSchema)) {
+  for (const [id, sql] of migrations) {
     for (const match of sql(schema).matchAll(
       /CREATE TABLE(?: IF NOT EXISTS)?\s+("[^"]+"\.(?:"[^"]+"|[a-z_][a-z0-9_]*))/g,
     )) {
@@ -151,4 +160,36 @@ export async function migratePrepaid(
       "Missing/incompatible workflow constraint from migration 008. Restore/review schema drift; existing data is preserved.",
     );
   return applied;
+}
+function billingScopeSql(schema: string) {
+  return `
+    LOCK TABLE "${schema}".prepaid_full_batches IN SHARE ROW EXCLUSIVE MODE;
+    DO $migration$
+    BEGIN
+      IF to_regclass('dswtdir1_prepaid_dbo.dcprepaidsystems') IS NULL
+        OR to_regclass('dswtdir1_prepaid_dbo.dcprepaidsystems_sg') IS NULL
+        OR to_regprocedure('dswtdir1_prepaid_dbo.sp_prepaid1_eglayout_import_pgx()') IS NULL
+        OR to_regprocedure('dswtdir1_prepaid_dbo.sp_prepaid1_sglayout_import_pgx()') IS NULL
+      THEN
+        RAISE EXCEPTION 'Install the converted Prepaid layouts and import procedures before applying billing scope';
+      END IF;
+      IF EXISTS (
+        SELECT FROM "${schema}".prepaid_full_batches
+        WHERE phase = 'import' AND status IN ('queued', 'running')
+      ) THEN
+        RAISE EXCEPTION 'Wait for the active Prepaid import before applying billing scope';
+      END IF;
+    END
+    $migration$;
+    ${readFileSync(
+      new URL(
+        "../../../../infrastructure/prepaid/017_billing_batch_scope.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ).replace(
+      "web_portal.prepaid_full_batches",
+      `"${schema}".prepaid_full_batches`,
+    )}
+  `;
 }

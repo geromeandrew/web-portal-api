@@ -77,6 +77,13 @@ describe("EG report mapping through the actual backend Python boundary", () => {
       mapping,
     );
     expect(a.landing).toEqual(b.landing);
+    const staged = await normalizer.prepare(
+      "callcard_eg", "callcard_eg", input, undefined, mapping, true,
+    );
+    expect(staged.landing).toEqual(a.landing);
+    expect(staged.datasets.callcard).toEqual(["1.50", "1.50"]);
+    await expect(normalizer.prepare("callcard_eg", "callcard_eg", input, undefined, mapping))
+      .rejects.toThrow("requires the verified KE24 period");
     expect(a.datasets.callcard).toHaveLength(2);
     expect((a.datasets.callcard[0] as any).amount).toBe("1.50");
     expect(

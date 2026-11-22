@@ -68,6 +68,8 @@ export async function startServer(): Promise<Server> {
       config,
       logger,
       cancellation.signal,
+      undefined,
+      true,
     );
     await migrationInFlight;
     cancellation.signal.throwIfAborted();

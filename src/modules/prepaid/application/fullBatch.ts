@@ -8,20 +8,19 @@ import type { PrepaidImportStage, StepFunctionsRunner } from "../../../stepFunct
 import type { Config } from "../../../config.js";
 import { AppError } from "../../../errors.js";
 import {
-  manualIntegrationSchema,
   regionSchema,
-  type editSchema,
-  requiredBillingSources,
-  sourceCodes,
+  type batchLayoutEditSchema,
 } from "../domain/contracts.js";
 import { prepaidMaximumSourceBytes } from "../domain/limits.js";
 import {
   sourceBelongsTo,
   sourceLandingName,
   sourceWorkflows,
+  egReportMappingSchema,
   type SourceWorkflow,
 } from "../domain/sourceExtraction.js";
 import type { PrepaidRepository } from "../infrastructure/repository.js";
+import { BackendSourceNormalizer } from "../infrastructure/sourceNormalizer.js";
 import {
   sha256,
   type PrepaidStorage,
@@ -47,6 +46,7 @@ type File = {
   sha256: string;
   name: string;
   workflow: SourceWorkflow;
+  prepared?: { key: string; sha256: string };
 };
 type Journal = { filename: string; sha256: string; key: string; size: number };
 type Execution = {
@@ -74,7 +74,25 @@ const editableRows = {
   sg: [8, 9, 12, 13, 14, 22, 23, 24],
 };
 const grossFields = ["gp_mt_gross", "hy_mt_gross", "gp_bb_gross"] as const;
-type LayoutChange = ReturnType<typeof editSchema.parse>["changes"][number];
+type LayoutChange = ReturnType<typeof batchLayoutEditSchema.parse>["changes"][number];
+type SourceInput = [LayoutChange["field"], ...SourceWorkflow[]];
+const inputCells: Record<Region, Partial<Record<number, SourceInput>>> = {
+  eg: {
+    1: ["gp_mt_net", "ke24"], 2: ["hy_mt_net", "ke24"], 3: ["gp_mt_net", "ke24"],
+    8: ["gp_mt_gross", "callcard_eg"], 9: ["gp_mt_gross", "load_up_eg"],
+    10: ["gp_mt_gross", "load_api_eg"], 11: ["hy_mt_gross", "monthly_recharge"],
+    12: ["hy_mt_gross", "adjustments_308", "charges_318"],
+  },
+  sg: {
+    1: ["gp_mt_net", "ke24"], 2: ["hy_mt_net", "ke24"], 3: ["gp_mt_net", "ke24"],
+    8: ["gp_mt_gross", "load_up_sg"], 9: ["gp_mt_gross", "load_api_sg"],
+    10: ["hy_mt_gross", "adjustments_308", "charges_318"],
+    11: ["hy_mt_gross", "monthly_recharge"],
+    12: ["gp_mt_gross", "callcard_sg"], 13: ["gp_mt_gross", "callcard_sg"],
+  },
+};
+const hasKe24 = (batch: Batch) => batch.files.some((file) => file.workflow === "ke24");
+const ke24Required = "KE24 is required to calculate allocations and produce a journal. Reset and include KE24 to continue.";
 const maximumJournalBytes = 16 * 1024 * 1024;
 const outbound = "prepaid_reclass/outbound/";
 const journalFilename = (region: Region) =>
@@ -104,6 +122,7 @@ export class PrepaidFullBatch {
     readonly runner: StepFunctionsRunner,
     readonly envPrefix: NonNullable<Config["SFN_PREFIX"]>,
     readonly deliveryEnabled: boolean,
+    private readonly normalizer = new BackendSourceNormalizer(),
   ) {}
   private get table() {
     return this.repo.table("full_batches");
@@ -157,7 +176,7 @@ export class PrepaidFullBatch {
   }
   private async layoutReview(db: PoolClient, batch: Batch, region: Region) {
     const table = region === "eg" ? "dcprepaidsystems" : "dcprepaidsystems_sg";
-    const { rows } = await db.query<{ layout_number: number; label: string | null; frozen: boolean }>(
+    const { rows } = await db.query<{ layout_number: number; label: string | null; frozen: boolean } & Record<LayoutChange["field"], string | null>>(
       `SELECT "Layout Number" AS layout_number, "REVENUES BEFORE RECLASS" AS label,
               freezedata AS frozen, gp_${region}_mt_gross AS gp_mt_gross,
               hy_${region}_mt_gross AS hy_mt_gross, gp_${region}_bb_gross AS gp_bb_gross,
@@ -167,14 +186,36 @@ export class PrepaidFullBatch {
     );
     const canEdit = batch.status === "review" && !batch.executions[region] && rows.every((row) => !row.frozen);
     const layoutVersion = sha256(Buffer.from(JSON.stringify(rows)));
+    const uploaded = new Set(batch.files.map((file) => file.workflow));
+    const inputs = inputCells[region];
+    let missingAmounts = false;
+    const layoutRows = rows.filter((row) => row.layout_number !== 0 || row.label?.trim()).map((row) => {
+      const editable: LayoutChange["field"][] = editableRows[region].includes(row.layout_number)
+        ? [...grossFields]
+        : [];
+      const input = inputs[row.layout_number];
+      let manualInput: LayoutChange["field"] | undefined;
+      if (input) {
+        const [field, ...sources] = input;
+        const missingSource = sources.some((source) => !uploaded.has(source));
+        const blank = !row[field]?.trim();
+        if (missingSource && blank) missingAmounts = true;
+        if (missingSource || blank) {
+          manualInput = field;
+          if (!editable.includes(field)) editable.push(field);
+        }
+      }
+      return {
+        ...row,
+        editable_fields: canEdit ? editable : [],
+        manual_input_field: canEdit ? manualInput : undefined,
+      };
+    });
 
     return {
-      rows: rows.filter((row) => row.layout_number !== 0 || row.label?.trim()).map((row) => ({
-        ...row,
-        editable_fields: canEdit && editableRows[region].includes(row.layout_number)
-          ? grossFields.slice()
-          : [],
-      })),
+      rows: layoutRows,
+      freezeInputReason: !hasKe24(batch) ? ke24Required :
+        missingAmounts ? "Enter the missing report amounts and save the layout before freezing." : null,
       layoutVersion, canEdit, hasMore: false, pendingJournal: false,
     };
   }
@@ -192,6 +233,8 @@ export class PrepaidFullBatch {
       if (!batch || batch.id !== id || !this.snapshot(batch)?.canReview)
         throw new AppError(409, "PREPAID_BATCH_NOT_READY", "Wait for the import to finish before reviewing it.");
 
+      if (section !== "layout" && !hasKe24(batch))
+        return { rows: [], hasMore: false, pendingJournal: false, unavailableReason: ke24Required };
       if (section === "jv" && !batch.executions[region]?.journal)
         return { rows: [], hasMore: false, pendingJournal: true };
 
@@ -302,8 +345,14 @@ export class PrepaidFullBatch {
       for (const { layoutNumber, field, value } of changes) {
         const row = current.rows.find((item) => item.layout_number === layoutNumber);
         if (!row?.editable_fields.includes(field))
-          throw new AppError(400, "PREPAID_LAYOUT_CELL_READ_ONLY", "Only editable gross cells can be saved.");
-        await save(layoutNumber, field, value);
+          throw new AppError(400, "PREPAID_LAYOUT_CELL_READ_ONLY", "Only editable layout cells can be saved.");
+        const input = inputCells[region][layoutNumber];
+        if (input?.[0] !== field || (editableRows[region].includes(layoutNumber) && grossFields.some((item) => item === field))) {
+          await save(layoutNumber, field, value);
+        } else {
+          const column = field.replace("_mt_", `_${region}_mt_`);
+          await db.query(`UPDATE ${schema}.${table} SET ${column}=$1 WHERE "Layout Number"=$2`, [value, layoutNumber]);
+        }
       }
 
       // The existing calculation writes the variance before updating its additional-revenue row.
@@ -397,32 +446,19 @@ export class PrepaidFullBatch {
   /** The workspace holds the upload-session lock while binding its completed files. */
   async enqueueSession(
     db: PoolClient,
-    session: { id: string; configuration: unknown },
+    session: { id: string },
   ): Promise<boolean> {
     const active = await db.query(
       `SELECT 1 FROM ${this.table} WHERE session_id=$1 AND status <> 'closed'`,
       [session.id],
     );
     if (active.rowCount) return false;
-    const configuration = manualIntegrationSchema.safeParse(
-      session.configuration,
-    );
-    if (!configuration.success)
-      throw new AppError(
-        409,
-        "PREPAID_BATCH_CONFIG_REQUIRED",
-        "Configure the approved Prepaid billing cycles before importing reports.",
-      );
     const rows = (
       await db.query(
         `SELECT source_code,object_key,sha256 FROM ${this.repo.table("session_files")} WHERE session_id=$1 AND active ORDER BY source_code`,
         [session.id],
       )
     ).rows;
-    const required = [
-      ...sourceCodes,
-      ...requiredBillingSources(configuration.data),
-    ];
     const files = rows.map((file): File => {
       const workflow = workflows.find((item) =>
         sourceBelongsTo(item, file.source_code),
@@ -431,7 +467,7 @@ export class PrepaidFullBatch {
         throw new AppError(
           409,
           "PREPAID_BATCH_UNEXPECTED_SOURCE",
-          "Remove files outside the configured billing cycles.",
+          "Remove unrecognized billing files before processing.",
         );
       return {
         code: file.source_code,
@@ -441,20 +477,31 @@ export class PrepaidFullBatch {
         name: sourceLandingName(workflow, file.source_code),
       };
     });
-    if (
-      files.length !== required.length ||
-      required.some((code) => !files.some((f) => f.code === code))
-    )
+    if (!files.length)
       throw new AppError(
         409,
         "PREPAID_BATCH_INPUT_REQUIRED",
-        "Upload every source and billing cycle configured for this batch.",
+        "Upload at least one file before starting.",
       );
     const prior = await db.query(
-      `SELECT 1 FROM ${this.table} WHERE session_id=$1 AND files @> $2::jsonb AND files <@ $2::jsonb LIMIT 1`,
+      `SELECT 1 FROM ${this.table} b
+       CROSS JOIN LATERAL (SELECT jsonb_agg(file - 'prepared') AS originals FROM jsonb_array_elements(b.files) AS file) AS inputs
+       WHERE b.session_id=$1 AND inputs.originals @> $2::jsonb AND inputs.originals <@ $2::jsonb LIMIT 1`,
       [session.id, JSON.stringify(files)],
     );
     if (prior.rowCount) return false;
+    const readiness = await db.query<{ installed: boolean }>(
+      "SELECT to_regprocedure('dswtdir1_prepaid_dbo.prepaid_import_source_enabled(text)') IS NOT NULL AS installed",
+    );
+    if (!readiness.rows[0]?.installed)
+      throw new AppError(503, "PREPAID_BATCH_IMPORT_NOT_DEPLOYED", "Partial report processing is not available yet.");
+    const machine = await this.runner.describeStateMachineDefinition(`${this.envPrefix}-${machines.import}`);
+    const states = JSON.parse(machine.definition).States;
+    const extract = JSON.stringify(states?.Extract_All ?? {});
+    if (machine.type !== "STANDARD" || machine.status !== "ACTIVE" ||
+        !workflows.every((workflow) => extract.includes(`"$.extract_sources.${workflow}"`)) ||
+        !JSON.stringify(states?.Import ?? {}).includes('"--CODE.$":"$$.Execution.Name"'))
+      throw new AppError(503, "PREPAID_BATCH_IMPORT_NOT_DEPLOYED", "Partial report processing is not available yet.");
     for (const region of ["eg", "sg"] as const) {
       if (
         !(await this.layout(db, region)).some((row) => row.label === "Variance")
@@ -476,7 +523,7 @@ export class PrepaidFullBatch {
       throw new AppError(
         409,
         "PREPAID_BATCH_BUSY",
-        "Another import is active. Your files will be processed when it finishes.",
+        "Another import is active. Start processing again when it finishes.",
       );
     return true;
   }
@@ -534,6 +581,9 @@ export class PrepaidFullBatch {
       }
       if (action !== "close") {
         await this.landing.assertOwner(batch.id);
+        const { freezeInputReason } = await this.layoutReview(db, batch, action);
+        if (freezeInputReason)
+          throw new AppError(409, "PREPAID_BATCH_FREEZE_NOT_READY", freezeInputReason);
         if (
           !isDeepStrictEqual(
             await this.layout(db, action),
@@ -555,13 +605,47 @@ export class PrepaidFullBatch {
     const prefix = this.storage.sessionPrefix(batch.session_id);
     for (const workflow of workflows) {
       const files = batch.files.filter((file) => file.workflow === workflow);
+      if (!files.length) continue;
       const inputs = [];
       for (const file of files) {
-        const bytes = await this.storage.bytes(file.key, prefix, prepaidMaximumSourceBytes);
-        inputs.push({ ...file, bytes });
+        const source = file.prepared ?? file;
+        const bytes = await this.storage.bytes(source.key, prefix, prepaidMaximumSourceBytes);
+        inputs.push({ name: file.name, sha256: source.sha256, bytes });
       }
       await this.landing.stage(batch.id, workflow, inputs);
     }
+  }
+  private async prepareEgInputs(db: PoolClient, batch: Batch) {
+    const candidates = batch.files.filter((file) =>
+      !file.prepared && (file.workflow === "load_up_eg" || file.workflow === "callcard_eg"),
+    );
+    if (!candidates.length) return false;
+
+    const { rows } = await db.query(
+      `SELECT configuration FROM ${this.repo.table("upload_sessions")} WHERE id=$1`,
+      [batch.session_id],
+    );
+    const mapping = egReportMappingSchema.optional().parse(rows[0]?.configuration?.sourceExtraction?.egReportMapping);
+    const prefix = this.storage.sessionPrefix(batch.session_id);
+    for (const file of candidates) {
+      const bytes = await this.storage.bytes(file.key, prefix, prepaidMaximumSourceBytes);
+      if (sha256(bytes) !== file.sha256)
+        throw new AppError(422, "PREPAID_INVALID_REPORT", "The uploaded report could not be verified. Upload it again.");
+      const { landing } = await this.normalizer.prepare(file.workflow, file.code, bytes, undefined, mapping, true).catch((cause) => {
+        if (!(cause instanceof Error) || !cause.message.startsWith("Source normalization failed:")) throw cause;
+        throw new AppError(422, "PREPAID_INVALID_REPORT", `Could not read ${file.name}. Check the workbook format and the approved report mapping.`);
+      });
+      if (landing) {
+        const key = `${prefix}aws-batch/${batch.id}/${file.code}-${sha256(landing)}.xlsx`;
+        const saved = await this.storage.putVerified(key, prefix, landing, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        file.prepared = { key: saved.key, sha256: saved.sha256 };
+      } else {
+        file.prepared = { key: file.key, sha256: file.sha256 };
+      }
+    }
+    // Commit the exact working-copy checksums before touching the shared inbound folder.
+    await db.query(`UPDATE ${this.table} SET files=$2,error=NULL WHERE id=$1`, [batch.id, JSON.stringify(batch.files)]);
+    return true;
   }
   async tick() {
     let claimed: string | undefined;
@@ -572,11 +656,16 @@ export class PrepaidFullBatch {
     } catch (error) {
       if (claimed)
         await this.repo.pool.query(
-          `UPDATE ${this.table} SET error=$2,next_check=now()+interval '15 seconds'
+          `UPDATE ${this.table} SET error=$2,
+              status=CASE WHEN $3 THEN 'failed' ELSE status END,
+              next_check=now()+interval '15 seconds'
          WHERE id=$1 AND status IN ('queued','running')`,
           [
             claimed,
-            "Processing is temporarily delayed and will retry automatically.",
+            error instanceof AppError && error.code === "PREPAID_INVALID_REPORT"
+              ? error.message
+              : "Processing is temporarily delayed and will retry automatically.",
+            error instanceof AppError && error.code === "PREPAID_INVALID_REPORT",
           ],
         );
       throw error;
@@ -594,9 +683,12 @@ export class PrepaidFullBatch {
       const { id, phase } = batch;
       claim(id);
       if (phase === "cleanup") {
-        for (const workflow of (await this.landing.owns(id)) ? workflows : []) {
+        for (const workflow of (await this.landing.owns(id)) ? new Set(batch.files.map((file) => file.workflow)) : []) {
           const files = batch.files.filter((f) => f.workflow === workflow);
-          await this.landing.finish(id, workflow, files, false);
+          await this.landing.finish(id, workflow, files.map((file) => ({
+            name: file.name,
+            sha256: (file.prepared ?? file).sha256,
+          })), false);
         }
         await db.query(`UPDATE ${this.table} SET phase='release' WHERE id=$1`, [
           id,
@@ -623,6 +715,7 @@ export class PrepaidFullBatch {
             "Prepaid AWS batch requires an active Standard state machine.",
           );
         if (phase === "import" && !batch.inputs_staged) {
+          if (await this.prepareEgInputs(db, batch)) return true;
           await this.stageInputs(batch);
           await db.query(
             `UPDATE ${this.table} SET inputs_staged=true,error=NULL WHERE id=$1`,
@@ -634,7 +727,10 @@ export class PrepaidFullBatch {
         const started = await this.runner.startExecution(
           name,
           phase === "import"
-            ? { env_prefix: this.envPrefix, skip_extract: false }
+            ? {
+                env_prefix: this.envPrefix, skip_extract: false,
+                extract_sources: Object.fromEntries(batch.files.map((file) => [file.workflow, true])),
+              }
             : { env_prefix: this.envPrefix },
           `portal-prepaid-${id}-${phase}`,
         );

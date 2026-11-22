@@ -19,6 +19,7 @@ RUN apk add --no-cache python3 py3-pip
 COPY infrastructure/prepaid/requirements-backend.txt ./infrastructure/prepaid/
 RUN python3 -m venv /app/.venv-prepaid && /app/.venv-prepaid/bin/pip install --no-cache-dir -r infrastructure/prepaid/requirements-backend.txt
 COPY infrastructure/prepaid/normalize_source.py infrastructure/prepaid/portal_source_extract.py infrastructure/prepaid/workbook_stream.py infrastructure/prepaid/eg_report_adapter.py infrastructure/prepaid/normalize_raw_source.py ./infrastructure/prepaid/
+COPY infrastructure/prepaid/017_billing_batch_scope.sql ./infrastructure/prepaid/
 COPY --from=build /app/dist ./dist
 USER node
 EXPOSE 3001

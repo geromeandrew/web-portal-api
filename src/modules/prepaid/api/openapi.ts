@@ -853,10 +853,10 @@ add(
 add(
   "/workspace/prepare",
   "post",
-  "Retry failed preparation using the same complete source session",
+  "Start Prepaid processing for the uploaded reports",
 );
 paths["/api/workflows/prepaid/workspace/prepare"]!.post!.description =
-  "Retries failed preparation or attempts to bind an existing collection-only session to a valid complete integration. If setup is unavailable, files remain collecting and no job/run/AWS execution is created. Valid configuration and all approved required inputs remain mandatory; unexpected uploaded cycles are not silently discarded.";
+  "AWS batch processing requires at least one uploaded report. Uploaded 308 and 318 reports retain their own filename cycles. The older non-AWS preparation path still uses its complete source configuration.";
 add(
   "/workspace/reset",
   "post",

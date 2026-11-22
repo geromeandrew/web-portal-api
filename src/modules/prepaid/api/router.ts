@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { editSchema } from "../domain/contracts.js";
+import { batchLayoutEditSchema } from "../domain/contracts.js";
 import {
   PrepaidFullBatch,
   prepaidFullBatchPrefix,
@@ -139,10 +139,7 @@ export function createPrepaidRouter(
   router.patch("/aws-batch/review/:region/layout", async (req, res) => {
     if (!batch)
       throw new AppError(404, "PREPAID_BATCH_DISABLED", "Batch review is unavailable.");
-    const input = editSchema.pick({ changes: true }).extend({
-      batchId: z.string().uuid(),
-      layoutVersion: z.string().regex(/^[a-f0-9]{64}$/),
-    }).parse(req.body);
+    const input = batchLayoutEditSchema.parse(req.body);
     res.json(await batch.saveLayout(
       req.auth!.userId, input.batchId, z.enum(["eg", "sg"]).parse(req.params.region),
       input.layoutVersion, input.changes,

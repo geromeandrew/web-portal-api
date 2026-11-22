@@ -11,6 +11,7 @@ import {
   requiredBillingSources,
   matchesSourceName,
   sourceFileRequirement,
+  prepaidBillCycles,
 } from "../domain/contracts.js";
 import type { PrepaidFullBatch } from "./fullBatch.js";
 import { PrepaidRunService } from "./runService.js";
@@ -79,6 +80,9 @@ export class PrepaidWorkspaceService {
     ]);
   }
   private required(configuration: unknown) {
+    if (this.fullBatch)
+      return [...sourceCodes, ...prepaidBillCycles.flatMap((cycle) => [`308_${cycle}`, `318_${cycle}`])]
+        .map(sourceFileRequirement);
     if (isUploadCollection(configuration))
       return sourceCodes.map(sourceFileRequirement);
     const config = manualIntegrationSchema.parse(configuration);
@@ -87,11 +91,13 @@ export class PrepaidWorkspaceService {
     );
   }
   private accepted(configuration: unknown) {
+    if (this.fullBatch) return this.required(configuration);
     return isUploadCollection(configuration)
       ? uploadCollectionSources()
       : this.required(configuration);
   }
   private preparation(configuration: unknown) {
+    if (this.fullBatch) return { configured: true, message: null };
     return {
       configured: !isUploadCollection(configuration),
       message: isUploadCollection(configuration)
@@ -116,10 +122,10 @@ export class PrepaidWorkspaceService {
         )
       ).rows;
       const required = this.required(session.configuration);
-      const missing = required
+      const missing = this.fullBatch ? [] : required
         .filter((x) => !files.some((f) => f.source_code === x.code))
         .map((x) => x.code);
-      const collectionOnly = isUploadCollection(session.configuration);
+      const collectionOnly = !this.fullBatch && isUploadCollection(session.configuration);
       const unexpected = collectionOnly
         ? []
         : files
@@ -163,13 +169,13 @@ export class PrepaidWorkspaceService {
           required,
           accepted: this.accepted(session.configuration),
           collectionOnly,
-          ...(collectionOnly
+          ...(collectionOnly && !this.fullBatch
             ? { guidelines: uploadCollectionGuidelines() }
             : {}),
           unexpected,
           files,
           missing,
-          valid: !collectionOnly && !missing.length && !unexpected.length,
+          valid: this.fullBatch ? files.length > 0 : !collectionOnly && !missing.length && !unexpected.length,
           upstream: null,
         },
         preparation: this.preparation(session.configuration),
@@ -201,12 +207,12 @@ export class PrepaidWorkspaceService {
       sources: {
         required,
         accepted: this.accepted(configuration),
-        collectionOnly: isUploadCollection(configuration),
-        ...(isUploadCollection(configuration)
+        collectionOnly: !this.fullBatch && isUploadCollection(configuration),
+        ...(isUploadCollection(configuration) && !this.fullBatch
           ? { guidelines: uploadCollectionGuidelines() }
           : {}),
         unexpected: [],
-        missing: required.map((x) => x.code),
+        missing: this.fullBatch ? [] : required.map((x) => x.code),
         files: [],
         valid: false,
         upstream: null,
@@ -439,7 +445,7 @@ export class PrepaidWorkspaceService {
         `UPDATE ${this.t("upload_sessions")} SET version=version+1,status='collecting',error=NULL WHERE id=$1`,
         [s.id],
       );
-      await this.enqueue(db, s.id);
+      if (!this.fullBatch) await this.enqueue(db, s.id);
     });
     return { id, ...saved };
   }
@@ -462,22 +468,6 @@ export class PrepaidWorkspaceService {
           [sessionId, JSON.stringify(configuration)],
         )
       ).rows[0];
-    }
-    if (this.fullBatch) {
-      try {
-        const queued = await this.fullBatch.enqueueSession(db, s);
-        if (queued) await db.query(`UPDATE ${this.t("upload_sessions")} SET error=NULL WHERE id=$1`,[s.id]);
-        return queued;
-      } catch (error) {
-        if (!(error instanceof AppError)) throw error;
-        if (error.code === "PREPAID_BATCH_INPUT_REQUIRED") return false;
-        if (!["PREPAID_BATCH_BUSY", "PREPAID_BATCH_LAYOUT_REQUIRED", "PREPAID_BATCH_UNEXPECTED_SOURCE"].includes(error.code))
-          throw error;
-        const message = ["PREPAID_BATCH_BUSY", "PREPAID_BATCH_LAYOUT_REQUIRED"].includes(error.code)
-          ? "AWS batch is waiting: " + error.message : error.message;
-        await db.query(`UPDATE ${this.t("upload_sessions")} SET error=$2 WHERE id=$1 AND error IS DISTINCT FROM $2`,[s.id,message]);
-        return false;
-      }
     }
     const files = (
       await db.query(
@@ -521,14 +511,13 @@ export class PrepaidWorkspaceService {
    * A complete approved config is still mandatory before binding/queuing.
    */
   async resumeCollectingUploads() {
-    if (!this.fullBatch && !(await this.runs.availableIntegration())) return false;
+    if (this.fullBatch || !(await this.runs.availableIntegration())) return false;
     const rows = await this.runs.repo.pool.query(
       `SELECT s.id,w.user_id FROM ${this.t("upload_sessions")} s
       JOIN ${this.runs.repo.schema}.workspaces w ON w.id=s.workspace_id
-      WHERE s.active AND (s.status='collecting' OR ($2 AND s.status='ready'))
-        AND (s.configuration=$1::jsonb OR ($2 AND (s.error LIKE 'AWS batch is waiting:%' OR s.status='ready')))
+      WHERE s.active AND s.status='collecting' AND s.configuration=$1::jsonb
       ORDER BY s.created_at LIMIT 20`,
-      [JSON.stringify(uploadCollectionConfiguration), !!this.fullBatch],
+      [JSON.stringify(uploadCollectionConfiguration)],
     );
     let queued = false;
     for (const row of rows.rows) {
@@ -537,8 +526,8 @@ export class PrepaidWorkspaceService {
         if (
           !current ||
           current.id !== row.id ||
-          !["collecting", ...(this.fullBatch ? ["ready"] : [])].includes(current.status) ||
-          !isUploadCollection(current.configuration) && !(this.fullBatch && (current.status === "ready" || current.error?.startsWith("AWS batch is waiting:")))
+          current.status !== "collecting" ||
+          !isUploadCollection(current.configuration)
         )
           return false;
         return this.enqueue(db, current.id);
@@ -550,7 +539,11 @@ export class PrepaidWorkspaceService {
   async prepare(userId: string) {
     await this.runs.repo.transaction(async (db) => {
       const s = await this.session(db, userId, false);
-      if (s) await this.enqueue(db, s.id);
+      if (this.fullBatch) {
+        if (!s) throw new AppError(409, "PREPAID_BATCH_INPUT_REQUIRED", "Upload at least one file before starting.");
+        await this.fullBatch.enqueueSession(db, s);
+        await db.query(`UPDATE ${this.t("upload_sessions")} SET error=NULL WHERE id=$1`, [s.id]);
+      } else if (s && !this.fullBatch) await this.enqueue(db, s.id);
     });
     return this.state(userId);
   }
@@ -565,7 +558,7 @@ export class PrepaidWorkspaceService {
         `UPDATE ${this.t("upload_sessions")} SET version=version+1,status='collecting',error=NULL WHERE id=$1`,
         [s.id],
       );
-      await this.enqueue(db, s.id);
+      if (!this.fullBatch) await this.enqueue(db, s.id);
     });
     return this.state(userId);
   }
