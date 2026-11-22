@@ -59,7 +59,10 @@ const envSchema = z
     AWS_ACCESS_KEY_ID: z.string().min(1).optional(),
     AWS_SECRET_ACCESS_KEY: z.string().min(1).optional(),
     SFN_PREFIX: z
-      .union([z.enum(["isg-esatp-dv", "isg-esatp-st"]), z.literal("")])
+      .union([
+        z.enum(["isg-esatp-dv", "isg-esatp-st", "isg-esatp-pd"]),
+        z.literal(""),
+      ])
       .optional()
       .transform((value) => value || undefined),
     PREPAID_FULL_BATCH_DELIVERY_ENABLED: z.enum(["true", "false"]).optional(),

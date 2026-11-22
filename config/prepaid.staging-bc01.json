@@ -1,0 +1,24 @@
+{
+  "preparationMode": "native_sources",
+  "accountingProfile": "legacy_sql_v1",
+  "referenceValidationPolicy": "legacy_all_matches",
+  "sourceExtraction": {
+    "envPrefix": "isg-esatp-st",
+    "coverage": "all_sources",
+    "sharedWritesApproved": true,
+    "resources": {
+      "scriptsBucket": "isg-esatp-st-scripts-os",
+      "scriptsPrefix": "glue/st-v0.0.1/core/commons/"
+    }
+  },
+  "expectedCycles": ["01"],
+  "reportCycles": {
+    "adjustments": ["01"],
+    "charges": ["01"]
+  },
+  "format": {
+    "fileType": "xlsx",
+    "profile": "prepaid-manual-xlsx-v1",
+    "approved": true
+  }
+}

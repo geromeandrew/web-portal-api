@@ -3,6 +3,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Config } from "./config.js";
 import type { Logger } from "./platform/logger.js";
 import { migrations } from "./migrations.js";
+import { migratePrepaid } from "./modules/prepaid/infrastructure/migrationRunner.js";
+import { prepaidFullBatchPrefix } from "./modules/prepaid/application/fullBatch.js";
 
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 export async function runMigrations(
@@ -11,6 +13,7 @@ export async function runMigrations(
   logger: Logger,
   signal?: AbortSignal,
   entries: readonly { id: string; sql: string }[] = migrations,
+  includePrepaid = false,
 ) {
   const logContext = {
     databaseUser: config.DATABASE_USER,
@@ -112,6 +115,29 @@ export async function runMigrations(
           migrationId: migration.id,
           ...logContext,
         });
+        throw error;
+      }
+    }
+    if (includePrepaid) {
+      signal?.throwIfAborted();
+      await client.query("BEGIN");
+      try {
+        const applied = await migratePrepaid(
+          client,
+          config.DATABASE_SCHEMA,
+          undefined,
+          Boolean(prepaidFullBatchPrefix(config)),
+        );
+        signal?.throwIfAborted();
+        await client.query("COMMIT");
+        for (const migrationId of applied)
+          logger.info("database.migration_applied", {
+            migrationId,
+            ...logContext,
+          });
+      } catch (error) {
+        if (!destroyed) await client.query("ROLLBACK").catch(() => {});
+        logger.error("database.prepaid_migrations_failed", logContext);
         throw error;
       }
     }

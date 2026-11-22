@@ -117,6 +117,11 @@ def parse_callcard_eg(rows, period):
     if not period:
         raise ValueError("Call Card EG requires the verified KE24 period")
     month = int(accounting_period(period)[5:])
+    return [{"region": "eg", "kind": "trade", "month_no": month, "amount": value}
+            for value in callcard_eg_amounts(rows)]
+
+
+def callcard_eg_amounts(rows):
     result = []
     # Glue extract_6 skips one row: count=1, Business=3, Gross Amount=9.
     # Preserve EACH amount: legacy SQL rounds each row to numeric(18,0) before SUM.
@@ -131,8 +136,7 @@ def parse_callcard_eg(rows, period):
             raise ValueError("Call Card EG row does not match the verified ordinal mapping")
         if text(row[2]).upper() != "EG":
             continue
-        result.append({"region": "eg", "kind": "trade", "month_no": month,
-                       "amount": money(amount(row[8], True))})
+        result.append(money(amount(row[8], True)))
     if not result:
         raise ValueError("Call Card EG contains no EG records")
     return result
@@ -227,20 +231,27 @@ def normalize_rows(workflow, code, rows, period=None, mapping=None):
     raise ValueError("Source does not belong to the selected extraction workflow")
 
 
-def prepare(workflow, code, body, period=None, mapping=None):
+def prepare(workflow, code, body, period=None, mapping=None, landing_only=False):
     if workflow not in ("callcard_eg", "load_up_eg") or code != workflow:
         return {"datasets": normalize(workflow, code, body, period, mapping)}
     with closing(iter_workbook_rows(body, workflow)) as rows:
         adapted, original = mapped_report(workflow, rows, mapping)
+        if landing_only and workflow == "callcard_eg":
+            def normalize_landing(rows):
+                return {"callcard": callcard_eg_amounts(rows)}
+        else:
+            def normalize_landing(rows):
+                return normalize_rows(workflow, code, rows, period)
         if adapted is None:
-            return {"datasets": normalize_rows(workflow, code, original, period)}
-        datasets = normalize_rows(workflow, code, iter(adapted), period)
+            return {"datasets": normalize_landing(original)}
+        datasets = normalize_landing(iter(adapted))
         landing = workbook_bytes(adapted)
         if len(landing) > MAX_SOURCE_BYTES:
             raise ValueError("Adapted workbook exceeds source byte limit")
         # Re-read the exact persisted working copy, not just its in-memory rows.
-        if normalize(workflow, code, landing, period) != datasets:
-            raise ValueError("Adapted native workbook differs from original-report calculations")
+        with closing(iter_workbook_rows(landing, workflow)) as staged:
+            if normalize_landing(staged) != datasets:
+                raise ValueError("Adapted native workbook differs from original-report calculations")
         return {"datasets": datasets, "landing": base64.b64encode(landing).decode("ascii")}
 
 
@@ -254,9 +265,10 @@ if __name__ == "__main__":
         if len(sys.argv) > 5 and sys.argv[5] == "raw":
             from normalize_raw_source import normalize_raw
             result = normalize_raw(sys.argv[1], sys.argv[2], json.loads(body), period)
+        elif len(sys.argv) > 5 and sys.argv[5] in ("prepare", "landing"):
+            result = prepare(sys.argv[1], sys.argv[2], body, period, mapping, sys.argv[5] == "landing")
         else:
-            operation = prepare if len(sys.argv) > 5 and sys.argv[5] == "prepare" else normalize
-            result = operation(sys.argv[1], sys.argv[2], body, period, mapping)
+            result = normalize(sys.argv[1], sys.argv[2], body, period, mapping)
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
     except Exception as error:
         print(str(error), file=sys.stderr)

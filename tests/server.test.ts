@@ -51,6 +51,14 @@ describe("automatic startup migrations", () => {
     });
     expect(await startServer()).toBe(server);
     expect(mocks.migrate).toHaveBeenCalledOnce();
+    expect(mocks.migrate).toHaveBeenCalledWith(
+      pool,
+      expect.anything(),
+      mocks.logger,
+      expect.any(AbortSignal),
+      undefined,
+      true,
+    );
     expect(mocks.createApp.mock.calls[0][4]()).toBe(true);
     expect(pool.end).not.toHaveBeenCalled();
     server.emit("close");

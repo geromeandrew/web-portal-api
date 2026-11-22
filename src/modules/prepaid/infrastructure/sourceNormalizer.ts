@@ -111,6 +111,7 @@ export class BackendSourceNormalizer implements SourceNormalizer {
     bytes: Buffer,
     period?: string,
     mapping?: EgReportMapping,
+    landingOnly = false,
   ) {
     const result = (await this.execute(
       workflow,
@@ -119,6 +120,8 @@ export class BackendSourceNormalizer implements SourceNormalizer {
       period,
       mapping,
       true,
+      false,
+      landingOnly,
     )) as any;
     const landing =
       result.landing === undefined
@@ -142,6 +145,7 @@ export class BackendSourceNormalizer implements SourceNormalizer {
     mapping: EgReportMapping | undefined,
     prepare: boolean,
     raw = false,
+    landingOnly = false,
   ) {
     if (bytes.length > prepaidMaximumSourceBytes)
       throw Error("Source exceeds portal upload limit.");
@@ -171,7 +175,7 @@ export class BackendSourceNormalizer implements SourceNormalizer {
           code,
           period ?? "",
           mapping ? JSON.stringify(mapping) : "",
-          ...(raw ? ["raw"] : prepare ? ["prepare"] : []),
+          ...(raw ? ["raw"] : prepare ? [landingOnly ? "landing" : "prepare"] : []),
         ],
         { shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
       );

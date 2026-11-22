@@ -12,6 +12,8 @@ import {
 } from "../src/modules/prepaid/infrastructure/prepaidStorage.js";
 import type { StepFunctionsRunner } from "../src/stepFunctionsRunner.js";
 import { sourceCodes } from "../src/modules/prepaid/domain/contracts.js";
+import { sourceWorkflows } from "../src/modules/prepaid/domain/sourceExtraction.js";
+import { BackendSourceNormalizer } from "../src/modules/prepaid/infrastructure/sourceNormalizer.js";
 
 const endpoint = process.env.PREPAID_TEST_DATABASE_URL;
 if (endpoint) {
@@ -43,6 +45,10 @@ describe.skipIf(!endpoint).each([
       CREATE TABLE ${schema}.prepaid_upload_sessions(id uuid PRIMARY KEY,workspace_id uuid,active boolean,status text,configuration jsonb,version integer DEFAULT 0,error text,run_id uuid);
       CREATE TABLE ${schema}.prepaid_session_files(session_id uuid,active boolean DEFAULT true,source_code text,object_key text,sha256 text,id uuid,original_name text,size_bytes bigint,uploaded_by uuid);
       CREATE SCHEMA dswtdir1_prepaid_dbo;
+      CREATE FUNCTION dswtdir1_prepaid_dbo.prepaid_import_source_enabled(text)
+        RETURNS boolean LANGUAGE sql AS 'SELECT true';
+      CREATE PROCEDURE dswtdir1_prepaid_dbo.sp_prepaid1_eglayout_compute_topup_pgx()
+        LANGUAGE plpgsql AS 'BEGIN NULL; END';
       CREATE TABLE dswtdir1_prepaid_dbo.dcprepaidsystems("Layout Number" int,"REVENUES BEFORE RECLASS" text,total_gross text,total_net text,freezedata boolean);
       CREATE TABLE dswtdir1_prepaid_dbo.dcprepaidsystems_sg(LIKE dswtdir1_prepaid_dbo.dcprepaidsystems);
       INSERT INTO dswtdir1_prepaid_dbo.dcprepaidsystems VALUES(27,'Variance','0.00','0.00',false);
@@ -70,8 +76,8 @@ describe.skipIf(!endpoint).each([
         session,
         workspace,
         JSON.stringify({
-          expectedCycles: ["21", "27"],
-          reportCycles: { adjustments: ["21"], charges: ["27"] },
+          expectedCycles: ["21"],
+          reportCycles: { adjustments: ["21"], charges: ["21"] },
           preparationMode: "native_sources",
           format: {
             fileType: "xlsx",
@@ -121,14 +127,15 @@ describe.skipIf(!endpoint).each([
       finish: vi.fn(),
       release: vi.fn(),
     };
-    const archive = vi.fn(async (key: string) => ({
+    const workingCopy = Buffer.from("adapted workbook");
+    const archive = vi.fn(async (key: string, _prefix?: string, body = content) => ({
       key,
-      sha256: sha256(content),
-      size: content.length,
+      sha256: sha256(body),
+      size: body.length,
     }));
     const storage = {
       legacyLanding: () => landing,
-      bytes: async () => content,
+      bytes: async (key: string) => key.endsWith(".xlsx") ? workingCopy : content,
       sessionPrefix: (id: string) => `prepaid_reclass/sessions/${id}/`,
       deliveredJournalKey: async (prefix: string, name: string) => prefix + "20261118-1300/" + name,
       get: async (key: string) => {
@@ -146,6 +153,14 @@ describe.skipIf(!endpoint).each([
       startedAt: mark,
     }));
     const runner = {
+      describeStateMachineDefinition: async () => ({
+        type: "STANDARD",
+        status: "ACTIVE",
+        definition: JSON.stringify({ States: {
+          Extract_All: Object.keys(sourceWorkflows).map((key) => "$.extract_sources." + key),
+          Import: { "--CODE.$": "$$.Execution.Name" },
+        } }),
+      }),
       describeStateMachine: async (machine: string) => ({
         name: machine,
         arn: `arn:aws:states:${region}:123456789012:stateMachine:${machine}`,
@@ -155,12 +170,13 @@ describe.skipIf(!endpoint).each([
       startExecution,
       describeExecution: async () => ({ status: "SUCCEEDED", completedAt: mark }),
     } as unknown as StepFunctionsRunner;
-    const service = new PrepaidFullBatch(repo, storage, runner, envPrefix, true);
+    const normalizer = new BackendSourceNormalizer();
+    const prepare = vi.spyOn(normalizer, "prepare").mockResolvedValue({ datasets: {}, landing: workingCopy });
+    const service = new PrepaidFullBatch(repo, storage, runner, envPrefix, true, normalizer);
     const workspaceApi = new PrepaidWorkspaceService(
       new PrepaidRunService(repo, storage),
       service,
     );
-    await workspaceApi.prepare(user);
     expect(await service.status(user)).toBeNull();
     const source = {
       originalname: "DL_Monthly_Recharge_summary_report.csv",
@@ -172,18 +188,30 @@ describe.skipIf(!endpoint).each([
     const inputs = await workspaceApi.state(user);
     expect(inputs.sources.missing).toEqual([]);
     expect(inputs.error).toBeNull();
+    expect(await service.status(user)).toBeNull();
+    expect(await workspaceApi.resumeCollectingUploads()).toBe(false);
+    await workspaceApi.prepare(user);
     const batch = await service.status(user);
     expect(batch?.status).toBe("queued");
     await workspaceApi.upload(user, "monthly_recharge", source, uploadId);
     expect(await service.status(user)).toEqual(batch);
     expect(await service.status(randomUUID())).toBeNull();
     await service.tick();
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(landing.stage).not.toHaveBeenCalled();
+    await service.tick();
     expect(landing.stage).toHaveBeenCalledTimes(10);
+    expect(landing.stage).toHaveBeenCalledWith(batch!.id, "load_up_eg", [
+      expect.objectContaining({ bytes: workingCopy, sha256: sha256(workingCopy) }),
+    ]);
     expect(startExecution).not.toHaveBeenCalled();
     await service.tick();
     expect(startExecution).toHaveBeenCalledWith(
       `${envPrefix}-prcl_proc-sf`,
-      { env_prefix: envPrefix, skip_extract: false },
+      {
+        env_prefix: envPrefix, skip_extract: false,
+        extract_sources: Object.fromEntries(Object.keys(sourceWorkflows).map((key) => [key, true])),
+      },
       `portal-prepaid-${batch!.id}-import`,
     );
     const resetContext = {
@@ -236,7 +264,7 @@ describe.skipIf(!endpoint).each([
     expect(
       archive.mock.calls
         .map(([key]) => key)
-        .filter((key) => key.includes("/aws-batch/")),
+        .filter((key) => key.endsWith(".txt")),
     ).toEqual([
       `prepaid_reclass/sessions/${session}/aws-batch/${batch!.id}/txPrepaid_JV_EGSel.txt`,
     ]);
@@ -252,11 +280,43 @@ describe.skipIf(!endpoint).each([
     expect(reset.sources.files).toEqual([]);
     expect(await service.status(user)).toMatchObject({ phase: "cleanup", status: "queued" });
     await service.tick();
+    expect(landing.finish).toHaveBeenCalledWith(batch!.id, "load_up_eg", [
+      { name: "LOAD UP_EG.xlsx", sha256: sha256(workingCopy) },
+    ], false);
     expect(landing.release).not.toHaveBeenCalled();
     await service.tick();
     expect(landing.release).toHaveBeenCalledWith(batch!.id, true);
     expect((await service.status(user))?.status).toBe("closed");
-    await workspaceApi.prepare(user);
+    await expect(workspaceApi.prepare(user)).rejects.toMatchObject({ code: "PREPAID_BATCH_INPUT_REQUIRED" });
     expect((await service.status(user))?.status).toBe("closed");
+
+    // A new session containing only recharge still starts the parent.
+    await pool.query(`UPDATE ${repo.table("upload_sessions")} SET active=true WHERE id=$1`, [session]);
+    await pool.query(`UPDATE ${repo.table("session_files")} SET active=false WHERE session_id=$1 AND source_code <> 'monthly_recharge'`, [session]);
+    await pool.query(`INSERT INTO dswtdir1_prepaid_dbo.dcprepaidsystems("Layout Number", "REVENUES BEFORE RECLASS")
+      VALUES (11,'RECHARGE INSTRUCTION (recharge report)'), (12,'AMAXCE')`);
+    await workspaceApi.prepare(user);
+    const partial = (await service.status(user))!;
+    landing.stage.mockClear();
+    await service.tick();
+    expect(landing.stage).toHaveBeenCalledTimes(1);
+    await service.tick();
+    expect(startExecution).toHaveBeenLastCalledWith(
+      `${envPrefix}-prcl_proc-sf`, { env_prefix: envPrefix, skip_extract: false, extract_sources: { monthly_recharge: true } },
+      `portal-prepaid-${partial.id}-import`,
+    );
+    await poll();
+    const partialLayout = await service.review(user, partial.id, "eg", "layout", "mt", 0);
+    expect(partialLayout).toMatchObject({ rows: expect.arrayContaining([
+      expect.objectContaining({ layout_number: 12, editable_fields: ["hy_mt_gross"], hy_mt_gross: null }),
+    ]) });
+    expect(partialLayout).toHaveProperty("layoutVersion");
+    await expect(service.saveLayout(user, partial.id, "eg", (partialLayout as { layoutVersion: string }).layoutVersion, [
+      { layoutNumber: 12, field: "hy_mt_gross", value: "12.34" },
+    ])).resolves.toMatchObject({ rows: expect.arrayContaining([
+      expect.objectContaining({ layout_number: 12, hy_mt_gross: "12.34" }),
+    ]) });
+    await expect(service.action(user, "eg")).rejects.toMatchObject({ code: "PREPAID_BATCH_FREEZE_NOT_READY" });
+    await expect(service.review(user, partial.id, "eg", "allocation", "bb", 0)).resolves.toMatchObject({ rows: [], unavailableReason: expect.stringContaining("KE24") });
   });
 });
