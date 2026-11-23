@@ -145,6 +145,18 @@ export function createPrepaidRouter(
       input.layoutVersion, input.changes,
     ));
   });
+  router.get("/aws-batch/:batchId/reports/amaxee.xlsx", async (req, res) => {
+    if (!batch)
+      throw new AppError(404, "PREPAID_BATCH_DISABLED", "Batch reports are unavailable.");
+    const report = await batch.downloadAmaxee(
+      req.auth!.userId,
+      z.string().uuid().parse(req.params.batchId),
+    );
+    res.set("Cache-Control", "private, no-store")
+      .attachment(report.filename)
+      .type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+      .send(report.bytes);
+  });
   router.get("/aws-batch/:batchId/journal/:region", async (req, res) => {
     if (!batch)
       throw new AppError(404, "PREPAID_BATCH_DISABLED", "Batch reports are unavailable.");
