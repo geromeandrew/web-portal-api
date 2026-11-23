@@ -392,8 +392,8 @@ export class PrepaidFullBatch {
   }
   async downloadAmaxee(user: string, batchId: string) {
     const rows = await this.repo.transaction(async (db) => {
-      const batch = await this.owned(user, db, true, batchId);
-      if (!batch)
+      const batch = await this.owned(user, db, true);
+      if (!batch || batch.id !== batchId)
         throw new AppError(404, "PREPAID_BATCH_NOT_FOUND", "The Prepaid batch was not found.");
       if (!this.snapshot(batch)?.amaxeeReportAvailable)
         throw new AppError(409, "PREPAID_AMAXEE_NOT_READY", "The AMAXEE report requires a completed batch with a billing report.");
