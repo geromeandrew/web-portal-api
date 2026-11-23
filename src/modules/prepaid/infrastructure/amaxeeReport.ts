@@ -43,7 +43,7 @@ export async function readAmaxeeRows(
       AND upper(c."Subscriber Type") = upper(a."Subscriber Type")
       AND upper(c.code) = a.code
     ORDER BY c.cycle_code::integer NULLS FIRST, c."Customer Type" NULLS FIRST, c.code NULLS FIRST
-    LIMIT 62500`,
+    LIMIT 62501`,
   );
   return rows;
 }
