@@ -196,6 +196,9 @@ describe.skipIf(!endpoint).each([
     await workspaceApi.upload(user, "monthly_recharge", source, uploadId);
     expect(await service.status(user)).toEqual(batch);
     expect(await service.status(randomUUID())).toBeNull();
+    await expect(service.downloadAmaxee(user, batch!.id)).rejects.toMatchObject({
+      code: "PREPAID_AMAXEE_NOT_READY",
+    });
     await service.tick();
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(landing.stage).not.toHaveBeenCalled();
@@ -228,7 +231,12 @@ describe.skipIf(!endpoint).each([
       await service.tick();
     };
     await poll();
-    expect(await service.status(user)).toMatchObject({status: "review", canReview: true});
+    expect(await service.status(user)).toMatchObject({
+      status: "review", canReview: true, amaxeeReportAvailable: true,
+    });
+    await expect(service.downloadAmaxee(randomUUID(), batch!.id)).rejects.toMatchObject({
+      code: "PREPAID_BATCH_NOT_FOUND",
+    });
     await expect(service.review(user, batch!.id, "eg", "layout", "mt", 0)).resolves.toMatchObject({
       rows: [{ label: "Variance", total_gross: "0.00" }],
     });
@@ -287,6 +295,9 @@ describe.skipIf(!endpoint).each([
     await service.tick();
     expect(landing.release).toHaveBeenCalledWith(batch!.id, true);
     expect((await service.status(user))?.status).toBe("closed");
+    await expect(service.downloadAmaxee(user, batch!.id)).rejects.toMatchObject({
+      code: "PREPAID_AMAXEE_NOT_READY",
+    });
     await expect(workspaceApi.prepare(user)).rejects.toMatchObject({ code: "PREPAID_BATCH_INPUT_REQUIRED" });
     expect((await service.status(user))?.status).toBe("closed");
 

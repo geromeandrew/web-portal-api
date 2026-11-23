@@ -931,4 +931,14 @@ for (const suffix of ["reference-membership", "reference-membership.csv"]) {
     description: "CSV exceeds the 50,000-row synchronous limit.",
   };
 }
+add("/aws-batch/{batchId}/reports/amaxee.xlsx", "get", "Download the current batch AMAXEE workbook");
+paths["/api/workflows/prepaid/aws-batch/{batchId}/reports/amaxee.xlsx"]!.get!.responses["200"] = {
+  description: "AMAXEE Excel workbook for the signed-in user's imported batch.",
+  content: {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+      schema: { type: "string", format: "binary" },
+    },
+  },
+};
+
 export const prepaidOpenApiPaths = paths;

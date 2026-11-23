@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import ExcelJS from "exceljs";
 import { reportWorkbook } from "../infrastructure/reportWorkbook.js";
+import { amaxeeHeaders, readAmaxeeRows } from "../infrastructure/amaxeeReport.js";
 import { isDeepStrictEqual } from "node:util";
 import type { PoolClient } from "pg";
 import type { PrepaidImportStage, StepFunctionsRunner } from "../../../stepFunctionsRunner.js";
@@ -56,6 +57,8 @@ type Execution = {
   journal?: Journal;
   importStage?: PrepaidImportStage;
 };
+const isBillingFile = (file: File) =>
+  file.workflow === "adjustments_308" || file.workflow === "charges_318";
 type Batch = {
   id: string;
   session_id: string;
@@ -142,6 +145,9 @@ export class PrepaidFullBatch {
     const { id, phase, status, executions, layouts, error } = batch;
     return {
       canClose: this.canClose(batch),
+      amaxeeReportAvailable:
+        status === "review" && !["cleanup", "release"].includes(phase) &&
+        executions.import?.status === "SUCCEEDED" && batch.files.some(isBillingFile),
       canReview: batch.status !== "closed" && !["cleanup", "release"].includes(phase)
         && executions.import?.status === "SUCCEEDED" && !!layouts.eg?.length && !!layouts.sg?.length,
       id,
@@ -383,6 +389,27 @@ export class PrepaidFullBatch {
         "The archived journal checksum differs from the verified export.",
       );
     return { filename: journal.filename, content: bytes.toString("base64") };
+  }
+  async downloadAmaxee(user: string, batchId: string) {
+    const rows = await this.repo.transaction(async (db) => {
+      const batch = await this.owned(user, db, true, batchId);
+      if (!batch)
+        throw new AppError(404, "PREPAID_BATCH_NOT_FOUND", "The Prepaid batch was not found.");
+      if (!this.snapshot(batch)?.amaxeeReportAvailable)
+        throw new AppError(409, "PREPAID_AMAXEE_NOT_READY", "The AMAXEE report requires a completed batch with a billing report.");
+      await this.landing.assertOwner(batchId);
+      const rows = await readAmaxeeRows(
+        db,
+        batch.executions.import!.startedAt,
+        batch.files.filter(isBillingFile).map((file) => file.name.toLowerCase()),
+      );
+      return { rows, startedAt: batch.executions.import!.startedAt };
+    });
+    const date = new Date(rows.startedAt).toISOString().slice(0, 10);
+    return {
+      filename: `AMAXEE_${date}.xlsx`,
+      bytes: await reportWorkbook([{ name: "AMAXEE", headers: amaxeeHeaders, rows: rows.rows }]),
+    };
   }
   async downloadWorkbook(user: string, batchId: string, region: Region) {
     const journal = await this.download(user, region, batchId);
