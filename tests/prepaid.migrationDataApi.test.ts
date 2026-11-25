@@ -50,6 +50,12 @@ describe("Prepaid Data API migrations", () => {
     });
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     await run();
+    expect(migrate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ query: expect.any(Function) }),
+      "test_schema",
+      undefined,
+      true,
+    );
     const statements = send.mock.calls
       .slice(1, -1)
       .map(([command]) => command.input);

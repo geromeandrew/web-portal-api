@@ -48,7 +48,8 @@ function dataApiConnection(
 }
 
 const config = loadConfig();
-const includeBillingScope = process.argv.includes("--billing-scope");
+// Both deployment transports apply the complete Prepaid migration set.
+const includeBillingScope = true;
 const resourceArn = process.env.PREPAID_MIGRATION_DATA_API_RESOURCE_ARN;
 const secretArn = process.env.PREPAID_MIGRATION_DATA_API_SECRET_ARN;
 // Data API is explicit opt-in, never an automatic fallback to another database.

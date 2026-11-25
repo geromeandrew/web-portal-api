@@ -63,14 +63,7 @@ export async function startServer(): Promise<Server> {
       process.removeListener("SIGINT", onSignal);
     });
     logger.info("api.listening", { port: config.PORT });
-    migrationInFlight = runMigrations(
-      pool,
-      config,
-      logger,
-      cancellation.signal,
-      undefined,
-      true,
-    );
+    migrationInFlight = runMigrations(pool, config, logger, cancellation.signal);
     await migrationInFlight;
     cancellation.signal.throwIfAborted();
     const result = await pool.query({
