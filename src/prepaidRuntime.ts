@@ -23,8 +23,9 @@ import { PrepaidWorkspaceService } from "./modules/prepaid/application/workspace
 import { PrepaidRunService } from "./modules/prepaid/application/runService.js";
 import { builtinPrepaidConfiguration } from "./modules/prepaid/domain/builtinConfiguration.js";
 import { sourceMachineName } from "./modules/prepaid/domain/sourceResources.js";
+import { localPrepaidBatchPrefix } from "./app/prepaidStartup.js";
 
-export async function runPrepaidWorker(signal: AbortSignal): Promise<void> {
+export async function runPrepaidWorker(signal: AbortSignal, batchEnabled?: boolean): Promise<void> {
   if (signal.aborted) return;
   const config = loadConfig(),
     logger = createLogger(),
@@ -41,7 +42,9 @@ export async function runPrepaidWorker(signal: AbortSignal): Promise<void> {
     worker.runner,
     logger,
   );
-  const envPrefix = prepaidFullBatchPrefix(config);
+  const envPrefix = batchEnabled === undefined
+    ? await localPrepaidBatchPrefix(pool, config)
+    : batchEnabled ? prepaidFullBatchPrefix(config) : undefined;
   const fullBatch = envPrefix
     ? new PrepaidFullBatch(
         worker.repo,

@@ -63,9 +63,42 @@ export function acceptedSourceNames(code: string) {
   return [expectedName(code), ...(legacyFileAliases[code] ?? [])];
 }
 export function matchesSourceName(code: string, name: string) {
-  return acceptedSourceNames(code).some(
-    (accepted) => accepted.toLowerCase() === name.toLowerCase(),
-  );
+  return prepaidSourceCodeFromName(name) === code;
+}
+function prepaidSourceCodeFromName(name: string) {
+  if (/[\\/\u0000-\u001f]/.test(name)) return undefined;
+  const extension = name.match(/\.(xlsx|csv)$/i);
+  if (!extension) return undefined;
+  const stem = name.slice(0, extension.index).toLowerCase();
+  const report = stem.match(/^(308|318)(?=[. _-])/);
+  if (report) {
+    const cycle = stem.match(/_(?:bc)?(0[1-9]|[12]\d|3[01])$/);
+    if (
+      extension[1].toLowerCase() !== "xlsx" ||
+      !cycle ||
+      /_[bi]$/.test(stem.slice(0, cycle.index))
+    ) return undefined;
+    return `${report[1]}_${cycle[1]}`;
+  }
+
+  const words = stem.split(/[^a-z0-9]+/).filter(Boolean);
+  const title = words.join(" ");
+  if (extension[1].toLowerCase() === "csv")
+    return /\bmonthly recharge\b/.test(title) ? "monthly_recharge" : undefined;
+
+  const eg = words.includes("eg");
+  const sg = words.includes("sg");
+  const region = eg === sg ? undefined : eg ? "eg" : "sg";
+  const reportTypes = [
+    [/\bke24\b/, "ke24"],
+    [/\bcall ?card\b/, "callcard"],
+    [/\bload ?up\b/, "load_up"],
+    [/\bload ?api\b/, "load_api"],
+  ] as const;
+  const matches = reportTypes.filter(([pattern]) => pattern.test(title));
+  if (matches.length !== 1) return undefined;
+  const type = matches[0][1];
+  return type === "ke24" ? type : region ? `${type}_${region}` : undefined;
 }
 export function sourceFileRequirement(code: string) {
   return {
@@ -247,6 +280,10 @@ export const prepaidBillCycleSchema = z.enum([
 ]);
 export type PrepaidBillCycle = z.infer<typeof prepaidBillCycleSchema>;
 export const prepaidBillCycles = prepaidBillCycleSchema.options;
+export const prepaidBatchBillCycles = Array.from(
+  { length: 31 },
+  (_, index) => String(index + 1).padStart(2, "0"),
+);
 const legacyPrepaidBillingCycles = new Set<string>(prepaidBillCycles);
 export function unsupportedLegacyPrepaidCycles(config: BillingConfiguration) {
   return config.expectedCycles.filter((cycle) => !legacyPrepaidBillingCycles.has(cycle));

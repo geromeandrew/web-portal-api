@@ -11,7 +11,7 @@ import {
   requiredBillingSources,
   matchesSourceName,
   sourceFileRequirement,
-  prepaidBillCycles,
+  prepaidBatchBillCycles,
 } from "../domain/contracts.js";
 import type { PrepaidFullBatch } from "./fullBatch.js";
 import { PrepaidRunService } from "./runService.js";
@@ -81,7 +81,7 @@ export class PrepaidWorkspaceService {
   }
   private required(configuration: unknown) {
     if (this.fullBatch)
-      return [...sourceCodes, ...prepaidBillCycles.flatMap((cycle) => [`308_${cycle}`, `318_${cycle}`])]
+      return [...sourceCodes, ...prepaidBatchBillCycles.flatMap((cycle) => [`308_${cycle}`, `318_${cycle}`])]
         .map(sourceFileRequirement);
     if (isUploadCollection(configuration))
       return sourceCodes.map(sourceFileRequirement);
@@ -316,7 +316,7 @@ export class PrepaidWorkspaceService {
       throw new AppError(
         400,
         "PREPAID_FILE_NAME_INVALID",
-        "Use the exact filename listed in File Guidelines.",
+        "Use a filename that identifies the report and follows the File Guidelines.",
       );
     if (
       /\.xlsx$/i.test(file.originalname) &&
@@ -382,7 +382,7 @@ export class PrepaidWorkspaceService {
       throw new AppError(
         400,
         "PREPAID_FILE_NAME_INVALID",
-        "Use the exact filename listed in File Guidelines.",
+        "Use a filename that identifies the report and follows the File Guidelines.",
       );
     if (
       /\.xlsx$/i.test(file.originalname) &&

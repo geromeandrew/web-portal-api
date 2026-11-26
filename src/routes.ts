@@ -10,6 +10,7 @@ import {
   type StepFunctionsRunner,
 } from "./stepFunctionsRunner.js";
 import { createApplication } from "./app/createApp.js";
+import type { PrepaidStartupStatus } from "./app/prepaidStartup.js";
 import { createLogger } from "./platform/logger.js";
 import { PostgresRateLimiter } from "./app/security.js";
 import { createAuthMiddleware } from "./auth.js";
@@ -26,11 +27,15 @@ export function createApp(
   ),
   stepFunctionsRunner: StepFunctionsRunner = createStepFunctionsRunner(config),
   startupReady?: () => boolean,
+  prepaidStartupStatus?: () => PrepaidStartupStatus | undefined,
+  prepaidBatchEnabled?: () => boolean,
 ): Express {
   return createApplication({
     pool,
     config,
     startupReady,
+    prepaidStartupStatus,
+    prepaidBatchEnabled,
     processingPipelineStorage,
     stepFunctionsRunner,
     logger: createLogger(),

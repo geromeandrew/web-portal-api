@@ -188,12 +188,14 @@ function registerFeatureRoutes(
 ) {
   app.use("/api/auth", createAuthRouter(dependencies));
   app.use("/api/admin", createAdminRouter(dependencies));
-  app.use(
-    "/api/workflows/prepaid",
-    createPrepaidRouter(
-      dependencies,
-      createPrepaidUpload(dependencies.config.PREPAID_MAX_UPLOAD_BYTES),
-    ),
+  const prepaidUpload = createPrepaidUpload(dependencies.config.PREPAID_MAX_UPLOAD_BYTES);
+  const prepaidRouter = createPrepaidRouter(dependencies, prepaidUpload);
+  const localPrepaidRouter = dependencies.prepaidBatchEnabled
+    ? createPrepaidRouter({ ...dependencies, config: { ...dependencies.config, SFN_PREFIX: undefined } }, prepaidUpload)
+    : prepaidRouter;
+  app.use("/api/workflows/prepaid", (req, res, next) =>
+    (dependencies.prepaidBatchEnabled && !dependencies.prepaidBatchEnabled()
+      ? localPrepaidRouter : prepaidRouter)(req, res, next),
   );
   app.use(
     "/api/processing-pipelines",

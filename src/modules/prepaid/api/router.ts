@@ -55,9 +55,29 @@ export function createPrepaidRouter(
       next(error);
     }
   });
-  router.get("/readiness", async (_req, res) =>
-    res.json(await service.readiness()),
-  );
+  router.get("/readiness", async (_req, res) => {
+    const startup = dependencies.prepaidStartupStatus?.();
+    const readiness = await service.readiness();
+    const checks = [...readiness.checks];
+    if (startup?.baseIssue)
+      checks.unshift({ code: "startupMigrations", status: "missing", message: startup.baseIssue });
+    if (batch && startup?.billingIssue)
+      checks.unshift({ code: "billingMigrations", status: "missing", message: startup.billingIssue });
+    res.json({
+      ...readiness,
+      readyForUploads: readiness.readyForUploads && !startup?.baseIssue,
+      readyForPreparation: readiness.readyForPreparation && !startup?.baseIssue && !(batch && startup?.billingIssue),
+      checks,
+    });
+  });
+  router.use((_req, _res, next) => {
+    const issue = dependencies.prepaidStartupStatus?.()?.baseIssue;
+    next(issue ? new AppError(503, "PREPAID_MIGRATIONS_PENDING", issue) : undefined);
+  });
+  router.post("/workspace/prepare", (_req, _res, next) => {
+    const issue = batch && dependencies.prepaidStartupStatus?.()?.billingIssue;
+    next(issue ? new AppError(503, "PREPAID_BILLING_MIGRATIONS_PENDING", issue) : undefined);
+  });
   router.use(async (_req, _res, next) => {
     try {
       const ready = await pool.query(

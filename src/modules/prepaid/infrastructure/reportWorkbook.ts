@@ -11,6 +11,16 @@ export interface ReportSheet {
 const maximumCells = 250_000;
 const maximumTextBytes = 32 * 1024 * 1024;
 const epoch = new Date("1980-01-01T00:00:00Z");
+const monetaryHeaders: Record<string, ReadonlySet<string>> = {
+  Layout: new Set([
+    "gp_mt_gross", "hy_mt_gross", "gp_bb_gross", "total_gross",
+    "gp_mt_net", "hy_mt_net", "gp_bb_net", "total_net",
+  ]),
+  Allocation: new Set(["amount", "denominator", "gross", "amount2"]),
+  Reconciliation: new Set(["gross", "amount", "tax_amount", "total_gross", "difference"]),
+  JV: new Set(["Amount in local currency"]),
+  AMAXEE: new Set(["Amount"]),
+};
 const tooLarge = () =>
   new AppError(
     413,
@@ -18,7 +28,7 @@ const tooLarge = () =>
     "This workbook exceeds synchronous export limits; no rows or cells were truncated.",
   );
 
-/** Actual OOXML, not renamed CSV. Financial strings/leading zeros stay exact. */
+/** Actual OOXML. Monetary strings remain exact and use grouped display. */
 export async function reportWorkbook(sheets: ReportSheet[]): Promise<Buffer> {
   if (
     !sheets.length ||
@@ -66,7 +76,14 @@ export async function reportWorkbook(sheets: ReportSheet[]): Promise<Buffer> {
     sheet.addRow(input.headers.map(value));
     sheet.getRow(1).font = { bold: true };
     for (const row of input.rows)
-      sheet.addRow(input.headers.map((header) => value(row[header])));
+      sheet.addRow(input.headers.map((header) => {
+        const text = value(row[header]);
+        if (text === null || !monetaryHeaders[input.name]?.has(header) ||
+            !/^-?\d+(?:\.\d+)?$/.test(text)) return text;
+        const [integer, fraction] = text.split(".");
+        return integer.replace(/\B(?=(\d{3})+(?!\d))/g, ",") +
+          (fraction === undefined ? "" : `.${fraction}`);
+      }));
   }
   const bytes = await workbook.xlsx.writeBuffer();
   // Pin inner ZIP timestamps too, so re-downloading a frozen report is stable.

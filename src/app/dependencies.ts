@@ -6,6 +6,7 @@ import type { Logger } from "../platform/logger.js";
 import type { PostgresRateLimiter } from "./security.js";
 import type { RequestHandler } from "express";
 import type { PrepaidStorage } from "../modules/prepaid/infrastructure/prepaidStorage.js";
+import type { PrepaidStartupStatus } from "./prepaidStartup.js";
 
 /**
  * The application receives its outside-world dependencies here.
@@ -15,6 +16,8 @@ import type { PrepaidStorage } from "../modules/prepaid/infrastructure/prepaidSt
  */
 export type AppDependencies = {
   startupReady?: () => boolean;
+  prepaidStartupStatus?: () => PrepaidStartupStatus | undefined;
+  prepaidBatchEnabled?: () => boolean;
   pool: Pool;
   config: Config;
   processingPipelineStorage: ProcessingPipelineStorage;

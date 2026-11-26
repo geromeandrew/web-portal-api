@@ -9,6 +9,7 @@ import type { PrepaidImportStage, StepFunctionsRunner } from "../../../stepFunct
 import type { Config } from "../../../config.js";
 import { AppError } from "../../../errors.js";
 import {
+  prepaidBillCycles,
   regionSchema,
   type batchLayoutEditSchema,
 } from "../domain/contracts.js";
@@ -59,6 +60,7 @@ type Execution = {
 };
 const isBillingFile = (file: File) =>
   file.workflow === "adjustments_308" || file.workflow === "charges_318";
+const legacyBillingCycles = new Set<string>(prepaidBillCycles);
 type Batch = {
   id: string;
   session_id: string;
@@ -517,11 +519,16 @@ export class PrepaidFullBatch {
       [session.id, JSON.stringify(files)],
     );
     if (prior.rowCount) return false;
-    const readiness = await db.query<{ installed: boolean }>(
-      "SELECT to_regprocedure('dswtdir1_prepaid_dbo.prepaid_import_source_enabled(text)') IS NOT NULL AS installed",
+    const readiness = await db.query<{ installed: boolean; extendedCycles: boolean }>(
+      `SELECT to_regprocedure('dswtdir1_prepaid_dbo.prepaid_import_source_enabled(text)') IS NOT NULL AS installed,
+              to_regprocedure('dswtdir1_prepaid_dbo.prepaid_billing_cycle_number(text,integer)') IS NOT NULL AS "extendedCycles"`,
     );
     if (!readiness.rows[0]?.installed)
       throw new AppError(503, "PREPAID_BATCH_IMPORT_NOT_DEPLOYED", "Partial report processing is not available yet.");
+    if (!readiness.rows[0].extendedCycles && files.some((file) =>
+      isBillingFile(file) && !legacyBillingCycles.has(file.code.slice(4)),
+    ))
+      throw new AppError(503, "PREPAID_BATCH_IMPORT_NOT_DEPLOYED", "Processing for these billing cycles is not available yet.");
     const machine = await this.runner.describeStateMachineDefinition(`${this.envPrefix}-${machines.import}`);
     const states = JSON.parse(machine.definition).States;
     const extract = JSON.stringify(states?.Extract_All ?? {});
@@ -598,12 +605,12 @@ export class PrepaidFullBatch {
           batch.executions.import?.status !== "SUCCEEDED" ||
           batch.executions[action] ||
           !variance ||
-          !/^[+-]?0+(\.0+)?$/.test(variance.trim())
+          !/^[+-]?\d+(\.\d+)?$/.test(variance.trim())
         )
           throw new AppError(
             409,
             "PREPAID_BATCH_FREEZE_NOT_READY",
-            "This side needs a successful import, zero variance, and no prior freeze attempt.",
+            "This side needs a successful import, a calculated variance, and no prior freeze attempt.",
           );
       }
       if (action !== "close") {

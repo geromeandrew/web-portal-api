@@ -23,7 +23,7 @@ export async function readAmaxeeRows(
              sum(l.amount::double precision)::numeric(33, 2) AS amount
       FROM sdbtdir1_prepaid_dbo.billed_adjustments_header_cycle_ssis h
       JOIN sdbtdir1_prepaid_dbo.billed_adjustments_lineitem_cycle_ssis l USING (cyclenumber)
-      WHERE h.cyclenumber BETWEEN 1 AND 10 AND upper(l."Adjustment Code") = 'AMAXCEP'
+      WHERE h.cyclenumber > 0 AND upper(l."Adjustment Code") = 'AMAXCEP'
       GROUP BY h.cyclenumber, h.cycle_code, l."Customer Type", l."Subscriber Type", upper(l."Adjustment Code")
     ), charges AS (
       SELECT h.cycle_code, l."Customer Type", l."Subscriber Type",
@@ -31,18 +31,21 @@ export async function readAmaxeeRows(
              sum(l."Total Amount"::double precision)::numeric(33, 2) AS amount
       FROM sdbtdir1_prepaid_dbo.billed_charges_header_cycle_ssis h
       JOIN sdbtdir1_prepaid_dbo.billed_charges_lineitem_cycle_ssis l USING (cyclenumber)
-      WHERE h.cyclenumber BETWEEN 1 AND 10 AND upper(l."Charge Code/Tax Code") = 'AMAXCEP'
+      WHERE h.cyclenumber > 0 AND upper(l."Charge Code/Tax Code") = 'AMAXCEP'
       GROUP BY h.cyclenumber, h.cycle_code, l."Customer Type", l."Subscriber Type", l."Charge Code/Tax Code"
     )
-    SELECT c.cycle_code AS "Cycle_Code", c."Customer Type",
-           c.code AS "Charge Code/Tax Code",
+    SELECT coalesce(c.cycle_code, a.cycle_code) AS "Cycle_Code",
+           coalesce(c."Customer Type", a."Customer Type") AS "Customer Type",
+           coalesce(c.code, a.code) AS "Charge Code/Tax Code",
            (coalesce(c.amount, 0) + coalesce(a.amount, 0))::text AS "Amount"
     FROM charges c FULL OUTER JOIN adjustments a
       ON c.cycle_code = a.cycle_code
       AND upper(c."Customer Type") = upper(a."Customer Type")
       AND upper(c."Subscriber Type") = upper(a."Subscriber Type")
       AND upper(c.code) = a.code
-    ORDER BY c.cycle_code::integer NULLS FIRST, c."Customer Type" NULLS FIRST, c.code NULLS FIRST
+    ORDER BY coalesce(c.cycle_code, a.cycle_code)::integer NULLS FIRST,
+             coalesce(c."Customer Type", a."Customer Type") NULLS FIRST,
+             coalesce(c.code, a.code) NULLS FIRST
     LIMIT 62500`,
   );
   return rows;

@@ -6,10 +6,19 @@ import { getDatabaseErrorDiagnostics } from "../databaseErrors.js";
 import { createLogger } from "../platform/logger.js";
 import { createApp } from "../routes.js";
 import { runMigrations } from "../migrationRunner.js";
+import { localPrepaidBatchPrefix, startPrepaidStartup } from "./prepaidStartup.js";
 
 const shutdowns = new WeakMap<Server, () => Promise<void>>();
+const prepaidStartup = new WeakMap<Server, Promise<boolean>>();
+const prepaidBatchMode = new WeakMap<Server, boolean>();
 export async function stopServer(server: Server): Promise<void> {
   await shutdowns.get(server)?.();
+}
+export function waitForPrepaidStartup(server: Server) {
+  return prepaidStartup.get(server) ?? Promise.resolve(true);
+}
+export function prepaidBatchEnabled(server: Server) {
+  return prepaidBatchMode.get(server);
 }
 
 /** Expose probes while migrating, but never serve business traffic on a partial schema. */
@@ -22,6 +31,7 @@ export async function startServer(): Promise<Server> {
   const cancellation = new AbortController();
   let cleanup: Promise<void> | undefined;
   let migrationInFlight: Promise<void> | undefined;
+  let prepaid: ReturnType<typeof startPrepaidStartup> | undefined;
   const close = () => {
     ready = false;
     cancellation.abort();
@@ -32,12 +42,17 @@ export async function startServer(): Promise<Server> {
           server!.closeIdleConnections?.();
         });
       if (migrationInFlight) await migrationInFlight.catch(() => {});
+      if (prepaid) await prepaid.completion.catch(() => {});
       try {
         if (pool) await pool.end();
       } finally {
         process.removeListener("SIGTERM", onSignal);
         process.removeListener("SIGINT", onSignal);
-        if (server) shutdowns.delete(server);
+        if (server) {
+          shutdowns.delete(server);
+          prepaidStartup.delete(server);
+          prepaidBatchMode.delete(server);
+        }
       }
     })());
   };
@@ -49,7 +64,16 @@ export async function startServer(): Promise<Server> {
   try {
     config = loadConfig();
     pool = createPool(config, true, logger);
-    const app = createApp(pool, config, undefined, undefined, () => ready);
+    let batchEnabled = true;
+    const app = createApp(
+      pool,
+      config,
+      undefined,
+      undefined,
+      () => ready,
+      () => prepaid?.status,
+      () => batchEnabled,
+    );
     server = await new Promise<Server>((resolve, reject) => {
       const listener = app.listen(config!.PORT, "0.0.0.0", () =>
         resolve(listener),
@@ -63,9 +87,16 @@ export async function startServer(): Promise<Server> {
       process.removeListener("SIGINT", onSignal);
     });
     logger.info("api.listening", { port: config.PORT });
-    migrationInFlight = runMigrations(pool, config, logger, cancellation.signal);
+    migrationInFlight = runMigrations(
+      pool,
+      config,
+      logger,
+      cancellation.signal,
+    );
     await migrationInFlight;
     cancellation.signal.throwIfAborted();
+    batchEnabled = !!(await localPrepaidBatchPrefix(pool, config));
+    prepaidBatchMode.set(server, batchEnabled);
     const result = await pool.query({
       text: `SELECT
         (SELECT count(*) = 3 FROM pg_attribute WHERE attrelid=to_regclass('security_audit_events') AND attname IN ('action_outcome','access_port','environment') AND NOT attisdropped)
@@ -75,6 +106,8 @@ export async function startServer(): Promise<Server> {
     cancellation.signal.throwIfAborted();
     if (result.rows[0]?.ready !== true)
       throw new Error("Required audit schema or INSERT permission is missing.");
+    prepaid = startPrepaidStartup(pool, config, logger, cancellation.signal);
+    prepaidStartup.set(server, prepaid.baseReady);
     ready = true;
     logger.info("api.ready", {
       port: config.PORT,

@@ -16,6 +16,7 @@ import { prepaidReferenceLookupMigrationSql } from "./referenceLookupMigration.j
 import { prepaidReferencePolicyMigrationSql } from "./referencePolicyMigration.js";
 import { prepaidReferenceCatalogMigrationSql } from "./referenceCatalogMigration.js";
 import { prepaidValidationReviewMigrationSql } from "./validationReviewMigration.js";
+import { prepaidVarianceReviewMigrationSql } from "./varianceReviewMigration.js";
 import {
   prepaidRawSchema,
   prepaidRawSourceMigrationSql,
@@ -58,8 +59,25 @@ export function prepaidMigrations(rawSchema = prepaidRawSchema) {
       ADD CONSTRAINT prepaid_layout_tax_rate_nonzero_multiplier CHECK (tax_rate <> -1);
     `,
     ],
+    ["019_prepaid_variance_review", prepaidVarianceReviewMigrationSql],
   ] as const;
 }
+
+const billingMigrations = [
+  ["017_prepaid_billing_batch_scope", billingScopeSql],
+  ["018_prepaid_billing_cycle_range", billingCycleRangeSql],
+] as const;
+
+export const prepaidBillingMigrationIds = billingMigrations.map(([id]) => id);
+
+const convertedBillingSchemaInstalled = `
+    to_regclass('dswtdir1_prepaid_dbo.dcprepaidsystems') IS NOT NULL
+    AND to_regclass('dswtdir1_prepaid_dbo.dcprepaidsystems_sg') IS NOT NULL
+    AND to_regprocedure('dswtdir1_prepaid_dbo.sp_prepaid1_eglayout_import_pgx()') IS NOT NULL
+    AND to_regprocedure('dswtdir1_prepaid_dbo.sp_prepaid1_sglayout_import_pgx()') IS NOT NULL
+`;
+export const prepaidBillingPrerequisitesSql =
+  `SELECT ${convertedBillingSchemaInstalled} AS ready`;
 
 /** Caller owns BEGIN/COMMIT/ROLLBACK. Never runs general Portal migrations. */
 export async function migratePrepaid(
@@ -96,8 +114,8 @@ export async function migratePrepaid(
   const entries = includeBillingScope
     ? [
         ...migrations,
-        ["017_prepaid_billing_batch_scope", billingScopeSql] as const,
-      ]
+        ...billingMigrations,
+      ].sort(([left], [right]) => left.localeCompare(right))
     : migrations;
   for (const [id, sql] of entries) {
     const found = await connection.query(
@@ -112,6 +130,19 @@ export async function migratePrepaid(
     );
     applied.push(id);
   }
+  await validatePrepaidSchema(connection, schema, rawSchema);
+  return applied;
+}
+
+export async function validatePrepaidSchema(
+  connection: MigrationConnection,
+  schema: string,
+  rawSchema = prepaidRawSchema,
+) {
+  if (!/^[a-z_][a-z0-9_]*$/.test(schema))
+    throw new Error("Invalid Prepaid database schema");
+  const s = `"${schema}"`;
+  const migrations = prepaidMigrations(rawSchema);
   // A recorded migration must not conceal a subsequently removed table.
   for (const [id, sql] of migrations) {
     for (const match of sql(schema).matchAll(
@@ -159,25 +190,16 @@ export async function migratePrepaid(
     throw Error(
       "Missing/incompatible workflow constraint from migration 008. Restore/review schema drift; existing data is preserved.",
     );
-  return applied;
 }
 function billingScopeSql(schema: string) {
   return `
-    LOCK TABLE "${schema}".prepaid_full_batches IN SHARE ROW EXCLUSIVE MODE;
+    ${lockBillingMigration(schema)}
     DO $migration$
     BEGIN
-      IF to_regclass('dswtdir1_prepaid_dbo.dcprepaidsystems') IS NULL
-        OR to_regclass('dswtdir1_prepaid_dbo.dcprepaidsystems_sg') IS NULL
-        OR to_regprocedure('dswtdir1_prepaid_dbo.sp_prepaid1_eglayout_import_pgx()') IS NULL
-        OR to_regprocedure('dswtdir1_prepaid_dbo.sp_prepaid1_sglayout_import_pgx()') IS NULL
+      IF NOT (${convertedBillingSchemaInstalled})
       THEN
-        RAISE EXCEPTION 'Install the converted Prepaid layouts and import procedures before applying billing scope';
-      END IF;
-      IF EXISTS (
-        SELECT FROM "${schema}".prepaid_full_batches
-        WHERE phase = 'import' AND status IN ('queued', 'running')
-      ) THEN
-        RAISE EXCEPTION 'Wait for the active Prepaid import before applying billing scope';
+        RAISE EXCEPTION 'Install the converted Prepaid layouts and import procedures before applying billing scope'
+          USING ERRCODE = '55000';
       END IF;
     END
     $migration$;
@@ -191,5 +213,35 @@ function billingScopeSql(schema: string) {
       "web_portal.prepaid_full_batches",
       `"${schema}".prepaid_full_batches`,
     )}
+  `;
+}
+
+function billingCycleRangeSql(schema: string) {
+  return `
+    ${lockBillingMigration(schema)}
+    ${readFileSync(
+      new URL(
+        "../../../../infrastructure/prepaid/018_billing_cycle_range.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    )}
+  `;
+}
+
+function lockBillingMigration(schema: string) {
+  return `
+    LOCK TABLE "${schema}".prepaid_full_batches IN SHARE ROW EXCLUSIVE MODE;
+    DO $migration$
+    BEGIN
+      IF EXISTS (
+        SELECT FROM "${schema}".prepaid_full_batches
+        WHERE phase = 'import' AND status IN ('queued', 'running')
+      ) THEN
+        RAISE EXCEPTION 'Wait for the active Prepaid import before applying billing changes'
+          USING ERRCODE = '55006';
+      END IF;
+    END
+    $migration$;
   `;
 }

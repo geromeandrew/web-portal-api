@@ -3,6 +3,7 @@ import {
   sourceCodes,
   sourceFileRequirement,
   expectedName,
+  prepaidBatchBillCycles,
 } from "./contracts.js";
 
 // A collection marker, deliberately NOT a processing configuration. It contains
@@ -20,15 +21,11 @@ const collectionSchema = z
 export const isUploadCollection = (value: unknown) =>
   collectionSchema.safeParse(value).success;
 
-/** Names accepted for storage, NOT a declaration of required cycle coverage.
- * Existing sourceCodeSchema permits two-digit codes; retain that same boundary.
- */
+/** Names accepted for storage before required cycle coverage is configured. */
 export function uploadCollectionSources() {
   return [
     ...sourceCodes,
-    ...Array.from({ length: 100 }, (_, n) =>
-      String(n).padStart(2, "0"),
-    ).flatMap((cycle) => [`308_${cycle}`, `318_${cycle}`]),
+    ...prepaidBatchBillCycles.flatMap((cycle) => [`308_${cycle}`, `318_${cycle}`]),
   ].map(sourceFileRequirement);
 }
 export function uploadCollectionGuidelines() {

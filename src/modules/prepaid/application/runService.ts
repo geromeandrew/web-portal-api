@@ -212,7 +212,7 @@ export class PrepaidRunService {
       );
     const name = expectedName(code);
     if (!matchesSourceName(code, file.originalname))
-      throw new AppError(400, "PREPAID_FILE_NAME_INVALID", `Expected ${name}.`);
+      throw new AppError(400, "PREPAID_FILE_NAME_INVALID", `Use a filename that identifies the same report as ${name}.`);
     if (!file.buffer.length)
       throw new AppError(
         400,
