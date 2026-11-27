@@ -28,6 +28,22 @@ const retryable = new Set([
   "57P01",
 ]);
 
+function migrationIssue(
+  code: string | undefined,
+  billing: boolean,
+  temporary: boolean,
+) {
+  if (code === "55006")
+    return "A Prepaid import is still active. Billing migrations will retry automatically.";
+  if (code === "55000" && billing)
+    return "Prepaid billing migrations are waiting for the converted layouts and import procedures.";
+  if (code === "42501")
+    return "Prepaid database permissions are missing. Ask your administrator to run the deployment migration job.";
+  if (temporary)
+    return "Prepaid database migrations are waiting. They will retry automatically.";
+  return "Prepaid database migrations could not complete. Ask your administrator to check the migration job.";
+}
+
 export async function localPrepaidBatchPrefix(pool: Pool, config: Config) {
   const prefix = prepaidFullBatchPrefix(config);
   if (!prefix || !["localhost", "127.0.0.1", "::1"].includes(config.DATABASE_HOST.toLowerCase()))
@@ -114,23 +130,20 @@ export function startPrepaidStartup(
       try {
         if (await isCurrent(ids)) {
           if (!billing) await validatePrepaidSchema(pool, schema);
-          status[key] = null;
-          return true;
-        }
-        {
+        } else {
           if (
             billing &&
-            (await read(prepaidBillingPrerequisitesSql)).rows[0]
-              ?.ready !== true
-          )
+            (await read(prepaidBillingPrerequisitesSql)).rows[0]?.ready !== true
+          ) {
             throw Object.assign(
               new Error("Billing prerequisites are missing."),
               { code: "55000" },
             );
+          }
           await apply(billing);
-          status[key] = null;
-          return true;
         }
+        status[key] = null;
+        return true;
       } catch (error) {
         if (signal.aborted) break;
         const code =
@@ -139,16 +152,7 @@ export function startPrepaidStartup(
             : undefined;
         const temporary = (code === "55000" && billing) || (!!code && retryable.has(code)) ||
           (error instanceof Error && error.message === "Query read timeout");
-        const issue =
-          code === "55006"
-            ? "A Prepaid import is still active. Billing migrations will retry automatically."
-            : code === "55000" && billing
-              ? "Prepaid billing migrations are waiting for the converted layouts and import procedures."
-              : code === "42501"
-                ? "Prepaid database permissions are missing. Ask your administrator to run the deployment migration job."
-                : temporary
-                  ? "Prepaid database migrations are waiting. They will retry automatically."
-                  : "Prepaid database migrations could not complete. Ask your administrator to check the migration job.";
+        const issue = migrationIssue(code, billing, temporary);
         if (status[key] !== issue)
           logger[temporary ? "info" : "error"](
             "database.prepaid_startup_migration_waiting",
@@ -161,9 +165,17 @@ export function startPrepaidStartup(
           );
         status[key] = issue;
       }
-      await delay(5000, undefined, { signal }).catch(
-        () => {},
-      );
+      try {
+        await delay(5000, undefined, { signal });
+      } catch (error) {
+        if (
+          signal.aborted &&
+          error instanceof Error &&
+          error.name === "AbortError"
+        )
+          break;
+        throw error;
+      }
     }
     return false;
   }

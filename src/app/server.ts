@@ -32,6 +32,7 @@ export async function startServer(): Promise<Server> {
   let cleanup: Promise<void> | undefined;
   let migrationInFlight: Promise<void> | undefined;
   let prepaid: ReturnType<typeof startPrepaidStartup> | undefined;
+  let prepaidCompletion: Promise<void> | undefined;
   const close = () => {
     ready = false;
     cancellation.abort();
@@ -42,7 +43,7 @@ export async function startServer(): Promise<Server> {
           server!.closeIdleConnections?.();
         });
       if (migrationInFlight) await migrationInFlight.catch(() => {});
-      if (prepaid) await prepaid.completion.catch(() => {});
+      await prepaidCompletion;
       try {
         if (pool) await pool.end();
       } finally {
@@ -107,6 +108,11 @@ export async function startServer(): Promise<Server> {
     if (result.rows[0]?.ready !== true)
       throw new Error("Required audit schema or INSERT permission is missing.");
     prepaid = startPrepaidStartup(pool, config, logger, cancellation.signal);
+    prepaidCompletion = prepaid.completion.catch((error: unknown) => {
+      logger.error("api.prepaid_startup_failed", {
+        errorName: error instanceof Error ? error.name : undefined,
+      });
+    });
     prepaidStartup.set(server, prepaid.baseReady);
     ready = true;
     logger.info("api.ready", {
