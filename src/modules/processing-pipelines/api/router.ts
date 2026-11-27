@@ -1,5 +1,9 @@
 import { withTransaction } from "../../../db.js";
-import { securityAudit, fingerprint, recordSecurityEffect } from "../../../platform/requestAudit.js";
+import {
+  securityAudit,
+  fingerprint,
+  recordSecurityEffect,
+} from "../../../platform/requestAudit.js";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { randomUUID } from "node:crypto";
@@ -11,6 +15,7 @@ import {
   matchesBillCycleUploadFile,
   matchesEomUpload,
   matchesAprmAccrualAurUpload,
+  matchesIbobUpload,
   matchesProcessingPipelineRequirement,
   isProcessingPipelineWebUploadRequirement,
 } from "../../../processingPipelineCatalog.js";
@@ -170,7 +175,9 @@ export function createProcessingPipelinesRouter(
   router.use(authenticate);
   router.use("/:pipelineCode", async (request, _response, next) => {
     try {
-      const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+      const pipelineCode = pipelineCodeSchema.parse(
+        request.params.pipelineCode,
+      );
       await assertModuleAccess(pool, request.auth!.userId, pipelineCode);
       next();
     } catch (error) {
@@ -204,7 +211,9 @@ export function createProcessingPipelinesRouter(
       ),
     );
     response.json({
-      pipelines: catalog.pipelines.filter((pipeline) => allowed.has(pipeline.code)),
+      pipelines: catalog.pipelines.filter((pipeline) =>
+        allowed.has(pipeline.code),
+      ),
     });
   });
   router.get("/:pipelineCode", async (request, response) => {
@@ -234,78 +243,71 @@ export function createProcessingPipelinesRouter(
           : requirements,
     });
   });
-  router.get(
-    "/:pipelineCode/execution-details",
-    async (request, response) => {
-      const pipelineCode = pipelineCodeSchema.parse(
-        request.params.pipelineCode,
+  router.get("/:pipelineCode/execution-details", async (request, response) => {
+    const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+    const { expectedFileName } = executionDetailsQuerySchema.parse(
+      request.query,
+    );
+    const canonicalExpectedFileName =
+      canonicalizeProcessingPipelineExpectedFileName(expectedFileName);
+    const requirement = (
+      await getProcessingPipelineRequirements(pool, pipelineCode)
+    ).find((candidate) => candidate.fileName === canonicalExpectedFileName);
+    if (!requirement)
+      throw new AppError(
+        404,
+        "PIPELINE_FILE_NOT_FOUND",
+        "The selected file mapping is not available for this pipeline.",
       );
-      const { expectedFileName } = executionDetailsQuerySchema.parse(
-        request.query,
+    if (!requirement.stepFunction)
+      throw new AppError(
+        404,
+        "PIPELINE_STEP_FUNCTION_NOT_MAPPED",
+        "No Step Functions state machine is mapped to the selected file.",
       );
-      const canonicalExpectedFileName =
-        canonicalizeProcessingPipelineExpectedFileName(expectedFileName);
-      const requirement = (
-        await getProcessingPipelineRequirements(pool, pipelineCode)
-      ).find((candidate) => candidate.fileName === canonicalExpectedFileName);
-      if (!requirement)
-        throw new AppError(
-          404,
-          "PIPELINE_FILE_NOT_FOUND",
-          "The selected file mapping is not available for this pipeline.",
-        );
-      if (!requirement.stepFunction)
-        throw new AppError(
-          404,
-          "PIPELINE_STEP_FUNCTION_NOT_MAPPED",
-          "No Step Functions state machine is mapped to the selected file.",
-        );
-      const key = processingPipelineStorage.fileKey(
+    const key = processingPipelineStorage.fileKey(
+      pipelineCode,
+      requirement.fileName,
+    );
+    let sourceFileExists: boolean;
+    try {
+      sourceFileExists = await processingPipelineStorage.fileExists(
         pipelineCode,
-        requirement.fileName,
+        key,
       );
-      let sourceFileExists: boolean;
-      try {
-        sourceFileExists = await processingPipelineStorage.fileExists(
-          pipelineCode,
+    } catch (error) {
+      throw mapStorageError(error);
+    }
+    try {
+      const stateMachine = await stepFunctionsRunner.describeStateMachine(
+        requirement.stepFunction.stateMachineName,
+      );
+      const blockingReasons = [
+        ...(sourceFileExists ? [] : ["SOURCE_FILE_MISSING"]),
+        ...(stateMachine.status === "ACTIVE" ? [] : ["STATE_MACHINE_INACTIVE"]),
+        ...(stateMachine.type === "STANDARD"
+          ? []
+          : ["STATE_MACHINE_NOT_STANDARD"]),
+      ];
+      response.json({
+        pipelineCode,
+        expectedFileName: requirement.fileName,
+        sourceFile: {
           key,
-        );
-      } catch (error) {
-        throw mapStorageError(error);
-      }
-      try {
-        const stateMachine = await stepFunctionsRunner.describeStateMachine(
-          requirement.stepFunction.stateMachineName,
-        );
-        const blockingReasons = [
-          ...(sourceFileExists ? [] : ["SOURCE_FILE_MISSING"]),
-          ...(stateMachine.status === "ACTIVE"
-            ? []
-            : ["STATE_MACHINE_INACTIVE"]),
-          ...(stateMachine.type === "STANDARD"
-            ? []
-            : ["STATE_MACHINE_NOT_STANDARD"]),
-        ];
-        response.json({
-          pipelineCode,
-          expectedFileName: requirement.fileName,
-          sourceFile: {
-            key,
-            s3Uri: `s3://${config.S3_BUCKET}/${key}`,
-            exists: sourceFileExists,
-          },
-          execution: {
-            input: requirement.stepFunction.executionInput,
-            stateMachine,
-          },
-          canExecute: blockingReasons.length === 0,
-          blockingReasons,
-        });
-      } catch (error) {
-        throw mapStepFunctionError(error);
-      }
-    },
-  );
+          s3Uri: `s3://${config.S3_BUCKET}/${key}`,
+          exists: sourceFileExists,
+        },
+        execution: {
+          input: requirement.stepFunction.executionInput,
+          stateMachine,
+        },
+        canExecute: blockingReasons.length === 0,
+        blockingReasons,
+      });
+    } catch (error) {
+      throw mapStepFunctionError(error);
+    }
+  });
   router.get(
     "/:pipelineCode/batch-execution-details",
     async (request, response) => {
@@ -467,7 +469,8 @@ export function createProcessingPipelinesRouter(
         userId: request.auth!.userId,
         uploadPlan,
       });
-      if (created) await securityAudit(db, "upload.batch.created", { pipelineCode }, true);
+      if (created)
+        await securityAudit(db, "upload.batch.created", { pipelineCode }, true);
       return created;
     });
     if (!batch)
@@ -483,7 +486,9 @@ export function createProcessingPipelinesRouter(
   });
   router.get("/:pipelineCode/upload-batches", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
-    response.json({ batches: await getPipelineUploadBatches(pool, { pipelineCode }) });
+    response.json({
+      batches: await getPipelineUploadBatches(pool, { pipelineCode }),
+    });
   });
   router.get("/:pipelineCode/files/content", async (request, response) => {
     const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
@@ -539,7 +544,7 @@ export function createProcessingPipelinesRouter(
     const extension = request.file.originalname
       .slice(request.file.originalname.lastIndexOf("."))
       .toLowerCase();
-    if (!allowedExtensions.has(extension))
+    if (pipelineCode !== "isms_ibob_actzn" && !allowedExtensions.has(extension))
       throw new AppError(
         415,
         "PIPELINE_FILE_TYPE",
@@ -585,7 +590,9 @@ export function createProcessingPipelinesRouter(
     const normalizedLocalName =
       canonicalizeProcessingPipelineExpectedFileName(localName);
     let savedName =
-      requirement.match === "exact" ? requirement.fileName : normalizedLocalName;
+      requirement.match === "exact"
+        ? requirement.fileName
+        : normalizedLocalName;
     // Validate batch ownership and the server's immutable plan before touching S3.
     const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
     let uploadPlan: MemoUploadAssignment[] | null = null;
@@ -634,13 +641,15 @@ export function createProcessingPipelinesRouter(
       /^AUR Extract FINAL(?:_BILLING)?\.XLSX$/i.test(requirement.fileName);
     const validUploadName = isAurUpload
       ? matchesAprmAccrualAurUpload(localName)
-      : pipelineCode.startsWith("bss_eom_") && requirement.match === "exact"
-        ? matchesEomUpload(requirement.fileName, localName)
-      : pipelineCode.startsWith("bss_billcycle_")
-        ? matchesBillCycleUploadFile(requirement, localName)
-        : requirement.match === "glob"
-          ? matchesProcessingPipelineRequirement(requirement, savedName)
-          : true;
+      : pipelineCode === "isms_ibob_actzn"
+        ? matchesIbobUpload(requirement.fileName, localName)
+        : pipelineCode.startsWith("bss_eom_") && requirement.match === "exact"
+          ? matchesEomUpload(requirement.fileName, localName)
+          : pipelineCode.startsWith("bss_billcycle_")
+            ? matchesBillCycleUploadFile(requirement, localName)
+            : requirement.match === "glob"
+              ? matchesProcessingPipelineRequirement(requirement, savedName)
+              : true;
     if (!validUploadName)
       throw new AppError(
         400,
@@ -670,7 +679,10 @@ export function createProcessingPipelinesRouter(
         request.file.mimetype || "application/octet-stream",
         { preventOverwrite: pipelineCode === "memo_sst" },
       );
-      recordSecurityEffect("file.uploaded", { pipelineCode, objectKey: stored.key });
+      recordSecurityEffect("file.uploaded", {
+        pipelineCode,
+        objectKey: stored.key,
+      });
       if (batchId) {
         const recorded = await recordPipelineUploadBatchFile(pool, {
           batchId,
@@ -742,402 +754,384 @@ export function createProcessingPipelinesRouter(
       throw mapStorageError(error);
     }
   });
-  router.post(
-    "/:pipelineCode/runs",
-    async (request, response) => {
-      const pipelineCode = pipelineCodeSchema.parse(
-        request.params.pipelineCode,
+  router.post("/:pipelineCode/runs", async (request, response) => {
+    const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+    const { expectedFileName } = expectedFileSchema.parse(request.body);
+    const canonicalExpectedFileName =
+      canonicalizeProcessingPipelineExpectedFileName(expectedFileName);
+    const requirement = (
+      await getProcessingPipelineRequirements(pool, pipelineCode)
+    ).find((candidate) => candidate.fileName === canonicalExpectedFileName);
+    if (!requirement)
+      throw new AppError(
+        404,
+        "PIPELINE_FILE_NOT_FOUND",
+        "The selected file mapping is not available for this pipeline.",
       );
-      const { expectedFileName } = expectedFileSchema.parse(request.body);
-      const canonicalExpectedFileName =
-        canonicalizeProcessingPipelineExpectedFileName(expectedFileName);
-      const requirement = (
-        await getProcessingPipelineRequirements(pool, pipelineCode)
-      ).find((candidate) => candidate.fileName === canonicalExpectedFileName);
-      if (!requirement)
+    if (!requirement.stepFunction)
+      throw new AppError(
+        404,
+        "PIPELINE_STEP_FUNCTION_NOT_MAPPED",
+        "No Step Functions state machine is mapped to the selected file.",
+      );
+    if (requirement.match !== "exact")
+      throw new AppError(
+        400,
+        "PIPELINE_FILE_PATTERN_UNSUPPORTED",
+        "A specific file must be selected before starting its processing run.",
+      );
+    const key = processingPipelineStorage.fileKey(
+      pipelineCode,
+      requirement.fileName,
+    );
+    try {
+      if (!(await processingPipelineStorage.fileExists(pipelineCode, key)))
         throw new AppError(
           404,
           "PIPELINE_FILE_NOT_FOUND",
-          "The selected file mapping is not available for this pipeline.",
+          "Upload the selected file before starting its processing run.",
         );
-      if (!requirement.stepFunction)
-        throw new AppError(
-          404,
-          "PIPELINE_STEP_FUNCTION_NOT_MAPPED",
-          "No Step Functions state machine is mapped to the selected file.",
-        );
-      if (requirement.match !== "exact")
-        throw new AppError(
-          400,
-          "PIPELINE_FILE_PATTERN_UNSUPPORTED",
-          "A specific file must be selected before starting its processing run.",
-        );
-      const key = processingPipelineStorage.fileKey(
-        pipelineCode,
-        requirement.fileName,
+    } catch (error) {
+      throw mapStorageError(error);
+    }
+    const runId = randomUUID();
+    const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
+    try {
+      const stateMachine = await stepFunctionsRunner.describeStateMachine(
+        requirement.stepFunction.stateMachineName,
       );
-      try {
-        if (!(await processingPipelineStorage.fileExists(pipelineCode, key)))
-          throw new AppError(
-            404,
-            "PIPELINE_FILE_NOT_FOUND",
-            "Upload the selected file before starting its processing run.",
-          );
-      } catch (error) {
-        throw mapStorageError(error);
-      }
-      const runId = randomUUID();
-      const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
-      try {
-        const stateMachine = await stepFunctionsRunner.describeStateMachine(
-          requirement.stepFunction.stateMachineName,
-        );
-        if (
-          stateMachine.status !== "ACTIVE" ||
-          stateMachine.type !== "STANDARD"
-        )
-          throw new AppError(
-            409,
-            "PIPELINE_STEP_FUNCTION_NOT_RUNNABLE",
-            "The mapped Step Functions state machine must be active and Standard before it can be run.",
-          );
-        const started = await stepFunctionsRunner.startExecution(
-          requirement.stepFunction.stateMachineName,
-          requirement.stepFunction.executionInput,
-        );
-        recordSecurityEffect("processing.started", { pipelineCode, runId, objectKey: key });
-        const sourceFiles = [
-          {
-            expectedFileName: requirement.fileName,
-            key,
-            s3Uri: `s3://${config.S3_BUCKET}/${key}`,
-          },
-        ];
-        await createStepFunctionExecution(pool, {
-          id: runId,
-          fileMappingId: requirement.stepFunction.mappingId,
-          executionArn: started.executionArn,
-          executionInput: requirement.stepFunction.executionInput,
-          sourceFiles,
-          workspaceId,
-          startedByUserId: request.auth!.userId,
-          status: "RUNNING",
-          startedAt: started.startedAt,
-        });
-        try {
-          await audit(
-            pool,
-            workspaceId,
-            "processing-pipeline.step-function-started",
-            {
-              pipelineCode,
-              expectedFileName: requirement.fileName,
-              objectKey: key,
-              stateMachineName: requirement.stepFunction.stateMachineName,
-              executionInput: requirement.stepFunction.executionInput,
-              runId,
-              executionArn: started.executionArn,
-            },
-          );
-        } catch (error) {
-          logger.error("processing_pipeline.step_function_audit_failed", {
-            error: String(error),
-          });
-        }
-        response.status(201).json({
-          runId,
-          targetMode: "adhoc",
-          stateMachineName: requirement.stepFunction.stateMachineName,
-          executionInput: requirement.stepFunction.executionInput,
-          startedAt: started.startedAt,
-        });
-      } catch (error) {
-        throw mapStepFunctionError(error);
-      }
-    },
-  );
-  router.post(
-    "/:pipelineCode/batch-runs",
-    async (request, response) => {
-      const pipelineCode = pipelineCodeSchema.parse(
-        request.params.pipelineCode,
-      );
-      const { batchCycle } = batchRunSchema.parse(request.body);
-      const mapping = await getProcessingPipelineBatchStepFunctionMapping(
-        pool,
-        pipelineCode,
-        batchCycle,
-      );
-      if (!mapping)
-        throw new AppError(
-          404,
-          "PIPELINE_BATCH_STEP_FUNCTION_NOT_MAPPED",
-          "No batch Step Functions state machine is mapped to the selected bill cycle.",
-        );
-      let resolved: ResolvedBatchFile[];
-      try {
-        resolved = await resolveBatchFiles(pipelineCode, mapping);
-      } catch (error) {
-        throw mapStorageError(error);
-      }
-      const available = resolved.filter((file) => file.exists);
-      const missing = resolved.filter((file) => !file.exists);
-      const sourceFiles = available.map(batchSourceFile);
-      const missingFiles = missing.map(batchMissingFile);
-      if (!available.length)
+      if (stateMachine.status !== "ACTIVE" || stateMachine.type !== "STANDARD")
         throw new AppError(
           409,
-          "PIPELINE_BATCH_NO_SOURCE_FILES",
-          "Upload at least one mapped batch source file before starting the execution.",
+          "PIPELINE_STEP_FUNCTION_NOT_RUNNABLE",
+          "The mapped Step Functions state machine must be active and Standard before it can be run.",
         );
-      const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
-      if (missing.length) {
-        const workflows = available.map((file) => ({
-          file,
-          stepFunction: individualBatchStepFunction(file),
-        }));
-        try {
-          const stateMachines = await Promise.all(
-            workflows.map(async ({ file, stepFunction }) => ({
-              file,
-              stepFunction,
-              stateMachine: await stepFunctionsRunner.describeStateMachine(
-                stepFunction.stateMachineName,
-              ),
-            })),
-          );
-          if (
-            stateMachines.some(
-              ({ stateMachine }) =>
-                stateMachine.status !== "ACTIVE" ||
-                stateMachine.type !== "STANDARD",
-            )
-          )
-            throw new AppError(
-              409,
-              "PIPELINE_STEP_FUNCTION_NOT_RUNNABLE",
-              "Every mapped Step Functions state machine must be active and Standard before a partial batch can run.",
-            );
-
-          const startedRuns: {
-            runId: string;
-            expectedFileName: string;
-            key: string;
-            s3Uri: string;
-            stateMachineName: string;
-            executionInput: Record<string, unknown>;
-            startedAt: string;
-          }[] = [];
-          const failedFiles: {
-            expectedFileName: string;
-            key: string;
-            s3Uri: string;
-            error: { status: number; code: string; message: string };
-          }[] = [];
-          for (const { file, stepFunction } of workflows) {
-            try {
-              const started = await stepFunctionsRunner.startExecution(
-                stepFunction.stateMachineName,
-                stepFunction.executionInput,
-              );
-              const runId = randomUUID();
-              recordSecurityEffect("processing.started", { pipelineCode, runId, objectKey: file.key });
-              const run = {
-                runId,
-                expectedFileName: file.expectedFileName,
-                key: file.key,
-                s3Uri: file.s3Uri,
-                stateMachineName: stepFunction.stateMachineName,
-                executionInput: stepFunction.executionInput,
-                startedAt: started.startedAt,
-              };
-              await createStepFunctionExecution(pool, {
-                id: runId,
-                fileMappingId: stepFunction.mappingId,
-                executionArn: started.executionArn,
-                executionInput: stepFunction.executionInput,
-                sourceFiles: [batchSourceFile(file)],
-                workspaceId,
-                startedByUserId: request.auth!.userId,
-                status: "RUNNING",
-                startedAt: started.startedAt,
-              });
-              startedRuns.push(run);
-            } catch (error) {
-              const mapped = mapStepFunctionError(error);
-              failedFiles.push({
-                expectedFileName: file.expectedFileName,
-                key: file.key,
-                s3Uri: file.s3Uri,
-                error: {
-                  status: mapped.status,
-                  code: mapped.code,
-                  message: mapped.message,
-                },
-              });
-            }
-          }
-          if (!startedRuns.length) {
-            const failure = failedFiles[0]?.error;
-            throw new AppError(
-              failure?.status ?? 502,
-              failure?.code ?? "PIPELINE_STEP_FUNCTION_UNAVAILABLE",
-              failure?.message ??
-                "No Step Functions workflow could be started.",
-            );
-          }
-          try {
-            await audit(
-              pool,
-              workspaceId,
-              "processing-pipeline.partial-batch-started",
-              {
-                actionOutcome: failedFiles.length ? "partial" : "success",
-                pipelineCode,
-                batchCycle,
-                sourceFiles,
-                missingFiles,
-                startedRuns,
-                failedFiles,
-              },
-            );
-          } catch (error) {
-            logger.error("processing_pipeline.partial_batch_audit_failed", {
-              error: String(error),
-            });
-          }
-          response.status(failedFiles.length ? 207 : 201).json({
-            targetMode: "partial",
-            batchCycle,
-            sourceFiles,
-            missingFiles,
-            startedRuns,
-            failedFiles,
-          });
-          return;
-        } catch (error) {
-          throw mapStepFunctionError(error);
-        }
-      }
-      const runId = randomUUID();
+      const started = await stepFunctionsRunner.startExecution(
+        requirement.stepFunction.stateMachineName,
+        requirement.stepFunction.executionInput,
+      );
+      recordSecurityEffect("processing.started", {
+        pipelineCode,
+        runId,
+        objectKey: key,
+      });
+      const sourceFiles = [
+        {
+          expectedFileName: requirement.fileName,
+          key,
+          s3Uri: `s3://${config.S3_BUCKET}/${key}`,
+        },
+      ];
+      await createStepFunctionExecution(pool, {
+        id: runId,
+        fileMappingId: requirement.stepFunction.mappingId,
+        executionArn: started.executionArn,
+        executionInput: requirement.stepFunction.executionInput,
+        sourceFiles,
+        workspaceId,
+        startedByUserId: request.auth!.userId,
+        status: "RUNNING",
+        startedAt: started.startedAt,
+      });
       try {
-        const stateMachine = await stepFunctionsRunner.describeStateMachine(
-          mapping.stateMachineName,
+        await audit(
+          pool,
+          workspaceId,
+          "processing-pipeline.step-function-started",
+          {
+            pipelineCode,
+            expectedFileName: requirement.fileName,
+            objectKey: key,
+            stateMachineName: requirement.stepFunction.stateMachineName,
+            executionInput: requirement.stepFunction.executionInput,
+            runId,
+            executionArn: started.executionArn,
+          },
+        );
+      } catch (error) {
+        logger.error("processing_pipeline.step_function_audit_failed", {
+          error: String(error),
+        });
+      }
+      response.status(201).json({
+        runId,
+        targetMode: "adhoc",
+        stateMachineName: requirement.stepFunction.stateMachineName,
+        executionInput: requirement.stepFunction.executionInput,
+        startedAt: started.startedAt,
+      });
+    } catch (error) {
+      throw mapStepFunctionError(error);
+    }
+  });
+  router.post("/:pipelineCode/batch-runs", async (request, response) => {
+    const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+    const { batchCycle } = batchRunSchema.parse(request.body);
+    const mapping = await getProcessingPipelineBatchStepFunctionMapping(
+      pool,
+      pipelineCode,
+      batchCycle,
+    );
+    if (!mapping)
+      throw new AppError(
+        404,
+        "PIPELINE_BATCH_STEP_FUNCTION_NOT_MAPPED",
+        "No batch Step Functions state machine is mapped to the selected bill cycle.",
+      );
+    let resolved: ResolvedBatchFile[];
+    try {
+      resolved = await resolveBatchFiles(pipelineCode, mapping);
+    } catch (error) {
+      throw mapStorageError(error);
+    }
+    const available = resolved.filter((file) => file.exists);
+    const missing = resolved.filter((file) => !file.exists);
+    const sourceFiles = available.map(batchSourceFile);
+    const missingFiles = missing.map(batchMissingFile);
+    if (!available.length)
+      throw new AppError(
+        409,
+        "PIPELINE_BATCH_NO_SOURCE_FILES",
+        "Upload at least one mapped batch source file before starting the execution.",
+      );
+    const workspaceId = await ensureWorkspace(pool, request.auth!.userId);
+    if (missing.length) {
+      const workflows = available.map((file) => ({
+        file,
+        stepFunction: individualBatchStepFunction(file),
+      }));
+      try {
+        const stateMachines = await Promise.all(
+          workflows.map(async ({ file, stepFunction }) => ({
+            file,
+            stepFunction,
+            stateMachine: await stepFunctionsRunner.describeStateMachine(
+              stepFunction.stateMachineName,
+            ),
+          })),
         );
         if (
-          stateMachine.status !== "ACTIVE" ||
-          stateMachine.type !== "STANDARD"
+          stateMachines.some(
+            ({ stateMachine }) =>
+              stateMachine.status !== "ACTIVE" ||
+              stateMachine.type !== "STANDARD",
+          )
         )
           throw new AppError(
             409,
             "PIPELINE_STEP_FUNCTION_NOT_RUNNABLE",
-            "The mapped Step Functions state machine must be active and Standard before it can be run.",
+            "Every mapped Step Functions state machine must be active and Standard before a partial batch can run.",
           );
-        const started = await stepFunctionsRunner.startExecution(
-          mapping.stateMachineName,
-          mapping.executionInput,
-        );
-        recordSecurityEffect("processing.batch_started", { pipelineCode, runId });
-        await createStepFunctionExecution(pool, {
-          id: runId,
-          batchMappingId: mapping.mappingId,
-          executionArn: started.executionArn,
-          executionInput: mapping.executionInput,
-          sourceFiles,
-          workspaceId,
-          startedByUserId: request.auth!.userId,
-          status: "RUNNING",
-          startedAt: started.startedAt,
-        });
+
+        const startedRuns: {
+          runId: string;
+          expectedFileName: string;
+          key: string;
+          s3Uri: string;
+          stateMachineName: string;
+          executionInput: Record<string, unknown>;
+          startedAt: string;
+        }[] = [];
+        const failedFiles: {
+          expectedFileName: string;
+          key: string;
+          s3Uri: string;
+          error: { status: number; code: string; message: string };
+        }[] = [];
+        for (const { file, stepFunction } of workflows) {
+          try {
+            const started = await stepFunctionsRunner.startExecution(
+              stepFunction.stateMachineName,
+              stepFunction.executionInput,
+            );
+            const runId = randomUUID();
+            recordSecurityEffect("processing.started", {
+              pipelineCode,
+              runId,
+              objectKey: file.key,
+            });
+            const run = {
+              runId,
+              expectedFileName: file.expectedFileName,
+              key: file.key,
+              s3Uri: file.s3Uri,
+              stateMachineName: stepFunction.stateMachineName,
+              executionInput: stepFunction.executionInput,
+              startedAt: started.startedAt,
+            };
+            await createStepFunctionExecution(pool, {
+              id: runId,
+              fileMappingId: stepFunction.mappingId,
+              executionArn: started.executionArn,
+              executionInput: stepFunction.executionInput,
+              sourceFiles: [batchSourceFile(file)],
+              workspaceId,
+              startedByUserId: request.auth!.userId,
+              status: "RUNNING",
+              startedAt: started.startedAt,
+            });
+            startedRuns.push(run);
+          } catch (error) {
+            const mapped = mapStepFunctionError(error);
+            failedFiles.push({
+              expectedFileName: file.expectedFileName,
+              key: file.key,
+              s3Uri: file.s3Uri,
+              error: {
+                status: mapped.status,
+                code: mapped.code,
+                message: mapped.message,
+              },
+            });
+          }
+        }
+        if (!startedRuns.length) {
+          const failure = failedFiles[0]?.error;
+          throw new AppError(
+            failure?.status ?? 502,
+            failure?.code ?? "PIPELINE_STEP_FUNCTION_UNAVAILABLE",
+            failure?.message ?? "No Step Functions workflow could be started.",
+          );
+        }
         try {
           await audit(
             pool,
             workspaceId,
-            "processing-pipeline.batch-step-function-started",
+            "processing-pipeline.partial-batch-started",
             {
+              actionOutcome: failedFiles.length ? "partial" : "success",
               pipelineCode,
               batchCycle,
               sourceFiles,
-              stateMachineName: mapping.stateMachineName,
-              executionInput: mapping.executionInput,
-              runId,
-              executionArn: started.executionArn,
+              missingFiles,
+              startedRuns,
+              failedFiles,
             },
           );
         } catch (error) {
-          logger.error("processing_pipeline.batch_step_function_audit_failed", {
+          logger.error("processing_pipeline.partial_batch_audit_failed", {
             error: String(error),
           });
         }
-        response.status(201).json({
-          runId,
-          targetMode: "batch",
-          stateMachineName: mapping.stateMachineName,
-          executionInput: mapping.executionInput,
+        response.status(failedFiles.length ? 207 : 201).json({
+          targetMode: "partial",
+          batchCycle,
           sourceFiles,
-          startedAt: started.startedAt,
+          missingFiles,
+          startedRuns,
+          failedFiles,
         });
+        return;
       } catch (error) {
         throw mapStepFunctionError(error);
       }
-    },
-  );
-  router.get(
-    "/:pipelineCode/runs/:runId",
-    async (request, response) => {
-      const pipelineCode = pipelineCodeSchema.parse(
-        request.params.pipelineCode,
+    }
+    const runId = randomUUID();
+    try {
+      const stateMachine = await stepFunctionsRunner.describeStateMachine(
+        mapping.stateMachineName,
       );
-      const runId = z.string().uuid().parse(request.params.runId);
-      const execution = await getStepFunctionExecution(
-        pool,
-        runId,
-        pipelineCode,
-      );
-      if (!execution)
+      if (stateMachine.status !== "ACTIVE" || stateMachine.type !== "STANDARD")
         throw new AppError(
-          404,
-          "PIPELINE_RUN_NOT_FOUND",
-          "The requested processing run was not found for this pipeline.",
+          409,
+          "PIPELINE_STEP_FUNCTION_NOT_RUNNABLE",
+          "The mapped Step Functions state machine must be active and Standard before it can be run.",
         );
+      const started = await stepFunctionsRunner.startExecution(
+        mapping.stateMachineName,
+        mapping.executionInput,
+      );
+      recordSecurityEffect("processing.batch_started", { pipelineCode, runId });
+      await createStepFunctionExecution(pool, {
+        id: runId,
+        batchMappingId: mapping.mappingId,
+        executionArn: started.executionArn,
+        executionInput: mapping.executionInput,
+        sourceFiles,
+        workspaceId,
+        startedByUserId: request.auth!.userId,
+        status: "RUNNING",
+        startedAt: started.startedAt,
+      });
       try {
-        const [observed, stateMachine] = await Promise.all([
-          stepFunctionsRunner.describeExecution(execution.executionArn),
-          stepFunctionsRunner.describeStateMachine(execution.stateMachineName),
-        ]);
-        await updateStepFunctionExecution(pool, runId, observed);
-        const durationMs = observed.completedAt
-          ? new Date(observed.completedAt).getTime() -
-            new Date(observed.startedAt ?? execution.startedAt).getTime()
-          : null;
-        const region = encodeURIComponent(config.AWS_REGION);
-        response.json({
-          runId,
-          targetMode: execution.targetMode,
-          executionArn: execution.executionArn,
-          stateMachineName: execution.stateMachineName,
-          stateMachine,
-          executionInput: execution.executionInput,
-          sourceFiles: execution.sourceFiles,
-          status: observed.status,
-          errorCode: observed.errorCode,
-          errorMessage: observed.errorMessage,
-          input: observed.input,
-          inputIncluded: observed.inputIncluded,
-          output: observed.output,
-          outputIncluded: observed.outputIncluded,
-          mapRunArn: observed.mapRunArn,
-          traceHeader: observed.traceHeader,
-          startedAt: observed.startedAt ?? execution.startedAt,
-          completedAt: observed.completedAt,
-          durationMs,
-          lastObservedAt: new Date().toISOString(),
-          stepFunctionsConsoleUrl: `https://${config.AWS_REGION}.console.aws.amazon.com/states/home?region=${region}#/statemachines`,
-        });
+        await audit(
+          pool,
+          workspaceId,
+          "processing-pipeline.batch-step-function-started",
+          {
+            pipelineCode,
+            batchCycle,
+            sourceFiles,
+            stateMachineName: mapping.stateMachineName,
+            executionInput: mapping.executionInput,
+            runId,
+            executionArn: started.executionArn,
+          },
+        );
       } catch (error) {
-        throw mapStepFunctionError(error);
+        logger.error("processing_pipeline.batch_step_function_audit_failed", {
+          error: String(error),
+        });
       }
-    },
-  );
+      response.status(201).json({
+        runId,
+        targetMode: "batch",
+        stateMachineName: mapping.stateMachineName,
+        executionInput: mapping.executionInput,
+        sourceFiles,
+        startedAt: started.startedAt,
+      });
+    } catch (error) {
+      throw mapStepFunctionError(error);
+    }
+  });
+  router.get("/:pipelineCode/runs/:runId", async (request, response) => {
+    const pipelineCode = pipelineCodeSchema.parse(request.params.pipelineCode);
+    const runId = z.string().uuid().parse(request.params.runId);
+    const execution = await getStepFunctionExecution(pool, runId, pipelineCode);
+    if (!execution)
+      throw new AppError(
+        404,
+        "PIPELINE_RUN_NOT_FOUND",
+        "The requested processing run was not found for this pipeline.",
+      );
+    try {
+      const [observed, stateMachine] = await Promise.all([
+        stepFunctionsRunner.describeExecution(execution.executionArn),
+        stepFunctionsRunner.describeStateMachine(execution.stateMachineName),
+      ]);
+      await updateStepFunctionExecution(pool, runId, observed);
+      const durationMs = observed.completedAt
+        ? new Date(observed.completedAt).getTime() -
+          new Date(observed.startedAt ?? execution.startedAt).getTime()
+        : null;
+      const region = encodeURIComponent(config.AWS_REGION);
+      response.json({
+        runId,
+        targetMode: execution.targetMode,
+        executionArn: execution.executionArn,
+        stateMachineName: execution.stateMachineName,
+        stateMachine,
+        executionInput: execution.executionInput,
+        sourceFiles: execution.sourceFiles,
+        status: observed.status,
+        errorCode: observed.errorCode,
+        errorMessage: observed.errorMessage,
+        input: observed.input,
+        inputIncluded: observed.inputIncluded,
+        output: observed.output,
+        outputIncluded: observed.outputIncluded,
+        mapRunArn: observed.mapRunArn,
+        traceHeader: observed.traceHeader,
+        startedAt: observed.startedAt ?? execution.startedAt,
+        completedAt: observed.completedAt,
+        durationMs,
+        lastObservedAt: new Date().toISOString(),
+        stepFunctionsConsoleUrl: `https://${config.AWS_REGION}.console.aws.amazon.com/states/home?region=${region}#/statemachines`,
+      });
+    } catch (error) {
+      throw mapStepFunctionError(error);
+    }
+  });
   return router;
 }

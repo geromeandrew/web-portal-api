@@ -246,6 +246,33 @@ describe.skipIf(
     },
   );
 
+  it.each([
+    [
+      "ACT_ISMS_IB_OB_01.XLSX",
+      "ISMS IB & OB ACTUALIZATION SUMMARY OF INVOICE 10222026.anything",
+    ],
+    ["ACT_ISMS_IB_OB_02.XLSX", "summary of accrual ib and ob sap upload"],
+  ])(
+    "accepts an IBOB source name and saves it as %s",
+    async (expected, original) => {
+      const response = await upload("isms_ibob_actzn", expected, original);
+      expect(response.status).toBe(201);
+      const result = await response.json();
+      expect(result.file.key).toBe(
+        `isms_ibob_actualization/inbound/${expected}`,
+      );
+      expect(
+        (await upload("isms_ibob_actzn", expected, "unrelated.anything"))
+          .status,
+      ).toBe(400);
+      await request(
+        `/processing-pipelines/isms_ibob_actzn/files?${new URLSearchParams({ key: result.file.key })}`,
+        "admin",
+        { method: "DELETE" },
+      );
+    },
+  );
+
   it("keeps historical IBOB keys readable and removable without routing new uploads there", async () => {
     const key = "isms_ibob_actzn/inbound/ACT_ISMS_IB_OB_02.XLSX";
     await fetch(

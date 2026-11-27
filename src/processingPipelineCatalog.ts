@@ -27,6 +27,20 @@ export function matchesAprmAccrualAurUpload(fileName: string) {
   );
 }
 
+export function matchesIbobUpload(expected: string, original: string) {
+  const names: Record<string, string> = {
+    "act_isms_ib_ob_01.xlsx": "isms ib & ob actualization summary of invoice",
+    "act_isms_ib_ob_02.xlsx": "summary of accrual ib and ob sap upload",
+  };
+  const key = expected.toLowerCase();
+  const name = original.toLowerCase();
+  return Boolean(
+    names[key] &&
+    (name.includes(names[key]) ||
+      name.replace(/(?:\.xlsx){2,}$/, ".xlsx") === key),
+  );
+}
+
 export const bayanBillCycleSuffixes = [
   "01",
   "06",
