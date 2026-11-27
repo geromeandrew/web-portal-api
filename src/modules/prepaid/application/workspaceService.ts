@@ -31,15 +31,6 @@ import {
 /** Upload ownership exists before a financial period/run is known. */
 export class PrepaidWorkspaceService {
   constructor(readonly runs: PrepaidRunService, readonly fullBatch?: PrepaidFullBatch) {}
-  private async assertNoActiveBatch(db: PoolClient, sessionId: string) {
-    if (!this.fullBatch) return;
-    const active = await db.query(
-      `SELECT 1 FROM ${this.t("full_batches")} WHERE session_id=$1 AND status<>'closed'`,
-      [sessionId],
-    );
-    if (active.rowCount)
-      throw new AppError(409, "PREPAID_BATCH_ACTIVE", "Wait for processing to finish, then reset before changing the uploaded files.");
-  }
   private t = (name: string) => this.runs.repo.table(name);
   async extractions(userId: string) {
     const repo = this.runs.repo;
@@ -263,7 +254,7 @@ export class PrepaidWorkspaceService {
     }
     return session ?? null;
   }
-  private async mutable(db: PoolClient, userId: string, create: boolean) {
+  private async mutable(db: PoolClient, userId: string, create: boolean, uploadCode?: string) {
     const s = await this.session(db, userId, create);
     if (!s)
       throw new AppError(
@@ -271,7 +262,7 @@ export class PrepaidWorkspaceService {
         "PREPAID_SESSION_REQUIRED",
         "Upload source files first.",
       );
-    await this.assertNoActiveBatch(db, s.id);
+    await this.fullBatch?.assertSourceChangeAllowed(db, s.id, uploadCode);
     if (s.status === "pending")
       throw new AppError(
         409,
@@ -363,7 +354,7 @@ export class PrepaidWorkspaceService {
         const prior = await replay(db);
         if (prior) return { prior, session: null };
       }
-      const session = await this.mutable(db, userId, true);
+      const session = await this.mutable(db, userId, true, code);
       if (!this.accepted(session.configuration).some((x) => x.code === code))
         throw new AppError(
           400,
@@ -407,7 +398,7 @@ export class PrepaidWorkspaceService {
         await this.lock(db, userId);
         if (await replay(db)) return;
       }
-      const current = await this.mutable(db, userId, false);
+      const current = await this.mutable(db, userId, false, code);
       if (current.id !== s.id)
         throw new AppError(
           409,

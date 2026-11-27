@@ -10,10 +10,14 @@ export const amaxeeHeaders = [
 export async function readAmaxeeRows(
   db: PoolClient,
   startedAt: string,
-  filenames: string[],
+  files: { name: string; extractedAt?: string }[],
 ) {
   await db.query("SELECT set_config('esatp.prepaid_billing_scope', $1, true)", [
-    JSON.stringify({ started_at: startedAt, filenames }),
+    JSON.stringify({
+      started_at: startedAt,
+      filenames: files.map((file) => file.name),
+      extracted_at: Object.fromEntries(files.map((file) => [file.name, file.extractedAt])),
+    }),
   ]);
   // Fetch one row beyond the four-column workbook limit so export rejects oversized results.
   const { rows } = await db.query(

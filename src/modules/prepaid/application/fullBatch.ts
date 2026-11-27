@@ -49,6 +49,7 @@ type File = {
   name: string;
   workflow: SourceWorkflow;
   prepared?: { key: string; sha256: string };
+  extractedAt?: string;
 };
 type Journal = { filename: string; sha256: string; key: string; size: number };
 type Execution = {
@@ -68,7 +69,7 @@ type Batch = {
   inputs_staged: boolean;
   phase: Phase | "cleanup" | "release";
   status: "queued" | "running" | "review" | "failed" | "closed";
-  executions: Partial<Record<Phase, Execution>>;
+  executions: Partial<Record<Phase, Execution>> & { importAttempt?: string };
   layouts: Partial<Record<Region, LayoutRow[]>>;
   error: string | null;
 };
@@ -97,7 +98,7 @@ const inputCells: Record<Region, Partial<Record<number, SourceInput>>> = {
   },
 };
 const hasKe24 = (batch: Batch) => batch.files.some((file) => file.workflow === "ke24");
-const ke24Required = "KE24 is required to calculate allocations and produce a journal. Reset and include KE24 to continue.";
+const ke24Required = "KE24 is required to calculate allocations and produce a journal. Upload and process KE24 to continue.";
 const maximumJournalBytes = 16 * 1024 * 1024;
 const outbound = "prepaid_reclass/outbound/";
 const journalFilename = (region: Region) =>
@@ -142,11 +143,39 @@ export class PrepaidFullBatch {
       (batch.phase === "import" && batch.status === "queued" && !batch.inputs_staged)
     );
   }
+  private canUpload(batch: Batch) {
+    if (batch.phase !== "import") return false;
+    if (batch.status === "failed")
+      return !!batch.executions.importAttempt && !batch.inputs_staged;
+    return batch.status === "review" && batch.executions.import?.status === "SUCCEEDED" &&
+      !this.hasCompleteFileSet(batch);
+  }
+  private hasCompleteFileSet(batch: Batch) {
+    return new Set(batch.files.map((file) => file.workflow)).size === workflows.length;
+  }
+  async assertSourceChangeAllowed(db: PoolClient, sessionId: string, uploadCode?: string) {
+    const batch = await this.activeSessionBatch(db, sessionId);
+    if (!batch) return;
+    if (!uploadCode || !this.canUpload(batch))
+      throw new AppError(409, "PREPAID_BATCH_ACTIVE", "Uploaded files are locked for this batch.");
+    if (batch.files.some((file) => file.code === uploadCode && (batch.status === "review" || file.extractedAt)))
+      throw new AppError(409, "PREPAID_SOURCE_ALREADY_PROCESSED", "This report was already processed. Add a report that has not been processed.");
+  }
+  private async activeSessionBatch(db: PoolClient, sessionId: string): Promise<Batch | undefined> {
+    return (await db.query<Batch>(
+      `SELECT * FROM ${this.table} WHERE session_id=$1 AND status<>'closed' FOR UPDATE`,
+      [sessionId],
+    )).rows[0];
+  }
   private snapshot(batch: Batch | undefined) {
     if (!batch) return null;
     const { id, phase, status, executions, layouts, error } = batch;
+    const { importAttempt, ...jobExecutions } = executions;
     return {
       canClose: this.canClose(batch),
+      canUpload: this.canUpload(batch),
+      canRetryImport: phase === "import" && status === "failed" && !!importAttempt,
+      sourceCodes: batch.files.map((file) => file.code),
       amaxeeReportAvailable:
         status === "review" && !["cleanup", "release"].includes(phase) &&
         executions.import?.status === "SUCCEEDED" && batch.files.some(isBillingFile),
@@ -155,7 +184,7 @@ export class PrepaidFullBatch {
       id,
       phase,
       status,
-      executions,
+      executions: jobExecutions,
       layouts,
       error,
       deliveryEnabled: this.deliveryEnabled,
@@ -403,7 +432,9 @@ export class PrepaidFullBatch {
       const rows = await readAmaxeeRows(
         db,
         batch.executions.import!.startedAt,
-        batch.files.filter(isBillingFile).map((file) => file.name.toLowerCase()),
+        batch.files.filter(isBillingFile).map((file) => ({
+          name: file.name.toLowerCase(), extractedAt: file.extractedAt,
+        })),
       );
       return { rows, startedAt: batch.executions.import!.startedAt };
     });
@@ -477,11 +508,9 @@ export class PrepaidFullBatch {
     db: PoolClient,
     session: { id: string },
   ): Promise<boolean> {
-    const active = await db.query(
-      `SELECT 1 FROM ${this.table} WHERE session_id=$1 AND status <> 'closed'`,
-      [session.id],
-    );
-    if (active.rowCount) return false;
+    const active = await this.activeSessionBatch(db, session.id);
+    const retry = active && this.snapshot(active)?.canRetryImport;
+    if (active && !retry && !this.canUpload(active)) return false;
     const rows = (
       await db.query(
         `SELECT source_code,object_key,sha256 FROM ${this.repo.table("session_files")} WHERE session_id=$1 AND active ORDER BY source_code`,
@@ -512,13 +541,16 @@ export class PrepaidFullBatch {
         "PREPAID_BATCH_INPUT_REQUIRED",
         "Upload at least one file before starting.",
       );
-    const prior = await db.query(
+    const prior = !active && await db.query(
       `SELECT 1 FROM ${this.table} b
-       CROSS JOIN LATERAL (SELECT jsonb_agg(file - 'prepared') AS originals FROM jsonb_array_elements(b.files) AS file) AS inputs
+       CROSS JOIN LATERAL (SELECT jsonb_agg(file - 'prepared' - 'extractedAt') AS originals FROM jsonb_array_elements(b.files) AS file) AS inputs
        WHERE b.session_id=$1 AND inputs.originals @> $2::jsonb AND inputs.originals <@ $2::jsonb LIMIT 1`,
       [session.id, JSON.stringify(files)],
     );
-    if (prior.rowCount) return false;
+    if (prior && prior.rowCount) return false;
+    const existing = new Map(active?.files.map((file) => [file.code, file]));
+    const added = files.filter((file) => existing.get(file.code)?.key !== file.key);
+    if (active && !retry && !added.length) return false;
     const readiness = await db.query<{ installed: boolean; extendedCycles: boolean }>(
       `SELECT to_regprocedure('dswtdir1_prepaid_dbo.prepaid_import_source_enabled(text)') IS NOT NULL AS installed,
               to_regprocedure('dswtdir1_prepaid_dbo.prepaid_billing_cycle_number(text,integer)') IS NOT NULL AS "extendedCycles"`,
@@ -545,6 +577,25 @@ export class PrepaidFullBatch {
           "PREPAID_BATCH_LAYOUT_REQUIRED",
           "The EG and SG layouts are unavailable. Contact support.",
         );
+    }
+    if (active) {
+      const changedWorkflows = new Set(added.map((file) => file.workflow));
+      const continuedFiles = retry && active.inputs_staged ? active.files : files.map((file) => {
+        const previous = existing.get(file.code);
+        if (!previous || previous.key !== file.key) return file;
+        if (changedWorkflows.has(file.workflow)) {
+          // Billing extraction reads all staged cycles of the selected report type.
+          return { ...previous, extractedAt: undefined };
+        }
+        return { ...previous, extractedAt: previous.extractedAt ?? (retry ? undefined : active.executions.import!.startedAt) };
+      });
+      await db.query(
+        `UPDATE ${this.table} SET files=$2,executions=$3,layouts='{}',inputs_staged=false,
+         status='queued',error=NULL,next_check=now() WHERE id=$1`,
+        [active.id, JSON.stringify(continuedFiles),
+          JSON.stringify({ importAttempt: randomUUID().replaceAll("-", "").slice(0, 16) })],
+      );
+      return true;
     }
     const inserted = (
       await db.query<Batch>(
@@ -592,6 +643,15 @@ export class PrepaidFullBatch {
           "Wait for processing to finish.",
         );
       if (action !== "close") {
+        if (batch.phase === "import" && !this.hasCompleteFileSet(batch))
+          throw new AppError(409, "PREPAID_BATCH_FREEZE_NOT_READY", "Upload and process all File Guidelines reports before freezing.");
+        const { rowCount } = await db.query(
+          `SELECT 1 FROM ${this.repo.table("session_files")}
+           WHERE session_id=$1 AND active AND NOT (source_code=ANY($2::text[])) LIMIT 1`,
+          [batch.session_id, batch.files.map((file) => file.code)],
+        );
+        if (rowCount)
+          throw new AppError(409, "PREPAID_BATCH_FREEZE_NOT_READY", "Process the newly uploaded reports before freezing.");
         if (!this.deliveryEnabled)
           throw new AppError(
             409,
@@ -638,7 +698,7 @@ export class PrepaidFullBatch {
     await this.landing.acquire(batch.id);
     const prefix = this.storage.sessionPrefix(batch.session_id);
     for (const workflow of workflows) {
-      const files = batch.files.filter((file) => file.workflow === workflow);
+      const files = batch.files.filter((file) => file.workflow === workflow && !file.extractedAt);
       if (!files.length) continue;
       const inputs = [];
       for (const file of files) {
@@ -763,10 +823,10 @@ export class PrepaidFullBatch {
           phase === "import"
             ? {
                 env_prefix: this.envPrefix, skip_extract: false,
-                extract_sources: Object.fromEntries(batch.files.map((file) => [file.workflow, true])),
+                extract_sources: Object.fromEntries(batch.files.filter((file) => !file.extractedAt).map((file) => [file.workflow, true])),
               }
             : { env_prefix: this.envPrefix },
-          `portal-prepaid-${id}-${phase}`,
+          `portal-prepaid-${id}-${phase}${phase === "import" && batch.executions.importAttempt ? `-${batch.executions.importAttempt}` : ""}`,
         );
         batch.executions[phase] = {
           arn: started.executionArn,

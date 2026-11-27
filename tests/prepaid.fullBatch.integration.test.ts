@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import { afterAll, beforeAll, expect, it, vi, describe } from "vitest";
 import { PrepaidWorkspaceService } from "../src/modules/prepaid/application/workspaceService.js";
@@ -45,6 +46,9 @@ describe.skipIf(!endpoint).each([
       CREATE TABLE ${schema}.prepaid_upload_sessions(id uuid PRIMARY KEY,workspace_id uuid,active boolean,status text,configuration jsonb,version integer DEFAULT 0,error text,run_id uuid);
       CREATE TABLE ${schema}.prepaid_session_files(session_id uuid,active boolean DEFAULT true,source_code text,object_key text,sha256 text,id uuid,original_name text,size_bytes bigint,uploaded_by uuid);
       CREATE SCHEMA dswtdir1_prepaid_dbo;
+      CREATE SCHEMA sdbtdir1_prepaid_dbo;
+      CREATE TABLE sdbtdir1_prepaid_dbo.billed_adjustments_header_cycles (filename text, dateread timestamp, column1 text, column2 text);
+      CREATE TABLE sdbtdir1_prepaid_dbo.billed_charges_header_cycles (LIKE sdbtdir1_prepaid_dbo.billed_adjustments_header_cycles);
       CREATE FUNCTION dswtdir1_prepaid_dbo.prepaid_import_source_enabled(text)
         RETURNS boolean LANGUAGE sql AS 'SELECT true';
       CREATE PROCEDURE dswtdir1_prepaid_dbo.sp_prepaid1_eglayout_compute_topup_pgx()
@@ -52,7 +56,7 @@ describe.skipIf(!endpoint).each([
       CREATE TABLE dswtdir1_prepaid_dbo.dcprepaidsystems("Layout Number" int,"REVENUES BEFORE RECLASS" text,total_gross text,total_net text,freezedata boolean);
       CREATE TABLE dswtdir1_prepaid_dbo.dcprepaidsystems_sg(LIKE dswtdir1_prepaid_dbo.dcprepaidsystems);
       INSERT INTO dswtdir1_prepaid_dbo.dcprepaidsystems VALUES(27,'Variance','0.00','0.00',false);
-      INSERT INTO dswtdir1_prepaid_dbo.dcprepaidsystems_sg VALUES(27,'Variance','1','1',false);
+      INSERT INTO dswtdir1_prepaid_dbo.dcprepaidsystems_sg VALUES(27,'Variance',NULL,NULL,false);
       ALTER TABLE dswtdir1_prepaid_dbo.dcprepaidsystems ADD gp_eg_mt_gross text, ADD hy_eg_mt_gross text, ADD gp_eg_bb_gross text,
         ADD gp_eg_mt_net text, ADD hy_eg_mt_net text, ADD gp_eg_bb_net text;
       CREATE TABLE dswtdir1_prepaid_dbo.webprepaidsystems_formatc145 (
@@ -66,6 +70,9 @@ describe.skipIf(!endpoint).each([
       INSERT INTO dswtdir1_prepaid_dbo.webprepaidsystems_formatc145 (revenuetype2,revenuetype,allocationtype) VALUES
         ('EG','GP_EG_MT','GP_CM_MT'),('EG','GP_EG_BB','GP_CB_BB'),('SG','GP_SG_MT','GP_CM_MT');`);
     await pool.query(prepaidFullBatchMigrationSql(schema));
+    await pool.query(readFileSync(new URL("../infrastructure/prepaid/020_batch_continuation.sql", import.meta.url), "utf8")
+      .replace("web_portal.prepaid_full_batches", repo.table("full_batches"))
+      .replace(/^ALTER .* OWNER TO esatp_adm;$/gm, ""));
     await pool.query(`INSERT INTO ${schema}.workspaces VALUES ($1,$2)`, [
       workspace,
       user,
@@ -114,7 +121,8 @@ describe.skipIf(!endpoint).each([
   });
   afterAll(async () => {
     await pool.query(
-      `DROP SCHEMA IF EXISTS ${schema} CASCADE; DROP SCHEMA IF EXISTS dswtdir1_prepaid_dbo CASCADE;`,
+      `DROP SCHEMA IF EXISTS ${schema} CASCADE; DROP SCHEMA IF EXISTS dswtdir1_prepaid_dbo CASCADE;
+       DROP SCHEMA IF EXISTS sdbtdir1_prepaid_dbo CASCADE;`,
     );
     await pool.end();
   });
@@ -152,6 +160,7 @@ describe.skipIf(!endpoint).each([
       executionArn: machine,
       startedAt: mark,
     }));
+    let executionStatus = "SUCCEEDED";
     const runner = {
       describeStateMachineDefinition: async () => ({
         type: "STANDARD",
@@ -168,7 +177,7 @@ describe.skipIf(!endpoint).each([
         status: "ACTIVE",
       }),
       startExecution,
-      describeExecution: async () => ({ status: "SUCCEEDED", completedAt: mark }),
+      describeExecution: async () => ({ status: executionStatus, completedAt: mark }),
     } as unknown as StepFunctionsRunner;
     const normalizer = new BackendSourceNormalizer();
     const prepare = vi.spyOn(normalizer, "prepare").mockResolvedValue({ datasets: {}, landing: workingCopy });
@@ -233,6 +242,9 @@ describe.skipIf(!endpoint).each([
     await poll();
     expect(await service.status(user)).toMatchObject({
       status: "review", canReview: true, amaxeeReportAvailable: true,
+    });
+    await expect(workspaceApi.upload(user, "monthly_recharge", source)).rejects.toMatchObject({
+      code: "PREPAID_BATCH_ACTIVE",
     });
     await expect(service.downloadAmaxee(randomUUID(), batch!.id)).rejects.toMatchObject({
       code: "PREPAID_BATCH_NOT_FOUND",
@@ -329,5 +341,63 @@ describe.skipIf(!endpoint).each([
     ]) });
     await expect(service.action(user, "eg")).rejects.toMatchObject({ code: "PREPAID_BATCH_FREEZE_NOT_READY" });
     await expect(service.review(user, partial.id, "eg", "allocation", "bb", 0)).resolves.toMatchObject({ rows: [], unavailableReason: expect.stringContaining("KE24") });
+    const callcard = { originalname: "CALLCARD_SG.xlsx", buffer: Buffer.from("PK workbook"), mimetype: "application/octet-stream" };
+    await workspaceApi.upload(user, "callcard_sg", callcard, randomUUID());
+    expect(await service.status(user)).toMatchObject({ id: partial.id, status: "review", canUpload: true });
+    await workspaceApi.prepare(user);
+    await expect(workspaceApi.upload(user, "callcard_sg", callcard)).rejects.toMatchObject({ code: "PREPAID_BATCH_ACTIVE" });
+    await service.tick();
+    await service.tick();
+    expect(startExecution).toHaveBeenLastCalledWith(
+      `${envPrefix}-prcl_proc-sf`, { env_prefix: envPrefix, skip_extract: false, extract_sources: { callcard_sg: true } },
+      expect.stringMatching(new RegExp(`^portal-prepaid-${partial.id}-import-[0-9a-f]+$`)),
+    );
+    const firstAttempt = startExecution.mock.lastCall;
+    executionStatus = "FAILED";
+    await poll();
+    expect(await service.status(user)).toMatchObject({ status: "failed", canRetryImport: true });
+    await workspaceApi.prepare(user);
+    landing.stage.mockClear();
+    await service.tick();
+    expect(landing.stage).toHaveBeenCalledTimes(1);
+    expect(landing.stage).toHaveBeenCalledWith(partial.id, "callcard_sg", expect.any(Array));
+    await service.tick();
+    expect(startExecution.mock.lastCall).not.toEqual(firstAttempt);
+    executionStatus = "SUCCEEDED";
+    await poll();
+    expect(await service.status(user)).toMatchObject({ id: partial.id, canReview: true, canUpload: true, sourceCodes: ["callcard_sg", "monthly_recharge"] });
+    await workspaceApi.reset(user, { sessionId: session, sessionVersion: (await workspaceApi.state(user)).session!.version });
+    await service.tick();
+    await service.tick();
+  });
+  it("scopes a continued import to both retained and newly extracted billing rows", async () => {
+    const id = randomUUID();
+    const execution = `portal-prepaid-${id}-import-0123456789abcdef`;
+    const files = [
+      { workflow: "adjustments_308", code: "308_21", name: "308_21.xlsx", extractedAt: "2026-11-18T13:00:00Z" },
+      { workflow: "charges_318", code: "318_27", name: "318_27.xlsx" },
+      { workflow: "ke24", code: "ke24", name: "KE24.xlsx", extractedAt: "2026-11-18T13:00:00Z" },
+    ];
+    await repo.transaction(async (db) => {
+      await db.query(
+        `INSERT INTO ${repo.table("full_batches")} (id,session_id,files,phase,status,inputs_staged,executions)
+         VALUES($1,$2,$3,'import','running',true,$4)`,
+        [id, session, JSON.stringify(files), JSON.stringify({ import: {
+          arn: `arn:aws:states:${region}:123456789012:execution:prepaid:${execution}`,
+          startedAt: "2026-11-20T13:00:00Z",
+        } })],
+      );
+      await db.query(`INSERT INTO sdbtdir1_prepaid_dbo.billed_adjustments_header_cycles
+        VALUES ('308_21.xlsx - generated', '2026-11-18 13:05', 'Cycle Code:', '21');
+        INSERT INTO sdbtdir1_prepaid_dbo.billed_charges_header_cycles
+        VALUES ('318_27.xlsx', '2026-11-20 13:05', 'Cycle Code:', '27')`);
+      await db.query("CALL dswtdir1_prepaid_dbo.prepaid_scope_billing_import($1)", [execution]);
+      const { rows } = await db.query(`SELECT
+        dswtdir1_prepaid_dbo.prepaid_billing_row_matches('308_21.xlsx - generated','2026-11-18 13:05') AS retained,
+        dswtdir1_prepaid_dbo.prepaid_billing_row_matches('308_21.xlsx','2026-11-18 12:59') AS stale,
+        dswtdir1_prepaid_dbo.prepaid_billing_row_matches('318_27.xlsx','2026-11-20 13:05') AS fresh,
+        dswtdir1_prepaid_dbo.prepaid_billing_row_matches('318_27.xlsx','2026-11-18 13:05') AS old_charge`);
+      expect(rows[0]).toEqual({ retained: true, stale: false, fresh: true, old_charge: false });
+    });
   });
 });

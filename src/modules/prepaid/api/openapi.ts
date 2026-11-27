@@ -856,7 +856,7 @@ add(
   "Start Prepaid processing for the uploaded reports",
 );
 paths["/api/workflows/prepaid/workspace/prepare"]!.post!.description =
-  "AWS batch processing requires at least one uploaded report. Each 308 or 318 XLSX filename identifies its own cycle (01–31) using a final _NN or _BCNN suffix. The workbook cycle must agree with the filename. The non-AWS preparation path uses its configured coverage.";
+  "AWS batch processing requires at least one uploaded report. After a partial import finishes, add and process more reports in the same workspace. Layouts include earlier reports. Uploads are locked during processing and after all ten report types are processed successfully. Each 308 or 318 XLSX filename identifies its cycle (01–31) using a final _NN or _BCNN suffix. The workbook cycle must agree with the filename. The non-AWS preparation path uses its configured coverage.";
 add(
   "/workspace/reset",
   "post",

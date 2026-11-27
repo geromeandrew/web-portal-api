@@ -25,6 +25,8 @@ export function registerPrepaidWorkspaceRoutes(
             awsBatchActive: !!batch && batch.status !== "closed",
             awsBatchResetAllowed: batch?.canClose === true,
             awsBatchReviewReady: batch?.canReview === true,
+            awsBatchHasNewSources: batch?.canUpload === true &&
+              state.sources.files.some((file) => !batch.sourceCodes.includes(file.source_code)),
           }
         : state,
     );

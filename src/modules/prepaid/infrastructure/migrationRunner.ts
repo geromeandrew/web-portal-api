@@ -66,6 +66,7 @@ export function prepaidMigrations(rawSchema = prepaidRawSchema) {
 const billingMigrations = [
   ["017_prepaid_billing_batch_scope", billingScopeSql],
   ["018_prepaid_billing_cycle_range", billingCycleRangeSql],
+  ["020_prepaid_batch_continuation", batchContinuationSql],
 ] as const;
 
 export const prepaidBillingMigrationIds = billingMigrations.map(([id]) => id);
@@ -225,6 +226,22 @@ function billingCycleRangeSql(schema: string) {
         import.meta.url,
       ),
       "utf8",
+    )}
+  `;
+}
+
+function batchContinuationSql(schema: string) {
+  return `
+    ${lockBillingMigration(schema)}
+    ${readFileSync(
+      new URL(
+        "../../../../infrastructure/prepaid/020_batch_continuation.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ).replace(
+      "web_portal.prepaid_full_batches",
+      `"${schema}".prepaid_full_batches`,
     )}
   `;
 }
